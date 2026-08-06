@@ -54,6 +54,17 @@ Vision Modeler/
 lining-current-*.csv
 lining-current-*.log
 
+# ---- per-machine tool state -------------------------------------------------
+# Claude Code appends an entry to permissions.allow every time a command shape is
+# approved, so a tracked copy of this file is dirty again after almost every
+# session - three commits on the qa-tools branch existed only to carry those
+# entries. The ".local" in the name is the convention for exactly this: personal,
+# machine-specific, not shared. Most of what accumulates is one-shot command
+# strings that will never match a second time.
+#
+# Permissions meant for everyone belong in .claude/settings.json, which IS tracked.
+.claude/settings.local.json
+
 # ---- secrets ----------------------------------------------------------------
 # No key has ever been committed here and none should be. ANTHROPIC_API_KEY is
 # read from the environment at runtime; if a .env ever appears, it stays local.
