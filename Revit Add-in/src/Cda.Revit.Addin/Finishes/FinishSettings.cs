@@ -163,6 +163,10 @@ public sealed class FinishSettings
     /// single 'Rum'. Summed as-is, a takeoff grouped by room bills one room for its
     /// neighbour's paint. This makes the number agree with the label it is filed under.
     ///
+    /// The label itself is chosen by PAINT, not by wall area, so the room this apportions to is
+    /// the room the paint is actually in. Apportioning is done per SURFACE, so a slab that is a
+    /// floor for one room and a ceiling for another never mixes the two pools.
+    ///
     /// Turn OFF only to reproduce an older takeoff. The trade is deliberate and reported: the
     /// other room's share stops appearing in an ELEMENT schedule, so element schedules no
     /// longer sum to the building's painted area. The ROOM parameters carry every room's own

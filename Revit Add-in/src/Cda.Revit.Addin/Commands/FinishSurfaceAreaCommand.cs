@@ -254,13 +254,13 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
     private static void WriteMaterialCsv(string path, IReadOnlyList<FinishCsvRow> rows)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Room Number,Room Name,Surface,Material,Material Code,Is Painted,Area (m2)");
+        sb.AppendLine("Lejlighed,Room Number,Room Name,Surface,Material,Material Code,Is Painted,Area (m2)");
 
         foreach (var row in rows)
         {
             var fields = new[]
             {
-                row.RoomNumber, row.RoomName, row.Surface,
+                row.Apartment, row.RoomNumber, row.RoomName, row.Surface,
                 row.Material, row.MaterialCode, row.Painted ? "Yes" : "No",
             };
 

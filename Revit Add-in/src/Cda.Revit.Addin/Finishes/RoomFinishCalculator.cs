@@ -5,9 +5,20 @@ using Cda.Revit.Addin.Infrastructure;
 
 namespace Cda.Revit.Addin.Finishes;
 
-/// <summary>One per-room per-material CSV row.</summary>
+/// <summary>
+/// One per-room per-material CSV row.
+///
+/// THIS, NOT AN ELEMENT SCHEDULE, IS THE AUTHORITY FOR PAINT.
+///   Every row is one room's own measured area on one surface in one material, taken from
+///   that room's ledger - so a wall painted on both faces contributes its Alrum face to
+///   Alrum's rows and its Bad face to Bad's, and neither is dropped. An element schedule
+///   cannot do this: one element carries one 'Rum', so the losing side has nowhere to go.
+///
+///   Apartment is carried so this groups the way a Roombook does, per Lejlighed, without
+///   having to join back to the model.
+/// </summary>
 public sealed record FinishCsvRow(
-    string RoomNumber, string RoomName, string Surface,
+    string Apartment, string RoomNumber, string RoomName, string Surface,
     string Material, string MaterialCode, bool Painted, double AreaSqM);
 
 public sealed class FinishResult
@@ -129,10 +140,32 @@ public sealed class RoomFinishCalculator
     private readonly Dictionary<long, bool> _exteriorRoomCache = [];
 
     /// <summary>
-    /// Painted area per element PER ROOM. The parallel of <see cref="_elemRoomClaims"/> for
-    /// paint, and what makes a room-consistent paint figure possible at all.
+    /// Painted area per element PER ROOM, across every surface the element presents. The
+    /// parallel of <see cref="_elemRoomClaims"/> for paint. Used to decide WHICH room owns an
+    /// element, never to decide how much of a given surface's paint that room gets - see the
+    /// three per-surface dictionaries below for why.
     /// </summary>
     private readonly Dictionary<long, Dictionary<long, double>> _elemRoomPaint = [];
+
+    /// <summary>
+    /// Painted area per element per room, SPLIT BY SURFACE.
+    ///
+    /// WHY THE AGGREGATE ABOVE IS NOT ENOUGH
+    ///   A slab is the FLOOR of the room above it and the CEILING of the room below. Both
+    ///   contributions land on one element, and in the aggregate they land in one pool - so
+    ///   apportioning Floor Paint Area from it could hand the floor parameter the paint that
+    ///   is actually on the ceiling side, filed under a room that never sees that surface.
+    ///
+    ///   Walls never hit this: a wall only ever presents a wall surface. It is slabs and roofs
+    ///   that face two rooms with two different surfaces, which is exactly where a mixed pool
+    ///   goes wrong quietly.
+    ///
+    ///   Paint belongs to the room the painted SURFACE faces, so the split has to be per
+    ///   surface as well as per room.
+    /// </summary>
+    private readonly Dictionary<long, Dictionary<long, double>> _elemRoomWallPaint = [];
+    private readonly Dictionary<long, Dictionary<long, double>> _elemRoomFloorPaint = [];
+    private readonly Dictionary<long, Dictionary<long, double>> _elemRoomCeilingPaint = [];
 
     /// <summary>Paint measured for a room other than the one its element is attributed to.</summary>
     private double _unattributedPaint;
@@ -778,7 +811,7 @@ public sealed class RoomFinishCalculator
                                 // The finish-material subset, read off the same ledger, so the
                                 // element's two numbers can never disagree with the CSV rows
                                 // they were both derived from.
-                                AccumulatePaint(_elemFloorPaint, element.Id, room, floor.Materials.PaintedTotal);
+                                AccumulatePaint(_elemFloorPaint, _elemRoomFloorPaint, element.Id, room, floor.Materials.PaintedTotal);
                                 Claim(element.Id, room, floor.Total);
                             }
                             else if (hasSlab)
@@ -836,7 +869,7 @@ public sealed class RoomFinishCalculator
                             if (element is not null)
                             {
                                 Accumulate(_elemCeilingArea, element.Id, amount);
-                                AccumulatePaint(_elemCeilingPaint, element.Id, room, painted);
+                                AccumulatePaint(_elemCeilingPaint, _elemRoomCeilingPaint, element.Id, room, painted);
                                 Claim(element.Id, room, amount);
                             }
                             continue;
@@ -883,7 +916,7 @@ public sealed class RoomFinishCalculator
 
                         ceilingSource[CeilingSourceKey(element)] += amount;
                         Accumulate(_elemCeilingArea, element.Id, amount);
-                        AccumulatePaint(_elemCeilingPaint, element.Id, room, painted);
+                        AccumulatePaint(_elemCeilingPaint, _elemRoomCeilingPaint, element.Id, room, painted);
                         Claim(element.Id, room, amount);
                         continue;
                     }
@@ -897,7 +930,7 @@ public sealed class RoomFinishCalculator
                         wallExact += wall.Total;
                         AddMaterials(FinishSettings.SurfaceWalls, wall.Materials);
                         Accumulate(_elemWallArea, element.Id, wall.Total);
-                        AccumulatePaint(_elemWallPaint, element.Id, room, wall.Materials.PaintedTotal);
+                        AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, element.Id, room, wall.Materials.PaintedTotal);
                         Claim(element.Id, room, wall.Total);
 
                         if (wall.Materials.DistinctPaintedMaterials > 1)
@@ -957,7 +990,7 @@ public sealed class RoomFinishCalculator
 
                     // The PT subset. Read off the ORIGINAL element faces, so this is Revit's
                     // own paint state rather than an assumption about which layer is finish.
-                    AccumulatePaint(_elemCeilingPaint, hit.Element, room, hit.Materials.PaintedTotal);
+                    AccumulatePaint(_elemCeilingPaint, _elemRoomCeilingPaint, hit.Element, room, hit.Materials.PaintedTotal);
                     Claim(hit.Element, room, hit.Area);
 
                     ceilingClaimed.Add(hit.Element.Value);
@@ -1119,7 +1152,7 @@ public sealed class RoomFinishCalculator
                     // Same reason as the ceiling side below: a mezzanine top measured through
                     // this path would otherwise carry a floor area but no finish area, while
                     // the takeoff's own 'Material: As Paint' column says Yes on that row.
-                    AccumulatePaint(_elemFloorPaint, slab.Id, room, topLedger.PaintedTotal);
+                    AccumulatePaint(_elemFloorPaint, _elemRoomFloorPaint, slab.Id, room, topLedger.PaintedTotal);
                     Claim(slab.Id, room, topArea);
                 }
 
@@ -1133,7 +1166,7 @@ public sealed class RoomFinishCalculator
                     // Without this a slab measured through the interior-slab path reports a
                     // ceiling area but no PT area, while the takeoff's own 'Material: As
                     // Paint' column says Yes on the same row - two answers to one question.
-                    AccumulatePaint(_elemCeilingPaint, slab.Id, room, bottomLedger.PaintedTotal);
+                    AccumulatePaint(_elemCeilingPaint, _elemRoomCeilingPaint, slab.Id, room, bottomLedger.PaintedTotal);
                 }
 
                 count++;
@@ -1278,7 +1311,7 @@ public sealed class RoomFinishCalculator
                     ledger.Add(key, face.Area);
                     Accumulate(_elemWallArea, wall.Id, face.Area);
                     Claim(wall.Id, room, face.Area);
-                    if (key.Painted) AccumulatePaint(_elemWallPaint, wall.Id, room, face.Area);
+                    if (key.Painted) AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, wall.Id, room, face.Area);
                 }
 
                 if (area <= 0) continue;
@@ -1330,7 +1363,7 @@ public sealed class RoomFinishCalculator
 
                 foreach (var (_, area) in ledger.Areas)
                 {
-                    AccumulatePaint(_elemWallPaint, host.Id, room, area);
+                    AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, host.Id, room, area);
 
                     // The reveal is this room's finish on that wall, so it counts toward
                     // which room owns the wall — the deciding case being an internal door
@@ -1401,11 +1434,36 @@ public sealed class RoomFinishCalculator
         foreach (var (elementId, byRoom) in _elemRoomClaims)
         {
             if (byRoom.Count == 0) continue;
-            owners[elementId] = OwnerOf(byRoom);
+            owners[elementId] = OwnerFor(elementId, byRoom);
         }
 
         return owners;
     }
+
+    /// <summary>
+    /// Which room an element is filed under.
+    ///
+    /// PAINT DECIDES IT WHENEVER THE ELEMENT CARRIES ANY.
+    ///   The rule this implements: we are calculating the PAINT area, not the wall area, so
+    ///   paint is attributed to the room whose surface it actually sits on. Ranking by finish
+    ///   area answered a different question - "which room does most of this wall belong to?" -
+    ///   and then handed the paint figure to whatever that returned.
+    ///
+    /// THE FAILURE THAT MADE THIS URGENT
+    ///   A wall painted ONLY on its Bad face, but with more finish area facing Alrum, was
+    ///   filed under Alrum. <see cref="PaintShare"/> then wrote Alrum's share of the paint -
+    ///   which is ZERO. A wall that is visibly painted reported no paint at all, and the whole
+    ///   area went to the unattributed residual. Ranking the same candidates by PAINT makes
+    ///   that wall Bad's, which is both correct and the only answer consistent with the rule.
+    ///
+    /// FINISH AREA IS STILL THE FALLBACK, and has to be: an element can be measured for finish
+    /// without being painted anywhere, and it still needs a room label for the Roombook. It is
+    /// only when there is no paint to reason from that wall area gets to decide.
+    /// </summary>
+    private long OwnerFor(long elementId, Dictionary<long, double> finishByRoom) =>
+        _elemRoomPaint.TryGetValue(elementId, out var paintByRoom) && paintByRoom.Count > 0
+            ? OwnerOf(paintByRoom)
+            : OwnerOf(finishByRoom);
 
     private long OwnerOf(Dictionary<long, double> byRoom) => byRoom
         .OrderBy(e => IsExteriorRoomId(e.Key) ? 1 : 0)
@@ -1431,11 +1489,15 @@ public sealed class RoomFinishCalculator
     ///   trade for a parameter whose whole purpose is per-room grouping, and the residual is
     ///   measured and reported rather than left to be discovered.
     /// </summary>
-    private double PaintShare(long elementId, double total, IReadOnlyDictionary<long, long> owners)
+    private double PaintShare(
+        long elementId, double total, IReadOnlyDictionary<long, long> owners,
+        Dictionary<long, Dictionary<long, double>> perRoomForSurface)
     {
         if (!_settings.RoomConsistentPaint) return total;
 
-        if (!_elemRoomPaint.TryGetValue(elementId, out var byRoom)) return total;
+        // THIS SURFACE's split, not the element's whole paint pool. A slab's floor parameter
+        // must be apportioned from floor paint alone; see the per-surface dictionaries.
+        if (!perRoomForSurface.TryGetValue(elementId, out var byRoom)) return total;
 
         // Attributed to no room: nothing to apportion against, so the total stands.
         if (!owners.TryGetValue(elementId, out var owner)) return total;
@@ -1649,24 +1711,29 @@ public sealed class RoomFinishCalculator
         // thing that knew, runs after this.
         var owners = ResolveOwners();
 
-        var sets = new (Dictionary<long, double> Values, string Parameter, bool IsPaint)[]
+        // PerRoom is the per-SURFACE paint split this parameter must be apportioned from, and
+        // is null for the finish areas, which are not apportioned at all.
+        var sets = new (
+            Dictionary<long, double> Values,
+            Dictionary<long, Dictionary<long, double>>? PerRoom,
+            string Parameter)[]
         {
-            (_elemWallArea, _settings.WallParameter, false),
-            (_elemWallPaint, _settings.PaintParameter, true),
-            (_elemFloorArea, _settings.FloorParameter, false),
-            (_elemFloorPaint, _settings.FloorPaintParameter, true),
-            (_elemCeilingArea, _settings.CeilingParameter, false),
-            (_elemCeilingPaint, _settings.CeilingPaintParameter, true),
+            (_elemWallArea, null, _settings.WallParameter),
+            (_elemWallPaint, _elemRoomWallPaint, _settings.PaintParameter),
+            (_elemFloorArea, null, _settings.FloorParameter),
+            (_elemFloorPaint, _elemRoomFloorPaint, _settings.FloorPaintParameter),
+            (_elemCeilingArea, null, _settings.CeilingParameter),
+            (_elemCeilingPaint, _elemRoomCeilingPaint, _settings.CeilingPaintParameter),
         };
 
-        foreach (var (values, name, isPaint) in sets)
+        foreach (var (values, perRoom, name) in sets)
         {
             foreach (var (id, total) in values)
             {
                 // Paint is apportioned to the owning room; the finish AREAS stay as the
                 // element's own full quantity, which is what they have always meant and what
                 // a material takeoff of surfaces needs.
-                var value = isPaint ? PaintShare(id, total, owners) : total;
+                var value = perRoom is null ? total : PaintShare(id, total, owners, perRoom);
 
                 try
                 {
@@ -1716,13 +1783,23 @@ public sealed class RoomFinishCalculator
     ///   is what turns a flat list of areas into something that can be grouped per apartment
     ///   and issued, which is what a Roombook schedule is for.
     ///
-    /// THE HONEST LIMIT
-    ///   One element, one set of values. A base wall between two rooms gets the room that
-    ///   contributed more area, and its Wall Finish Area is still the SUM of both sides — so
-    ///   a schedule grouped by Rum nr credits the whole wall to one of the two rooms. Every
-    ///   such element is counted and listed in the report rather than left to be discovered
-    ///   in a quantity dispute. Modelling finishes as separate room-side layers, which is
-    ///   the office standard, avoids it entirely: those walls face one room each.
+    /// WHICH ROOM WINS, AND WHY IT IS NOT THE BIGGER ONE
+    ///   Paint decides — see <see cref="OwnerFor"/>. We are calculating the PAINT area, not
+    ///   the wall area, so an element is filed under the room its paint actually sits in, and
+    ///   finish area only breaks the tie when there is no paint anywhere on the element.
+    ///
+    /// THE HONEST LIMIT THAT REMAINS
+    ///   One element, one set of values. A wall painted on BOTH faces still gets a single Rum,
+    ///   so the smaller side's paint has nowhere to go in an element schedule, and Wall Finish
+    ///   Area is still the SUM of both sides. Every such element is counted and listed in the
+    ///   report rather than left to be discovered in a quantity dispute.
+    ///
+    ///   THE PER-ROOM CSV HAS NO SUCH LIMIT and is the authority for paint: it carries one row
+    ///   per room per surface per material, so both faces of a shared wall appear against the
+    ///   rooms they face. Point a quantity dispute at that, not at an element takeoff.
+    ///
+    ///   Modelling finishes as separate room-side layers, which is the office standard, avoids
+    ///   the element-level limit entirely: those walls face one room each.
     /// </summary>
     private int WriteRoomIdentity()
     {
@@ -1745,7 +1822,10 @@ public sealed class RoomFinishCalculator
                     continue;
                 }
 
-                var owner = OwnerOf(byRoom);
+                // Same rule as ResolveOwners, and it MUST be the same call: the label written
+                // here and the paint figure written by WriteElementTotals have to name one
+                // room, or the row says its paint belongs somewhere its label does not.
+                var owner = OwnerFor(elementIdValue, byRoom);
 
                 if (_doc.GetElement(new ElementId(owner)) is not Room room) continue;
 
@@ -1862,24 +1942,45 @@ public sealed class RoomFinishCalculator
     ///   never paint, because counting both would weight painted walls twice when deciding
     ///   which room owns an element. So paint needs its own ledger.
     /// </summary>
+    /// <summary>
+    /// Records painted area against an element, the room the painted surface faces, and that
+    /// surface specifically.
+    /// </summary>
+    /// <param name="target">The element's running total for this surface.</param>
+    /// <param name="perRoomForSurface">
+    /// The per-room split for THIS surface. Passed explicitly rather than derived, so a call
+    /// site cannot silently file ceiling paint in the floor's pool.
+    /// </param>
     private void AccumulatePaint(
-        Dictionary<long, double> target, ElementId? id, Room room, double value)
+        Dictionary<long, double> target,
+        Dictionary<long, Dictionary<long, double>> perRoomForSurface,
+        ElementId? id, Room room, double value)
     {
         Accumulate(target, id, value);
 
         if (id is null || value <= 0) return;
 
-        if (!_elemRoomPaint.TryGetValue(id.Value, out var byRoom))
-            _elemRoomPaint[id.Value] = byRoom = [];
+        Record(_elemRoomPaint, id.Value, room.Id.Value, value);
+        Record(perRoomForSurface, id.Value, room.Id.Value, value);
+    }
 
-        byRoom[room.Id.Value] = byRoom.GetValueOrDefault(room.Id.Value) + value;
+    private static void Record(
+        Dictionary<long, Dictionary<long, double>> map, long elementId, long roomId, double value)
+    {
+        if (!map.TryGetValue(elementId, out var byRoom)) map[elementId] = byRoom = [];
+
+        byRoom[roomId] = byRoom.GetValueOrDefault(roomId) + value;
     }
 
     /// <summary>
     /// Records that <paramref name="room"/> contributed <paramref name="area"/> of finish to
     /// this element. Called beside every AREA accumulation and never beside a paint one —
     /// paint is a subset of the same surface, so counting both would weight painted walls
-    /// twice when deciding which room owns the element.
+    /// twice.
+    ///
+    /// This is now the FALLBACK for ownership rather than the basis of it: <see cref="OwnerFor"/>
+    /// files an element under the room its paint sits in, and only consults these finish claims
+    /// when the element carries no paint at all.
     /// </summary>
     private void Claim(ElementId? id, Room room, double area)
     {
@@ -1955,11 +2056,15 @@ public sealed class RoomFinishCalculator
 
     private void AppendCsvRows(Room room, Dictionary<(string Surface, MaterialKey Key), double> materials)
     {
-        string number = string.Empty, name = string.Empty;
+        string number = string.Empty, name = string.Empty, apartment = string.Empty;
         try
         {
             number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER)?.AsString() ?? string.Empty;
             name = room.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString() ?? string.Empty;
+
+            // Department is what WriteRoomIdentity copies into 'Lejlighed' on elements, so the
+            // CSV and the element parameters group on the same value.
+            apartment = room.get_Parameter(BuiltInParameter.ROOM_DEPARTMENT)?.AsString() ?? string.Empty;
         }
         catch
         {
@@ -1971,8 +2076,8 @@ public sealed class RoomFinishCalculator
             if (area <= 0.005) continue;
 
             var (materialName, code, painted) = key.Describe(_doc);
-            _csvRows.Add(new FinishCsvRow(number, name, surface, materialName, code, painted,
-                Measure.ToSquareMetres(area)));
+            _csvRows.Add(new FinishCsvRow(apartment, number, name, surface, materialName, code,
+                painted, Measure.ToSquareMetres(area)));
         }
     }
 
