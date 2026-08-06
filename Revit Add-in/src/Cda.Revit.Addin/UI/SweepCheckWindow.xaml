@@ -1,0 +1,71 @@
+<Window x:Class="Cda.Revit.Addin.UI.SweepCheckWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Interior Wall Sweep Detection"
+        Width="1000"
+        Height="660"
+        MinWidth="760"
+        MinHeight="500"
+        ShowInTaskbar="False"
+        WindowStyle="ToolWindow">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" TextWrapping="Wrap" Margin="0,0,0,10" Opacity="0.85">
+            Read-only. Finds interior wall faces that should carry skirting and do not, and gaps
+            where two runs fail to meet. Click any row to select and zoom to that element.
+        </TextBlock>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button x:Name="ScanButton" Content="Run scan" Width="110" Height="28" Click="OnScan" />
+            <CheckBox x:Name="GapBox"
+                      Content="Report gaps as well as missing runs"
+                      IsChecked="True"
+                      VerticalAlignment="Center"
+                      Margin="14,0,0,0" />
+            <TextBlock x:Name="ProgressLine" VerticalAlignment="Center" Margin="16,0,0,0" Opacity="0.8" />
+        </StackPanel>
+
+        <ListView Grid.Row="2" x:Name="ResultList" SelectionChanged="OnRowSelected">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Severity" Width="70" DisplayMemberBinding="{Binding SeverityText}" />
+                    <GridViewColumn Header="Finding" Width="110" DisplayMemberBinding="{Binding Kind}" />
+                    <GridViewColumn Header="Element Id" Width="90" DisplayMemberBinding="{Binding IdText}" />
+                    <GridViewColumn Header="Element" Width="200" DisplayMemberBinding="{Binding TargetDescription}" />
+                    <GridViewColumn Header="Room" Width="150" DisplayMemberBinding="{Binding Room}" />
+                    <GridViewColumn Header="Level" Width="90" DisplayMemberBinding="{Binding Level}" />
+                    <GridViewColumn Header="Length" Width="70" DisplayMemberBinding="{Binding LengthText}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <TextBlock Grid.Row="3"
+                   x:Name="DetailLine"
+                   TextWrapping="Wrap"
+                   MinHeight="34"
+                   Margin="0,8,0,0"
+                   FontWeight="SemiBold" />
+
+        <!-- Scope, not decoration. An empty grid means either "all correct" or "looked at
+             nothing", and only these lines tell the two apart. -->
+        <Expander Grid.Row="4" x:Name="ScopeExpander" Header="What this scan looked at" Margin="0,8,0,0">
+            <TextBlock x:Name="ScopeLine" TextWrapping="Wrap" Margin="0,8,0,0" Opacity="0.85" />
+        </Expander>
+
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="SelectAllButton" Content="Select all in model" Width="140" Height="28" Click="OnSelectAll" />
+            <Button x:Name="ExportButton" Content="Export CSV…" Width="120" Height="28" Margin="8,0,0,0" Click="OnExport" />
+            <Button Content="Close" Width="90" Height="28" Margin="8,0,0,0" Click="OnClose" />
+        </StackPanel>
+
+    </Grid>
+</Window>

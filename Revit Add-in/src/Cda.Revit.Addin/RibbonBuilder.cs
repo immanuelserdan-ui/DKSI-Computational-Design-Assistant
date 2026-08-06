@@ -22,6 +22,7 @@ internal static class RibbonBuilder
 
         var modelPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Model Data");
         var reportPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Reports");
+        var qaPanel = app.CreateRibbonPanel(CdaApplication.TabName, "QA");
         var timePanel = app.CreateRibbonPanel(CdaApplication.TabName, "Time");
         var helpPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Help");
 
@@ -111,6 +112,28 @@ internal static class RibbonBuilder
             longDescription: "Read-only. Writes the .xlsx directly - no Excel install and no " +
                              "third-party library required.",
             icon: "excel",
+            availability: typeof(ProjectDocumentAvailability));
+
+        // ITS OWN PANEL, not a place on Reports. A report tells you what the model contains;
+        // a check tells you what is wrong with it, and someone reaching for the second is not
+        // looking for the first. The panel is also where the remaining QA add-ins land once
+        // the Tier 1 drafting tools are finalised.
+        AddButton(qaPanel,
+            name: "CdaQaTools",
+            text: "QA\nTools",
+            command: typeof(Commands.QaToolsCommand),
+            tooltip: "Model quality checks - room finish sources, and interior wall sweep coverage.",
+            longDescription: "Read-only. Opens a checklist that stays on screen while you work: " +
+                             "pick a room to highlight the walls, floor and ceiling its finish " +
+                             "areas were measured from, or scan the model for wall faces that " +
+                             "should carry skirting and do not. Openings and casework are " +
+                             "allowed for, and wet rooms and 'Udvendig' exterior placeholders " +
+                             "are skipped, using the same rules as Place Skirting - so nothing " +
+                             "is reported that the placement tool was right to leave out.",
+            // Shares the Diagnose Parameters mark. Both are the same kind of tool - look at
+            // the model and tell me what is wrong - and inventing a new icon for the second
+            // one would suggest a difference that is not there.
+            icon: "diagnose",
             availability: typeof(ProjectDocumentAvailability));
 
         // NO AVAILABILITY CLASS, unlike every other button here. Logging a client meeting or
