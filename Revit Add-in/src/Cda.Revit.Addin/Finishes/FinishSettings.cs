@@ -101,6 +101,9 @@ public sealed class FinishSettings
 
     public string PaintMaterialParameter { get; init; } = "Paint Material";
 
+    /// <summary>The TYPE of the element the row was measured on - "IV-Gips-100mm".</summary>
+    public string PaintTypeParameter { get; init; } = "Paint Type";
+
     /// <summary>
     /// Text parameter on Rooms recording WHICH element the ceiling area came from -
     /// "ceiling", "slab above", "roof", or "none", suffixed "(fallback)" when nothing

@@ -117,7 +117,7 @@ internal static class PaintTakeoffBuilder
             // and a DirectShape with an empty shape is a valid element that draws nothing - so
             // the takeoff cannot appear in a view, be cut by a section box, or be mistaken for
             // something to build. It still schedules, which is the whole point.
-            shape.Name = $"{Stamp} - {row.RoomNumber} {row.Surface} {row.Material}";
+            shape.Name = $"{Stamp} - {row.RoomNumber} {row.Surface} {row.HostType} {row.Material}";
 
             try
             {
@@ -134,6 +134,7 @@ internal static class PaintTakeoffBuilder
             Write(shape, settings.RoomNameParameter, row.RoomName);
             Write(shape, settings.PaintSurfaceParameter, row.Surface);
             Write(shape, settings.PaintMaterialParameter, row.Material);
+            Write(shape, settings.PaintTypeParameter, row.HostType);
 
             WriteArea(shape, settings.PaintAreaParameter, row.AreaSqM);
 
@@ -243,6 +244,7 @@ internal static class PaintTakeoffBuilder
             settings.RoomNumberParameter,
             settings.RoomNameParameter,
             settings.PaintSurfaceParameter,
+            settings.PaintTypeParameter,
             settings.PaintMaterialParameter,
             settings.PaintAreaParameter,
         };

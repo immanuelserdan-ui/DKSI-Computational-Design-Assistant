@@ -19,7 +19,7 @@ namespace Cda.Revit.Addin.Finishes;
 /// </summary>
 public sealed record FinishCsvRow(
     string Apartment, string RoomNumber, string RoomName, string Surface,
-    string Material, string MaterialCode, bool Painted, double AreaSqM);
+    string HostType, string Material, string MaterialCode, bool Painted, double AreaSqM);
 
 public sealed class FinishResult
 {
@@ -744,13 +744,26 @@ public sealed class RoomFinishCalculator
 
     private bool MeasureRoom(Room room, SpatialElementGeometryCalculator calculator)
     {
-        var roomMaterials = new Dictionary<(string Surface, MaterialKey Key), double>();
+        // KEYED BY HOST as well as surface and material, so each wall FACE gets its own row.
+        //
+        // Without the host, two faces of the same room painted in the same material collapse
+        // into one row - a bathroom with four painted faces reported three rows, because two
+        // of them shared a material. The area was right and the room was right; the row count
+        // was not, and the row count is what someone counting walls checks first.
+        //
+        // Carrying the host also gives the takeoff its Type column, which is the other thing
+        // an element takeoff has that a per-material one was missing.
+        var roomMaterials = new Dictionary<(string Surface, long Host, MaterialKey Key), double>();
 
-        void AddMaterials(string surface, MaterialLedger ledger)
+        void AddMaterials(string surface, MaterialLedger ledger, ElementId? host)
         {
+            // -1 for a contribution with no single host - the arithmetic fallback bucket,
+            // which belongs to the room rather than to any one element.
+            var hostId = host?.Value ?? -1L;
+
             foreach (var (key, area) in ledger.Areas)
             {
-                var composite = (surface, key);
+                var composite = (surface, hostId, key);
                 roomMaterials[composite] = roomMaterials.GetValueOrDefault(composite) + area;
             }
         }
@@ -805,7 +818,7 @@ public sealed class RoomFinishCalculator
                                 // Already clipped to the slab's real top face, so any
                                 // open-to-below part is excluded here too.
                                 netFloorSlab += floor.Total;
-                                AddMaterials(FinishSettings.SurfaceFloor, floor.Materials);
+                                AddMaterials(FinishSettings.SurfaceFloor, floor.Materials, element!.Id);
                                 Accumulate(_elemFloorArea, element!.Id, floor.Total);
 
                                 // The finish-material subset, read off the same ledger, so the
@@ -828,7 +841,7 @@ public sealed class RoomFinishCalculator
                                 netFloorSlab += area;
                                 var ledger = new MaterialLedger();
                                 ledger.Add(MaterialKey.Fallback, area);
-                                AddMaterials(FinishSettings.SurfaceFloor, ledger);
+                                AddMaterials(FinishSettings.SurfaceFloor, ledger, element!.Id);
                                 Accumulate(_elemFloorArea, element!.Id, area);
                                 Claim(element.Id, room, area);
                                 floorFallback++;
@@ -854,14 +867,14 @@ public sealed class RoomFinishCalculator
                             {
                                 amount = ceiling.Total;
                                 painted = ceiling.Materials.PaintedTotal;
-                                AddMaterials(FinishSettings.SurfaceCeiling, ceiling.Materials);
+                                AddMaterials(FinishSettings.SurfaceCeiling, ceiling.Materials, element!.Id);
                             }
                             else
                             {
                                 amount = area;
                                 var ledger = new MaterialLedger();
                                 ledger.Add(MaterialKey.Fallback, area);
-                                AddMaterials(FinishSettings.SurfaceCeiling, ledger);
+                                AddMaterials(FinishSettings.SurfaceCeiling, ledger, element!.Id);
                                 ceilingFallback++;
                             }
 
@@ -903,14 +916,14 @@ public sealed class RoomFinishCalculator
                         {
                             amount = sloped.Total;
                             painted = sloped.Materials.PaintedTotal;
-                            AddMaterials(FinishSettings.SurfaceCeiling, sloped.Materials);
+                            AddMaterials(FinishSettings.SurfaceCeiling, sloped.Materials, element.Id);
                         }
                         else
                         {
                             amount = area;
                             var ledger = new MaterialLedger();
                             ledger.Add(MaterialKey.Fallback, area);
-                            AddMaterials(FinishSettings.SurfaceCeiling, ledger);
+                            AddMaterials(FinishSettings.SurfaceCeiling, ledger, element!.Id);
                             ceilingFallback++;
                         }
 
@@ -928,7 +941,7 @@ public sealed class RoomFinishCalculator
                     if (wallResult is { } wall)
                     {
                         wallExact += wall.Total;
-                        AddMaterials(FinishSettings.SurfaceWalls, wall.Materials);
+                        AddMaterials(FinishSettings.SurfaceWalls, wall.Materials, element.Id);
                         Accumulate(_elemWallArea, element.Id, wall.Total);
                         AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, element.Id, room, wall.Materials.PaintedTotal);
                         Claim(element.Id, room, wall.Total);
@@ -985,7 +998,7 @@ public sealed class RoomFinishCalculator
 
                 foreach (var hit in fallback.Hits)
                 {
-                    AddMaterials(FinishSettings.SurfaceCeiling, hit.Materials);
+                    AddMaterials(FinishSettings.SurfaceCeiling, hit.Materials, hit.Element);
                     Accumulate(_elemCeilingArea, hit.Element, hit.Area);
 
                     // The PT subset. Read off the ORIGINAL element faces, so this is Revit's
@@ -1024,7 +1037,7 @@ public sealed class RoomFinishCalculator
         {
             var ledger = new MaterialLedger();
             ledger.Add(MaterialKey.Fallback, fallbackNet);
-            AddMaterials(FinishSettings.SurfaceWalls, ledger);
+            AddMaterials(FinishSettings.SurfaceWalls, ledger, null);
         }
 
         // Parameters are derived FROM the material ledger, so "parameter == sum of its
@@ -1093,7 +1106,7 @@ public sealed class RoomFinishCalculator
     /// independently of the fallback.
     /// </param>
     private (double Floor, double Ceiling, int Count) MeasureInteriorSlabs(
-        Room room, Action<string, MaterialLedger> addMaterials, HashSet<long> ceilingClaimed)
+        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, HashSet<long> ceilingClaimed)
     {
         double floor = 0.0, ceiling = 0.0;
         var count = 0;
@@ -1145,7 +1158,7 @@ public sealed class RoomFinishCalculator
 
                 if (above)
                 {
-                    addMaterials(FinishSettings.SurfaceFloor, topLedger);
+                    addMaterials(FinishSettings.SurfaceFloor, topLedger, slab.Id);
                     floor += topArea;
                     Accumulate(_elemFloorArea, slab.Id, topArea);
 
@@ -1158,7 +1171,7 @@ public sealed class RoomFinishCalculator
 
                 if (below)
                 {
-                    addMaterials(FinishSettings.SurfaceCeiling, bottomLedger);
+                    addMaterials(FinishSettings.SurfaceCeiling, bottomLedger, slab.Id);
                     ceiling += bottomArea;
                     Accumulate(_elemCeilingArea, slab.Id, bottomArea);
                     Claim(slab.Id, room, bottomArea);
@@ -1187,7 +1200,7 @@ public sealed class RoomFinishCalculator
     /// normal points most toward the room centre. Never both - that doubles the quantity.
     /// </summary>
     private (double Area, int Count) MeasureInteriorWalls(
-        Room room, Action<string, MaterialLedger> addMaterials)
+        Room room, Action<string, MaterialLedger, ElementId?> addMaterials)
     {
         var total = 0.0;
         var count = 0;
@@ -1316,7 +1329,7 @@ public sealed class RoomFinishCalculator
 
                 if (area <= 0) continue;
 
-                addMaterials(FinishSettings.SurfaceWalls, ledger);
+                addMaterials(FinishSettings.SurfaceWalls, ledger, wall.Id);
                 total += area;
                 count++;
             }
@@ -1337,7 +1350,7 @@ public sealed class RoomFinishCalculator
     /// window one side is simply null, which the `from ?? to` fallback already handles.
     /// </summary>
     private (double Paint, int Count) MeasureReveals(
-        Room room, Phase? phase, Action<string, MaterialLedger> addMaterials)
+        Room room, Phase? phase, Action<string, MaterialLedger, ElementId?> addMaterials)
     {
         if (_revealOpenings.Count == 0) return (0.0, 0);
 
@@ -1359,7 +1372,7 @@ public sealed class RoomFinishCalculator
                 var ledger = _reveals.Measure(host, opening);
                 if (ledger.Areas.Count == 0) continue;
 
-                addMaterials(FinishSettings.SurfaceReveals, ledger);
+                addMaterials(FinishSettings.SurfaceReveals, ledger, host.Id);
 
                 foreach (var (_, area) in ledger.Areas)
                 {
@@ -2054,7 +2067,8 @@ public sealed class RoomFinishCalculator
         }
     }
 
-    private void AppendCsvRows(Room room, Dictionary<(string Surface, MaterialKey Key), double> materials)
+    private void AppendCsvRows(
+        Room room, Dictionary<(string Surface, long Host, MaterialKey Key), double> materials)
     {
         string number = string.Empty, name = string.Empty, apartment = string.Empty;
         try
@@ -2071,13 +2085,39 @@ public sealed class RoomFinishCalculator
             // Leave blank.
         }
 
-        foreach (var ((surface, key), area) in materials)
+        foreach (var ((surface, host, key), area) in materials)
         {
             if (area <= 0.005) continue;
 
             var (materialName, code, painted) = key.Describe(_doc);
-            _csvRows.Add(new FinishCsvRow(apartment, number, name, surface, materialName, code,
-                painted, Measure.ToSquareMetres(area)));
+            _csvRows.Add(new FinishCsvRow(apartment, number, name, surface, HostTypeName(host),
+                materialName, code, painted, Measure.ToSquareMetres(area)));
+        }
+    }
+
+    /// <summary>
+    /// The TYPE name of the element a takeoff row was measured on - "IV-Gips-100mm" rather
+    /// than an element id, because that is the column people read.
+    ///
+    /// Blank for the -1 host: the arithmetic fallback bucket was never measured off a face, so
+    /// there is no element to name. Leaving it empty is honest; inventing a type would put a
+    /// wall type against area that no wall was measured for.
+    /// </summary>
+    private string HostTypeName(long hostId)
+    {
+        if (hostId < 0) return string.Empty;
+
+        try
+        {
+            var element = _doc.GetElement(new ElementId(hostId));
+            if (element is null) return string.Empty;
+
+            var typeName = _doc.GetElement(element.GetTypeId())?.Name;
+            return string.IsNullOrWhiteSpace(typeName) ? element.Name : typeName;
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 

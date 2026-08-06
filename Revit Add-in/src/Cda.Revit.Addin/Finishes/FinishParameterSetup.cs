@@ -183,6 +183,10 @@ public sealed class FinishParameterSetup
                 SpecTypeId.String.Text, TakeoffCategories,
                 "the painted material on that surface"),
 
+            new(_settings.PaintTypeParameter, "b5c8f716-92a4-4d38-a0e6-14fb27c9d803",
+                SpecTypeId.String.Text, TakeoffCategories,
+                "the type of the element the row was measured on - 'IV-Gips-100mm'"),
+
             // Not a finish area, but the reason the automation reports itself unavailable in
             // every model that has never been set up. Binding it here is what turns the
             // banner from a warning into a status.
