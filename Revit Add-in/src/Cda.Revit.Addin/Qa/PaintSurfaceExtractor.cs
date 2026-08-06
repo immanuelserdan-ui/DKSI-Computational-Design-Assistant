@@ -29,8 +29,28 @@ public sealed class PaintExtractResult
     public List<PaintRegion> Regions { get; } = [];
     public List<string> Notes { get; } = [];
 
+    /// <summary>
+    /// Hosts that produced a boundary subface - the ones Revit considers to BOUND the room.
+    ///
+    /// Recorded because its complement is the interesting set: an element in the room's
+    /// enclosure that is absent from here bounds nothing, so the finish engine never measured
+    /// it and no amount of paint on it reaches the room's parameters. That is the difference
+    /// between "this face has no paint" and "this face was never looked at", and only the
+    /// second is a modelling error.
+    /// </summary>
+    public HashSet<long> BoundingHosts { get; } = [];
+
+    /// <summary>Hosts with at least one coplanar face that <c>IsPainted</c> reported true for.</summary>
+    public HashSet<long> PaintedHosts { get; } = [];
+
+    /// <summary>Hosts where a painted face was found but the boolean clip failed.</summary>
+    public HashSet<long> ClipFailedHosts { get; } = [];
+
     public double AreaOf(SurfaceKind kind) =>
         Regions.Where(r => r.Kind == kind).Sum(r => r.Area);
+
+    public double AreaOfHost(ElementId id) =>
+        Regions.Where(r => r.Host == id).Sum(r => r.Area);
 
     public bool Any => Regions.Count > 0;
 }
@@ -140,6 +160,10 @@ public sealed class PaintSurfaceExtractor
 
                 if (owner is null || subfaceGeometry is null) continue;
 
+                // Reaching here means this element genuinely bounds the room, whatever comes
+                // of the paint test below.
+                result.BoundingHosts.Add(owner.Id.Value);
+
                 var before = result.Regions.Count;
 
                 Intersect(subfaceGeometry, owner, kind, result, ref booleanFailures);
@@ -208,6 +232,8 @@ public sealed class PaintSurfaceExtractor
 
             if (!painted) continue;
 
+            result.PaintedHosts.Add(owner.Id.Value);
+
             try
             {
                 var roomSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
@@ -222,6 +248,7 @@ public sealed class PaintSurfaceExtractor
                 if (intersection is null || intersection.Volume <= 1e-9)
                 {
                     failures++;
+                    result.ClipFailedHosts.Add(owner.Id.Value);
                     continue;
                 }
 
@@ -246,6 +273,7 @@ public sealed class PaintSurfaceExtractor
             catch
             {
                 failures++;
+                result.ClipFailedHosts.Add(owner.Id.Value);
             }
         }
     }

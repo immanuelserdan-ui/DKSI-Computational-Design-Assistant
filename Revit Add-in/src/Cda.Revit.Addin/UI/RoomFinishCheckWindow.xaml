@@ -101,8 +101,14 @@
             <CheckBox x:Name="HatchBox"
                       Content="Hatch the exact paint areas when isolating"
                       IsChecked="True" />
-            <TextBlock Margin="20,2,0,0" Opacity="0.7" TextWrapping="Wrap"
+            <TextBlock Margin="20,2,0,8" Opacity="0.7" TextWrapping="Wrap"
                        Text="Applied with Isolate. Draws only the NET measured surfaces behind Wall / Floor / Ceiling Paint Area — openings, cuts and unpainted substrate excluded — walls blue, floor green, ceiling amber. Temporary overlay geometry, removed entirely by Clear scope; no existing element is altered." />
+
+            <CheckBox x:Name="MissingBox"
+                      Content="Flag surfaces with NO measured area in red"
+                      IsChecked="True" />
+            <TextBlock Margin="20,2,0,0" Opacity="0.7" TextWrapping="Wrap"
+                       Text="The complement of the hatch: anything enclosing the room that contributed nothing. Red counter-hatch at 135°, so it reads even in greyscale. The notes say why for each one — not room-bounding is the serious case." />
         </StackPanel>
 
         <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">

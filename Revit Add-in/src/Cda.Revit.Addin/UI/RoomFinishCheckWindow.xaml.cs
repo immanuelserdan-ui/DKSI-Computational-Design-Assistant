@@ -169,6 +169,7 @@ public partial class RoomFinishCheckWindow : Window
         var isolate = IsolateBox.IsChecked == true;
         var sectionBox = SectionBoxBox.IsChecked == true;
         var hatch = HatchBox.IsChecked == true;
+        var flagMissing = MissingBox.IsChecked == true;
 
         // Parsed here, on the UI thread, so a typo is reported before anything happens to the
         // model rather than as a silent fallback to some default the user did not choose.
@@ -283,6 +284,7 @@ public partial class RoomFinishCheckWindow : Window
             // from a set of ids and these shapes did not exist when that set was built - so
             // they are added to it below.
             string? hatchMessage = null;
+            string? missingMessage = null;
 
             if (isolate && hatch && doc.GetElement(entry.Id) is Room hatchRoom)
             {
@@ -291,6 +293,14 @@ public partial class RoomFinishCheckWindow : Window
 
                 if (overlay.Created > 0 && isolated)
                     ReIsolate(uiDoc, [.. ids, .. overlay.Ids]);
+
+                // The complement of the overlay: everything in the enclosure that the
+                // overlay did NOT cover. Run off the same extraction rather than a second
+                // pass, because the expensive half is the geometry and it is already done.
+                if (flagMissing && overlay.Extract is not null)
+                {
+                    missingMessage = MissingHatchAudit.Run(uiDoc, set, overlay.Extract).Message;
+                }
             }
 
             // BELT AND BRACES. Nothing above selected anything in this mode, but
@@ -341,6 +351,7 @@ public partial class RoomFinishCheckWindow : Window
                 if (isolateProblem is not null) notes.Add(isolateProblem);
                 if (scopeMessage is not null) notes.Add(scopeMessage);
                 if (hatchMessage is not null) notes.Add(hatchMessage);
+                if (missingMessage is not null) notes.Add(missingMessage);
 
                 NotesLine.Text = string.Join(Environment.NewLine + Environment.NewLine, notes);
             });

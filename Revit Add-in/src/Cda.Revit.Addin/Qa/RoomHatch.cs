@@ -44,6 +44,19 @@ public static class RoomHatch
     /// </summary>
     public const string PatternName = "DKSI QA Temporary Hatch";
 
+    /// <summary>
+    /// A SECOND pattern, for surfaces that should have been measured and were not.
+    ///
+    /// Its own pattern rather than the same one in red, and that is the point: it runs the
+    /// other way (135 degrees against 45) at half the spacing, so a flagged surface is
+    /// distinguishable from a measured one at a glance and in a greyscale printout. Colour
+    /// alone is not enough - roughly one man in twelve cannot rely on red against blue.
+    /// </summary>
+    public const string MissingPatternName = "DKSI QA Missing Hatch";
+
+    /// <summary>Deliberately loud. This one is meant to interrupt.</summary>
+    public static readonly Color MissingColour = new(220, 30, 30);
+
     /// <summary>Diagonal lines at 45 degrees, ~3 mm apart on paper.</summary>
     private const double PatternAngleDegrees = 45.0;
     private const double PatternSpacingMm = 3.0;
@@ -86,12 +99,19 @@ public static class RoomHatch
     /// Creating our own is deterministic, needs no fallback list, and cannot collide with a
     /// pattern the office uses for real documentation.
     /// </summary>
-    public static ElementId EnsurePattern(Document doc)
+    public static ElementId EnsurePattern(Document doc) =>
+        Ensure(doc, PatternName, PatternAngleDegrees, PatternSpacingMm);
+
+    /// <summary>The red flag pattern. See <see cref="MissingPatternName"/>.</summary>
+    public static ElementId EnsureMissingPattern(Document doc) =>
+        Ensure(doc, MissingPatternName, 135.0, PatternSpacingMm / 2.0);
+
+    private static ElementId Ensure(Document doc, string name, double angleDegrees, double spacingMm)
     {
         try
         {
             var existing = FillPatternElement.GetFillPatternElementByName(
-                doc, FillPatternTarget.Drafting, PatternName);
+                doc, FillPatternTarget.Drafting, name);
 
             if (existing is not null) return existing.Id;
         }
@@ -103,17 +123,17 @@ public static class RoomHatch
         try
         {
             var pattern = new FillPattern(
-                PatternName,
+                name,
                 FillPatternTarget.Drafting,
                 FillPatternHostOrientation.ToView,
-                PatternAngleDegrees * Math.PI / 180.0,
-                Measure.FromMillimetres(PatternSpacingMm));
+                angleDegrees * Math.PI / 180.0,
+                Measure.FromMillimetres(spacingMm));
 
             return FillPatternElement.Create(doc, pattern).Id;
         }
         catch (Exception ex)
         {
-            Log.Warn($"QA hatch: could not create fill pattern: {ex.Message}");
+            Log.Warn($"QA hatch: could not create fill pattern '{name}': {ex.Message}");
             return ElementId.InvalidElementId;
         }
     }
@@ -258,22 +278,28 @@ public static class RoomHatch
 
         var doc = uiDoc.Document;
 
-        ElementId patternId;
+        // BOTH patterns. The red flag is as much ours as the blue hatch, and a Clear that
+        // left the red behind would leave a QA warning standing over a surface nobody is
+        // checking any more - the worst of the two to forget.
+        var patternIds = new HashSet<long>();
 
-        try
+        foreach (var name in new[] { PatternName, MissingPatternName })
         {
-            var pattern = FillPatternElement.GetFillPatternElementByName(
-                doc, FillPatternTarget.Drafting, PatternName);
+            try
+            {
+                var pattern = FillPatternElement.GetFillPatternElementByName(
+                    doc, FillPatternTarget.Drafting, name);
 
-            // No pattern means nothing was ever hatched in this model.
-            if (pattern is null) return 0;
+                if (pattern is not null) patternIds.Add(pattern.Id.Value);
+            }
+            catch
+            {
+                // Not present in this model; nothing of ours can reference it.
+            }
+        }
 
-            patternId = pattern.Id;
-        }
-        catch
-        {
-            return 0;
-        }
+        // Neither exists, so nothing was ever hatched here.
+        if (patternIds.Count == 0) return 0;
 
         var cleared = 0;
 
@@ -295,8 +321,8 @@ public static class RoomHatch
                 {
                     var current = view.GetElementOverrides(id);
 
-                    if (current.SurfaceForegroundPatternId == patternId ||
-                        current.CutForegroundPatternId == patternId)
+                    if (patternIds.Contains(current.SurfaceForegroundPatternId.Value) ||
+                        patternIds.Contains(current.CutForegroundPatternId.Value))
                         ours.Add(id);
                 }
                 catch

@@ -47,6 +47,13 @@ public static class PaintOverlay
         /// include them hides the overlay the instant it is drawn.
         /// </summary>
         public IReadOnlyList<ElementId> Ids { get; init; } = [];
+
+        /// <summary>
+        /// What the extraction found, including which hosts bound the room, which carried
+        /// paint, and which failed to clip. Handed on so the missing-hatch audit can run off
+        /// the same pass rather than repeating the most expensive work in the window.
+        /// </summary>
+        public PaintExtractResult? Extract { get; init; }
         public double WallArea { get; init; }
         public double FloorArea { get; init; }
         public double CeilingArea { get; init; }
@@ -75,6 +82,7 @@ public static class PaintOverlay
             return new Result
             {
                 Created = 0,
+                Extract = extract,
                 Message = string.Join(" ", extract.Notes),
             };
         }
@@ -133,6 +141,7 @@ public static class PaintOverlay
         {
             Created = created,
             Ids = placed,
+            Extract = extract,
             WallArea = wall,
             FloorArea = floor,
             CeilingArea = ceiling,
