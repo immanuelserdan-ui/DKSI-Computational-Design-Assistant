@@ -99,7 +99,15 @@
       "PowerShell(\"=== Cda manifest ===\")",
       "PowerShell(\"\")",
       "PowerShell(\"=== VisionModeler manifest ===\")",
-      "PowerShell(& \"C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Installer\\\\build-installer.ps1\" -Version 1.0.0 2>&1)"
+      "PowerShell(& \"C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Installer\\\\build-installer.ps1\" -Version 1.0.0 2>&1)",
+      "PowerShell(\"dotnet: \" + \\(Get-Command dotnet -ErrorAction SilentlyContinue\\).Source; try { dotnet --version } catch { \"no dotnet\" }; \"--- Revit 2027 API ---\"; $p=\"$env:ProgramW6432\\\\Autodesk\\\\Revit 2027\\\\RevitAPI.dll\"; if\\(Test-Path $p\\){ \"FOUND $p\" } else { \"MISSING $p\"; Get-ChildItem \"$env:ProgramW6432\\\\Autodesk\" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name })",
+      "PowerShell($r = Get-Process revit -ErrorAction SilentlyContinue; if\\($r\\){ \"Revit IS running \\(PID \" + \\($r.Id -join ', '\\) + \"\\) - deploy will be blocked\" } else { \"Revit not running - deploy can land\" })",
+      "PowerShell($r = Get-Process revit -ErrorAction SilentlyContinue; if\\($r\\){ \"Revit STILL running \\(PID \" + \\($r.Id -join ', '\\) + \"\\)\" } else { \"Revit not running - deploy can land\" })",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Revit Add-in'; dotnet build 'src\\\\Cda.Revit.Addin\\\\Cda.Revit.Addin.csproj' -c Release -v minimal 2>&1 | Where-Object { $_ -notmatch 'MSB3026|retry' } | Select-Object -Last 20)",
+      "Bash(git check-ignore *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }
