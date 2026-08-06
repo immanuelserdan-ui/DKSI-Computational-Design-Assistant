@@ -22,7 +22,6 @@ internal static class RibbonBuilder
 
         var modelPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Model Data");
         var reportPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Reports");
-        var qaPanel = app.CreateRibbonPanel(CdaApplication.TabName, "QA");
         var timePanel = app.CreateRibbonPanel(CdaApplication.TabName, "Time");
         var helpPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Help");
 
@@ -114,27 +113,30 @@ internal static class RibbonBuilder
             icon: "excel",
             availability: typeof(ProjectDocumentAvailability));
 
-        // ITS OWN PANEL, not a place on Reports. A report tells you what the model contains;
-        // a check tells you what is wrong with it, and someone reaching for the second is not
-        // looking for the first. The panel is also where the remaining QA add-ins land once
-        // the Tier 1 drafting tools are finalised.
-        AddButton(qaPanel,
-            name: "CdaQaTools",
-            text: "QA\nTools",
-            command: typeof(Commands.QaToolsCommand),
-            tooltip: "Model quality checks - room finish sources, and interior wall sweep coverage.",
-            longDescription: "Read-only. Opens a checklist that stays on screen while you work: " +
-                             "pick a room to highlight the walls, floor and ceiling its finish " +
-                             "areas were measured from, or scan the model for wall faces that " +
-                             "should carry skirting and do not. Openings and casework are " +
-                             "allowed for, and wet rooms and 'Udvendig' exterior placeholders " +
-                             "are skipped, using the same rules as Place Skirting - so nothing " +
-                             "is reported that the placement tool was right to leave out.",
-            // Shares the Diagnose Parameters mark. Both are the same kind of tool - look at
-            // the model and tell me what is wrong - and inventing a new icon for the second
-            // one would suggest a difference that is not there.
-            icon: "diagnose",
-            availability: typeof(ProjectDocumentAvailability));
+        // REMOVED — QA Tools, and its whole QA panel.
+        //
+        // Built 2026-08-06/07: a modeless checklist with two checks — highlight the walls,
+        // floor and ceiling a room's finish areas were measured from, and scan for interior
+        // wall faces missing their skirting. It grew a section box, an exact paint-area
+        // overlay drawn as temporary DirectShapes, and a red flag for surfaces measuring
+        // zero. Removed at the user's request; the source is on the 'qa-tools' branch and
+        // nothing else in the add-in ever referenced it.
+        //
+        // WHAT IT WAS WORTH KEEPING FOR. It found four real defects in the finish engine,
+        // and those fixes STAY — they are in Finishes/, not here:
+        //   * 'Udvendig' exterior placeholder rooms were measured like interior ones, putting
+        //     the outside face of the building into the interior paint takeoff.
+        //   * The largest room won an element's identity, so an interior wall's paint was
+        //     filed under the terrace next to it.
+        //   * Element paint totals were cross-room sums under a single room label, so a
+        //     takeoff grouped by room billed one room for its neighbour's paint.
+        //   * MeasureInteriorWalls counted EVERY painted face of a non-room-bounding wall,
+        //     so paint on the far face registered to the near room.
+        //
+        // If it comes back, note that its transactions were named "DKSI QA: ..." and were
+        // NOT recognised by FinishAutomation.OnDocumentChanged — so drawing an overlay
+        // queued a room recalculation, and clearing one queued a full-model sweep. That fix
+        // was reverted with the removal and would need reinstating.
 
         // NO AVAILABILITY CLASS, unlike every other button here. Logging a client meeting or
         // an hour of coordination is something you do with no model open — often the Revit
