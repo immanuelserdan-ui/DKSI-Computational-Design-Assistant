@@ -234,13 +234,25 @@ public partial class RoomFinishCheckWindow : Window
                 return;
             }
 
-            uiDoc.Selection.SetElementIds(ids);
+            // SELECT ONLY WHEN THE SELECTION IS THE ANSWER.
+            //
+            // Revit renders selected elements in the selection colour - in 3D a translucent
+            // blue wash over every face. That is fine when "these are the elements" is the
+            // whole output, and ruinous the moment anything is drawn for you to LOOK at: the
+            // isolated room comes out uniformly blue, the paint overlay's three colours become
+            // one, and the model's own materials disappear underneath.
+            //
+            // So a selection is made only when nothing else was asked for. With isolate, a
+            // section box or the hatch, the room is already unambiguous without it.
+            var selectOnly = !isolate && !sectionBox;
+
+            if (selectOnly) uiDoc.Selection.SetElementIds(ids);
 
             // ShowElements zooms the active view to fit them. It can raise Revit's own
             // "no open view shows these" dialog, which is the correct message when the
             // active view is a sheet or a schedule - better than us guessing.
             try { uiDoc.ShowElements(ids); }
-            catch { /* zoom is a convenience; the selection is the substance */ }
+            catch { /* zoom is a convenience, not the substance */ }
 
             var isolated = false;
             string? isolateProblem = null;
@@ -281,15 +293,35 @@ public partial class RoomFinishCheckWindow : Window
                     ReIsolate(uiDoc, [.. ids, .. overlay.Ids]);
             }
 
+            // BELT AND BRACES. Nothing above selected anything in this mode, but
+            // ShowElements is documented as "show", not "zoom", and has been observed to
+            // leave a selection behind in some view types. One cheap call guarantees the
+            // view is clean whatever it did.
+            var cleared = false;
+
+            if (!selectOnly)
+            {
+                try
+                {
+                    uiDoc.Selection.SetElementIds(new List<ElementId>());
+                    cleared = true;
+                }
+                catch
+                {
+                    // Nothing selected, or the selection is not ours to clear.
+                }
+            }
+
             Log.Info($"QA finish highlight: room {entry.Id.Value}, {ids.Count} element(s), " +
-                     $"isolate={isolate}, isolated={isolated}, sectionBox={sectionBox}");
+                     $"isolate={isolate}, isolated={isolated}, sectionBox={sectionBox}, " +
+                     $"selectionCleared={cleared}");
 
             Dispatcher.Invoke(() =>
             {
                 _current = set;
 
                 CountsLine.Text =
-                    $"Highlighted {ids.Count} element(s): {set.Walls.Count} wall(s), " +
+                    $"{(selectOnly ? "Selected" : "Showing")} {ids.Count} element(s): {set.Walls.Count} wall(s), " +
                     $"{set.Floors.Count} floor(s), {set.Ceilings.Count} ceiling/soffit(s)" +
                     (includeSweeps ? $", {set.Sweeps.Count} skirting piece(s)" : string.Empty) +
                     (includeContents
@@ -297,6 +329,13 @@ public partial class RoomFinishCheckWindow : Window
                           $"{set.Contents.Count} casework/MEP item(s)"
                         : string.Empty) +
                     ".";
+
+                if (cleared)
+                {
+                    CountsLine.Text +=
+                        " Nothing is selected, so the hatch and the model's own materials " +
+                        "read properly.";
+                }
 
                 var notes = set.Notes.Concat(set.LinkedNotes).ToList();
                 if (isolateProblem is not null) notes.Add(isolateProblem);
@@ -398,9 +437,14 @@ public partial class RoomFinishCheckWindow : Window
             var hatches = RoomHatch.Clear(uiDoc);
             var shapes = PaintOverlay.Clear(uiDoc);
 
+            // A selection left over from an earlier Highlight tints everything blue and
+            // outlives every other kind of clearing, so it belongs in the same button.
+            try { uiDoc.Selection.SetElementIds(new List<ElementId>()); }
+            catch { /* nothing selected, or the selection is not ours to clear */ }
+
             Dispatcher.Invoke(() =>
                 NotesLine.Text =
-                    "Isolation and section box cleared" +
+                    "Isolation, section box and selection cleared" +
                     (shapes > 0 ? $", {shapes} paint overlay shape(s) deleted" : string.Empty) +
                     (hatches > 0 ? $", {hatches} graphic override(s) reset" : string.Empty) +
                     ". Nothing that was in the model before is changed.");
