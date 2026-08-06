@@ -40,30 +40,42 @@ public sealed class PaintTakeoffCommand : CommandBase
 
         // Parameters first, and this is not optional politeness: the rows carry six shared
         // parameters, and a row placed before they are bound is a row with no data on it.
+        //
+        // INSIDE A TRANSACTION, which is the whole reason the first run of this command
+        // failed. Creating a shared parameter and widening a binding both modify the model.
+        // Outside a transaction the creation THROWS ("Attempt to modify the model outside of
+        // transaction") while ParameterBindings.ReInsert quietly returns a bare false - so the
+        // same missing transaction produced two completely different-looking errors, one of
+        // which read as Revit refusing the widening on its own merits.
         var setup = new FinishParameterSetup(doc, settings);
 
         if (setup.AnythingMissing())
         {
-            var result = setup.Run();
+            ParameterSetupResult? parameters = null;
 
-            if (result.Problems.Count > 0)
+            Transactions.Run(doc, CommandName + " - parameters", () => parameters = setup.Run());
+
+            if (parameters is { Problems.Count: > 0 })
             {
                 TaskDialog.Show(CommandName,
                     "The takeoff parameters could not be bound, so the rows would carry no " +
-                    "data.\n\n" + string.Join("\n", result.Problems) +
+                    "data.\n\n" + string.Join("\n", parameters.Problems) +
                     $"\n\nSee {Log.CurrentFile}");
                 return Result.Failed;
             }
         }
 
         var calculator = new RoomFinishCalculator(doc, settings);
-        FinishResult finish;
+        FinishResult? finish = null;
 
-        using (var group = new TransactionGroup(doc, CommandName))
+        // Same requirement: the engine writes room and element parameters as it measures.
+        Transactions.Run(doc, CommandName + " - measure", () => finish = calculator.Run());
+
+        if (finish is null)
         {
-            group.Start();
-            finish = calculator.Run();
-            group.Assimilate();
+            TaskDialog.Show(CommandName,
+                $"The measurement pass did not complete. See {Log.CurrentFile}");
+            return Result.Failed;
         }
 
         if (finish.CsvRows.Count == 0)
