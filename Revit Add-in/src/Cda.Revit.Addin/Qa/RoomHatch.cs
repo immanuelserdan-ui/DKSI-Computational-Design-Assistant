@@ -53,9 +53,17 @@ public static class RoomHatch
     /// switched off; one that reads as an annotation gets used. Distinct hues per surface so
     /// a glance says which of the three numbers a face contributed to.
     /// </summary>
-    private static readonly Color WallColour = new(90, 140, 200);
-    private static readonly Color FloorColour = new(110, 170, 110);
-    private static readonly Color CeilingColour = new(210, 160, 80);
+    public static readonly Color WallColour = new(90, 140, 200);
+    public static readonly Color FloorColour = new(110, 170, 110);
+    public static readonly Color CeilingColour = new(210, 160, 80);
+
+    /// <summary>The colour a given surface is drawn in, so overlays and hatches agree.</summary>
+    public static Color ColourOf(SurfaceKind kind) => kind switch
+    {
+        SurfaceKind.Floor => FloorColour,
+        SurfaceKind.Ceiling => CeilingColour,
+        _ => WallColour,
+    };
 
     /// <summary>Surface transparency, 0-100. High enough to read as provisional.</summary>
     private const int Transparency = 35;
@@ -207,7 +215,7 @@ public static class RoomHatch
     /// it a dark material shows straight through the gaps between the hatch lines and the
     /// overlay is invisible on exactly the surfaces someone is checking.
     /// </summary>
-    private static OverrideGraphicSettings Build(ElementId patternId, Color colour)
+    public static OverrideGraphicSettings Build(ElementId patternId, Color colour)
     {
         var overrides = new OverrideGraphicSettings();
 

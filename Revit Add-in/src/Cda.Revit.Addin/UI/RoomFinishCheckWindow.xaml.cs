@@ -259,13 +259,27 @@ public partial class RoomFinishCheckWindow : Window
                 scopeMessage = scope.Message;
             }
 
-            // LAST. The hatch is a graphic override, so it has to be applied to a set the
-            // view is already showing - overriding an element that isolation is about to
-            // hide is work thrown away, and overriding one the section box then cuts is
-            // fine only because the cut faces carry the pattern too.
+            // LAST, and ONLY WITH ISOLATE.
+            //
+            // Tied to isolation rather than offered on its own because the overlay is new
+            // geometry laid on the room's surfaces: in an un-isolated view it is buried
+            // inside the building, invisible and still counted in a Generic Models schedule.
+            // Isolation is what makes it something you can see, which is the only state in
+            // which drawing it is worth the elements it costs.
+            //
+            // It also has to run AFTER the isolation, because temporary isolation is decided
+            // from a set of ids and these shapes did not exist when that set was built - so
+            // they are added to it below.
             string? hatchMessage = null;
 
-            if (hatch) hatchMessage = RoomHatch.Apply(uiDoc, set).Message;
+            if (isolate && hatch && doc.GetElement(entry.Id) is Room hatchRoom)
+            {
+                var overlay = PaintOverlay.Apply(uiDoc, hatchRoom);
+                hatchMessage = overlay.Message;
+
+                if (overlay.Created > 0 && isolated)
+                    ReIsolate(uiDoc, [.. ids, .. overlay.Ids]);
+            }
 
             Log.Info($"QA finish highlight: room {entry.Id.Value}, {ids.Count} element(s), " +
                      $"isolate={isolate}, isolated={isolated}, sectionBox={sectionBox}");
@@ -337,6 +351,29 @@ public partial class RoomFinishCheckWindow : Window
         }
     }
 
+    /// <summary>
+    /// Re-applies the temporary isolation with the overlay shapes added to it.
+    ///
+    /// Necessary because isolation is a snapshot of element ids, taken before these shapes
+    /// existed. Anything not in that snapshot is hidden - so without this the overlay is
+    /// drawn and immediately made invisible, which looks exactly like it failed.
+    /// </summary>
+    private static void ReIsolate(UIDocument uiDoc, ICollection<ElementId> ids)
+    {
+        var view = uiDoc.ActiveGraphicalView;
+        if (view is null || !view.CanUseTemporaryVisibilityModes()) return;
+
+        try
+        {
+            Transactions.Run(uiDoc.Document, "QA - isolate with paint overlay",
+                () => view.IsolateElementsTemporary(ids));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"QA: re-isolating with the paint overlay failed: {ex.Message}");
+        }
+    }
+
     private void OnResetIsolation(object sender, RoutedEventArgs e)
     {
         RevitTaskQueue.Post("Clear view scope", app =>
@@ -356,15 +393,17 @@ public partial class RoomFinishCheckWindow : Window
 
             RoomViewScope.Clear(uiDoc);
 
-            // Found by pattern signature rather than by anything this window remembers, so
-            // this clears a hatch applied in an earlier session too.
+            // Both found by their own mark rather than by anything this window remembers, so
+            // an overlay left behind by an earlier session is cleaned up too.
             var hatches = RoomHatch.Clear(uiDoc);
+            var shapes = PaintOverlay.Clear(uiDoc);
 
             Dispatcher.Invoke(() =>
                 NotesLine.Text =
                     "Isolation and section box cleared" +
-                    (hatches > 0 ? $", {hatches} hatch override(s) removed" : string.Empty) +
-                    ". The saved view and the model are unchanged.");
+                    (shapes > 0 ? $", {shapes} paint overlay shape(s) deleted" : string.Empty) +
+                    (hatches > 0 ? $", {hatches} graphic override(s) reset" : string.Empty) +
+                    ". Nothing that was in the model before is changed.");
         });
     }
 
