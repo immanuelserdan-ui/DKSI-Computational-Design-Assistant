@@ -197,6 +197,15 @@ public sealed class FinishSettings
     /// <summary>Plane-matching tolerance, ~6 mm.</summary>
     public const double CoplanarTolerance = 0.02;
 
+    /// <summary>
+    /// How far off a wall face to step when asking which room that face fronts, ~30 mm.
+    ///
+    /// Far enough to clear the face itself, where <c>IsPointInRoom</c> is a coin toss, and
+    /// well short of anything that could be standing against the wall. The same reasoning and
+    /// roughly the same distance as the skirting engine's side probe.
+    /// </summary>
+    public const double FaceProbe = 0.1;
+
     /// <summary>Thin-solid thickness used for face intersection.</summary>
     public const double ExtrudeThickness = 0.10;
 

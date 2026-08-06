@@ -1181,8 +1181,42 @@ public sealed class RoomFinishCalculator
                     sideFaces.Add((face, normal));
                 }
 
-                var painted = new List<(Face Face, XYZ Normal)>();
+                // WHICH FACES ACTUALLY FRONT THIS ROOM.
+                //
+                // THE BUG THIS FIXES - paint registering to the room on the far side.
+                //   The painted set used to be taken from EVERY side face of the wall, and
+                //   the orientation test below only ran in the "nothing is painted" branch -
+                //   which is exactly the case where it does not matter. So for a
+                //   non-room-bounding wall that genuinely divides two spaces, the far face's
+                //   paint was credited to the near room. One wall, both faces, one room.
+                //
+                // WHY THE ORIGINAL WAS NOT SIMPLY WRONG
+                //   This method exists for hanging and freestanding partitions - a bulkhead
+                //   standing INSIDE a room, finished on the visible sides and concealed
+                //   behind casework at the back. For those, both faces really do belong to
+                //   this room, and counting only the painted ones is the correct rule.
+                //
+                //   Probing per face keeps that intact: both sides of a freestanding
+                //   bulkhead answer "yes, this room", so both survive. Only a wall that
+                //   divides two spaces loses its far face - which is the whole fix.
+                //
+                // ASKED OF THE ROOM, NOT INFERRED FROM A CENTRE POINT. The fallback below
+                // compares each normal against the room's location point, which is a
+                // reasonable guess and no better than that in an L-shaped room where the
+                // location point can sit behind the very wall being tested. IsPointInRoom a
+                // short step off the face answers the actual question.
+                var facing = new List<(Face Face, XYZ Normal)>();
                 foreach (var (face, normal) in sideFaces)
+                {
+                    if (FaceFrontsRoom(room, face, normal)) facing.Add((face, normal));
+                }
+
+                // Undecidable for every face - a room Revit will not answer containment for.
+                // Fall back to the full set rather than silently measuring nothing.
+                if (facing.Count == 0) facing = sideFaces;
+
+                var painted = new List<(Face Face, XYZ Normal)>();
+                foreach (var (face, normal) in facing)
                 {
                     try
                     {
@@ -1199,7 +1233,7 @@ public sealed class RoomFinishCalculator
                 {
                     use = [.. painted.Select(p => p.Face)];
                 }
-                else if (sideFaces.Count > 0)
+                else if (facing.Count > 0)
                 {
                     XYZ? roomPoint = null;
                     try { roomPoint = (room.Location as LocationPoint)?.Point; }
@@ -1210,7 +1244,7 @@ public sealed class RoomFinishCalculator
                         Face? best = null;
                         var bestDot = -2.0;
 
-                        foreach (var (face, _) in sideFaces)
+                        foreach (var (face, _) in facing)
                         {
                             var (origin, normal) = FinishGeometry.PlanarData(face);
                             if (origin is null || normal is null) continue;
@@ -1226,7 +1260,7 @@ public sealed class RoomFinishCalculator
                     }
                     else
                     {
-                        use = [sideFaces[0].Face];
+                        use = [facing[0].Face];
                     }
                 }
                 else
@@ -1328,6 +1362,37 @@ public sealed class RoomFinishCalculator
     /// Then by area; then by the lower room id, so a wall dead-centre between two rooms lands
     /// on the same one every run instead of flipping with dictionary order.
     /// </summary>
+    /// <summary>
+    /// Does this face front <paramref name="room"/>?
+    ///
+    /// A solid's face normals point outward, so a short step along the normal leaves the wall
+    /// and enters whatever space the face looks into. Asking the room whether that point is
+    /// inside it is the definitive answer - not a heuristic, and it does not care about the
+    /// wall's Orientation flag, which describes how the wall was drawn rather than what is
+    /// on either side of it.
+    ///
+    /// The step is measured from the face's own centroid rather than its origin: a face
+    /// origin can sit on a corner of the wall, where a probe lands in the return of an
+    /// abutting partition and the answer is about the wrong room entirely.
+    /// </summary>
+    private bool FaceFrontsRoom(Room room, Face face, XYZ normal)
+    {
+        try
+        {
+            var centroid = FinishGeometry.FaceCentroid(face);
+            if (centroid is null) return false;
+
+            var direction = normal.Normalize();
+            if (direction.GetLength() < 1e-9) return false;
+
+            return TryPointInRoom(room, centroid + direction * FinishSettings.FaceProbe);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>Element to owning room, for every element any room claimed.</summary>
     private Dictionary<long, long> ResolveOwners()
     {
