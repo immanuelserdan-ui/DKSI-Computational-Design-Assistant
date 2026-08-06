@@ -108,7 +108,9 @@
       "Bash(git checkout *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "PowerShell(Set-Location 'C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Revit Add-in'; dotnet build 'src\\\\Cda.Revit.Addin\\\\Cda.Revit.Addin.csproj' -c Release -v minimal 2>&1 | Where-Object { $_ -notmatch 'MSB3026|retry' } | Select-Object -Last 15)"
+      "PowerShell(Set-Location 'C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Revit Add-in'; dotnet build 'src\\\\Cda.Revit.Addin\\\\Cda.Revit.Addin.csproj' -c Release -v minimal 2>&1 | Where-Object { $_ -notmatch 'MSB3026|retry' } | Select-Object -Last 15)",
+      "Bash(cd \"C:/Users/user/Desktop/Claude Projects/Computational Design Assistant/Revit Add-in/src/Cda.Revit.Addin\" && sed -i 's/\"QA - /\"DKSI QA: /g' Qa/*.cs UI/RoomFinishCheckWindow.xaml.cs && grep -rn '\"DKSI QA: ' Qa/ UI/ | sed 's/^\\\\\\(.*\\\\.cs\\\\\\):[0-9]*: *//' | sort -u)",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Revit Add-in'; dotnet build 'src\\\\Cda.Revit.Addin\\\\Cda.Revit.Addin.csproj' -c Release -v minimal 2>&1 | Where-Object { $_ -notmatch 'MSB3026|retry' } | Select-Object -Last 12)"
     ]
   }
 }
