@@ -1,11 +1,16 @@
 <#
 .SYNOPSIS
-    Builds both DKSI add-ins and packages them into one distributable ZIP.
+    Builds the DKSI add-in and packages it into one distributable ZIP.
 
 .DESCRIPTION
-    Produces dist\DKSI-Revit-Suite-<version>.zip containing both add-ins, their
-    manifests, an installer and an uninstaller. Hand that one file to anyone in the
+    Produces dist\DKSI-Revit-Suite-<version>.zip containing the add-in, its
+    manifest, an installer and an uninstaller. Hand that one file to anyone in the
     office; they extract it and double-click Install.cmd.
+
+    The name still says "Suite" because that is the file name colleagues already
+    have, and the installer it carries still removes Vision Modeler from machines
+    that got an earlier package - renaming it would only make that history harder
+    to follow.
 
     Builds in RELEASE and with DeployToRevit=false, deliberately. Release because a
     Debug build carries no optimisation and ships JIT-time overhead into everyone's
@@ -23,8 +28,6 @@ param(
     [string] $Version = '1.0.0',
 
     [string] $CdaProject = 'C:\Users\user\Desktop\Claude Projects\Computational Design Assistant\Revit Add-in\src\Cda.Revit.Addin\Cda.Revit.Addin.csproj',
-
-    [string] $VisionProject = 'C:\Users\user\Desktop\Claude Projects\RevitVisionModeler\src\Dksi.VisionModeler.Addin\Dksi.VisionModeler.Addin.csproj',
 
     [switch] $SkipBuild
 )
@@ -45,26 +48,52 @@ function Note { param([string] $m) Write-Host "    $m" }
 # Ship = goes into the package. Everything here is BUILT either way, so a project
 # that is temporarily not shipped still fails the build if someone breaks it —
 # which is the whole reason not to simply comment it out.
+#
+# REMOVED — DKSI Vision Modeler. It was carried here as a parked Ship = $false entry
+# so that breaking it would still fail this build. That guard stopped being useful
+# when the product was retired in 70288e5 ("Stop shipping Vision Modeler, and remove
+# it from machines that have it") and became a liability instead: the Test-Path check
+# below throws for EVERY entry, shipped or not, so this script would die with
+# "Project not found" the moment the RevitVisionModeler folder is deleted - which is
+# the natural next step after retiring something. It survived only because that folder
+# still happens to sit on this machine, outside the repo.
+#
+# Install.ps1 and Uninstall.ps1 keep their Vision Modeler entries on purpose. Those
+# are the uninstall path for colleagues who received an earlier package, and they must
+# outlive the build entry.
 $builds = @(
-    @{ Name = 'DKSI Revit Tools';    Project = $CdaProject;    Folder = 'Cda';           Manifest = 'Cda.Revit.Addin.addin';           Ship = $true }
-
-    # Parked: Drawings to BIM is off the ribbon, so this add-in would load into every
-    # Revit session, contribute no UI, and cost ~5.9 MB of assemblies and one
-    # unknown-publisher prompt for nothing. Set Ship = $true to put it back.
-    @{ Name = 'DKSI Vision Modeler'; Project = $VisionProject; Folder = 'VisionModeler'; Manifest = 'Dksi.VisionModeler.Addin.addin'; Ship = $false }
+    @{ Name = 'DKSI Revit Tools'; Project = $CdaProject; Folder = 'Cda'; Manifest = 'Cda.Revit.Addin.addin'; Ship = $true }
 )
 
 foreach ($build in $builds) {
     if (-not (Test-Path $build.Project)) { throw "Project not found: $($build.Project)" }
 }
 
+# FileVersion MUST CHANGE WITH EVERY RELEASE, and this is the line that makes it.
+#
+# AssemblyVersion is a constant 1.0.0 in Directory.Build.props, so without this every
+# DLL this script ever produced carried FileVersion 1.0.0.0 - the binary inside
+# DKSI-Revit-Suite-1.1.0.zip reported 1.0.0.0, identical to the one in the 1.0.0 zip.
+# Two packages, two version numbers on the outside, indistinguishable binaries inside.
+#
+# The MSI channel already does this (Revit Add-in\tools\build-installer.ps1) because a
+# missing FileVersion there is worse than cosmetic: Windows Installer treats "equal
+# version" as "leave the existing file alone", and an upgrade was once observed keeping
+# the OLD DLL while still exiting 0. This ZIP channel copies with -Force so it does not
+# have that failure, but shipping unidentifiable binaries makes a bug report from a
+# colleague impossible to tie back to a build.
+#
+# Same 1.0.<yy><doy>.0 scheme as the MSI and package-for-colleague, so all three
+# channels stamp identical binaries on a given day.
+$fileVersion = '1.0.{0}{1}.0' -f (Get-Date).ToString('yy'), (Get-Date).DayOfYear
+
 if (-not $SkipBuild) {
     foreach ($build in $builds) {
-        Step "Building $($build.Name) (Release)"
+        Step "Building $($build.Name) (Release, FileVersion $fileVersion)"
 
         # DeployToRevit=false keeps the packaging build from touching the local Revit
         # install - and stops a running Revit from failing the build over a locked DLL.
-        & dotnet build $build.Project -c Release -p:DeployToRevit=false --nologo -v quiet
+        & dotnet build $build.Project -c Release -p:DeployToRevit=false -p:FileVersion=$fileVersion --nologo -v quiet
 
         if ($LASTEXITCODE -ne 0) { throw "$($build.Name) failed to build. Package not created." }
     }
@@ -118,13 +147,16 @@ Copy-Item (Join-Path $Template '*') -Destination $Staging -Recurse -Force
 $stamp = @"
 DKSI Revit add-in suite
 Version      : $Version
+FileVersion  : $fileVersion
 Built        : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 Built on     : $env:COMPUTERNAME
 Revit target : 2027 (.NET 10)
 
 Contents
-  DKSI Revit Tools    - finish areas, lining automation, schedules, time tracking
-  DKSI Vision Modeler - Drawings to BIM
+  DKSI Revit Tools - finish areas, lining automation, schedules, time tracking
+
+FileVersion is the number stamped into the DLL itself, readable from its Properties
+dialog on any machine. Quote it in a bug report; Version alone names the package.
 "@
 Set-Content -Path (Join-Path $Staging 'VERSION.txt') -Value $stamp -Encoding UTF8
 
