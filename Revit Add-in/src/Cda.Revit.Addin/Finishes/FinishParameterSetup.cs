@@ -149,16 +149,39 @@ public sealed class FinishParameterSetup
             // no ceiling modelled, the room's ceiling finish is measured off the slab above
             // or the roof, and the row in the takeoff is that element's row.
             new(_settings.ApartmentParameter, "183f9946-30c0-463c-ba40-162898959cf5",
-                SpecTypeId.String.Text, FinishElementCategories,
+                SpecTypeId.String.Text, IdentityCategories,
                 "apartment - the finished room's Department"),
 
             new(_settings.RoomNumberParameter, "68442e05-a311-4702-8a5d-170448fe56cb",
-                SpecTypeId.String.Text, FinishElementCategories,
+                SpecTypeId.String.Text, IdentityCategories,
                 "the finished room's Number"),
 
             new(_settings.RoomNameParameter, "9ff26881-416a-43ce-8c91-91b907c8af2f",
-                SpecTypeId.String.Text, FinishElementCategories,
+                SpecTypeId.String.Text, IdentityCategories,
                 "the finished room's Name"),
+
+            // ---- the per-room paint takeoff ------------------------------------------
+            //
+            // On Generic Models, because that is what the takeoff rows are: one generated
+            // element per (room, surface, material), carrying the area the engine measured
+            // for that room on that surface in that material.
+            //
+            // They exist because a WALL cannot carry this. A wall material takeoff has one
+            // row per (wall, material) and no room dimension, so a wall between Alrum and
+            // Bad has a single 'Rum' and the losing room's face disappears from the
+            // schedule entirely - four faces of a bathroom arriving as two rows. Giving the
+            // row its own element is the only way to have as many rows as there are faces.
+            new(_settings.PaintAreaParameter, "a4d7e219-5b83-4c06-9e71-2f8a63d05b17",
+                SpecTypeId.Area, TakeoffCategories,
+                "painted area of one material on one surface of one room"),
+
+            new(_settings.PaintSurfaceParameter, "c92f5a03-7e14-48d2-b6a9-08c47e13d5f2",
+                SpecTypeId.String.Text, TakeoffCategories,
+                "which surface the takeoff row measures - Walls, Floor or Ceiling"),
+
+            new(_settings.PaintMaterialParameter, "6e01b8d4-3c57-4a19-85f2-9d7b04ea61c3",
+                SpecTypeId.String.Text, TakeoffCategories,
+                "the painted material on that surface"),
 
             // Not a finish area, but the reason the automation reports itself unavailable in
             // every model that has never been set up. Binding it here is what turns the
@@ -185,6 +208,21 @@ public sealed class FinishParameterSetup
         BuiltInCategory.OST_Ceilings, BuiltInCategory.OST_Roofs,
         BuiltInCategory.OST_StructuralFoundation,
     ];
+
+    /// <summary>The category the generated per-room takeoff rows live in.</summary>
+    public static readonly BuiltInCategory[] TakeoffCategories = [BuiltInCategory.OST_GenericModel];
+
+    /// <summary>
+    /// Everything that can carry room identity: the measured finish elements, plus the
+    /// generated takeoff rows.
+    ///
+    /// The takeoff rows need Lejlighed / Rum nr / Rum bound to the SAME shared parameters, on
+    /// the same GUIDs, as the walls do - otherwise the takeoff would group on a second field
+    /// with the same name and a different identity, which is exactly the "two fields that can
+    /// disagree" trap the note above is about.
+    /// </summary>
+    public static readonly BuiltInCategory[] IdentityCategories =
+        [.. FinishElementCategories, .. TakeoffCategories];
 
     /// <summary>
     /// Read-only check: is any parameter absent, or bound to fewer categories than it needs?

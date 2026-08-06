@@ -39,4 +39,12 @@ internal static class Measure
     /// <summary>Millimetres to internal length, for settings expressed in real units.</summary>
     public static double FromMillimetres(double millimetres) =>
         UnitUtils.ConvertToInternalUnits(millimetres, UnitTypeId.Millimeters);
+
+    /// <summary>
+    /// Square metres back to internal area. The inverse of <see cref="ToSquareMetres"/>, for
+    /// writing a figure that was reported in m² into an Area parameter - which Revit always
+    /// stores in square feet regardless of what the project displays.
+    /// </summary>
+    public static double FromSquareMetres(double squareMetres) =>
+        UnitUtils.ConvertToInternalUnits(squareMetres, UnitTypeId.SquareMeters);
 }

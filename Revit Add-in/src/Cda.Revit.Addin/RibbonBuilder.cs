@@ -96,6 +96,25 @@ internal static class RibbonBuilder
             icon: "finish",
             availability: typeof(ProjectDocumentAvailability));
 
+        // THE TAKEOFF TO ISSUE, so it sits with the other reporting commands rather than with
+        // the diagnostics. A Wall Material Takeoff cannot carry a room column - 'Rum' lives on
+        // the wall, one wall holds one value, so a room shows the walls it OWNS rather than
+        // every face that touches it. This builds the schedule that can.
+        AddButton(reportPanel,
+            name: "CdaPaintTakeoff",
+            text: "Paint Takeoff\nby Room",
+            command: typeof(Commands.PaintTakeoffCommand),
+            tooltip: "Builds a paint schedule with one row per room, surface and material.",
+            longDescription: "Runs the finish engine and places one lightweight row element per " +
+                             "(room, surface, material), then finds or creates the schedule over " +
+                             "them. A wall painted on both faces appears once for EACH room it " +
+                             "faces, so a bathroom with four painted faces gives four rows - " +
+                             "where a Wall Material Takeoff gives two and silently drops the " +
+                             "paint on faces whose wall belongs to the neighbouring room. The " +
+                             "rows carry no geometry and are regenerated on every run.",
+            icon: "takeoff",
+            availability: typeof(ProjectDocumentAvailability));
+
         // Sits directly after Finish Surface Area because it exists to explain that command's
         // numbers: same engine, same measurement, drawn instead of written.
         AddButton(reportPanel,

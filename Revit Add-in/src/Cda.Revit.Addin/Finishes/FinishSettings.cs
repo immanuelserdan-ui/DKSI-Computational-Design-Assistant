@@ -87,6 +87,20 @@ public sealed class FinishSettings
     /// <summary>Room Name, carried onto the finish elements. See <see cref="ApartmentParameter"/>.</summary>
     public string RoomNameParameter { get; init; } = "Rum";
 
+    // ---- the per-room paint takeoff -------------------------------------------------
+    //
+    // Carried by the generated takeoff elements, not by walls. A wall material takeoff has
+    // one row per (wall, material) and no room dimension, so a wall touching two rooms has
+    // one 'Rum' slot for two correct answers - which is why a room shows only the walls it
+    // OWNS rather than every face that touches it. These name the columns of the takeoff
+    // that does have a room dimension.
+
+    public string PaintAreaParameter { get; init; } = "Paint Area";
+
+    public string PaintSurfaceParameter { get; init; } = "Paint Surface";
+
+    public string PaintMaterialParameter { get; init; } = "Paint Material";
+
     /// <summary>
     /// Text parameter on Rooms recording WHICH element the ceiling area came from -
     /// "ceiling", "slab above", "roof", or "none", suffixed "(fallback)" when nothing
