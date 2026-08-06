@@ -1,0 +1,42 @@
+<Project>
+
+  <!--
+    Single source of truth for the Revit version this add-in targets.
+    To move to Revit 2028 later: change RevitVersion here, confirm RevitApiDir
+    resolves, and re-check TargetFramework against that release's runtimeconfig.json.
+  -->
+  <PropertyGroup>
+    <RevitVersion>2027</RevitVersion>
+    <RevitApiDir>$(ProgramW6432)\Autodesk\Revit $(RevitVersion)</RevitApiDir>
+    <RevitAddinsDir>$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)</RevitAddinsDir>
+  </PropertyGroup>
+
+  <!--
+    Revit 2027 runs on .NET 10 (verified: RevitAPI.runtimeconfig.json reports
+    "tfm": "net10.0"). An add-in must target the same major runtime as the host.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Company>DKSI</Company>
+    <Product>DKSI Revit Tools</Product>
+    <Version>1.0.0</Version>
+    <Copyright>Copyright © $(Company) 2026</Copyright>
+  </PropertyGroup>
+
+  <!-- Fail early and loudly rather than emitting hundreds of "type not found" errors. -->
+  <Target Name="VerifyRevitApiDir" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(RevitApiDir)\RevitAPI.dll')"
+           Text="RevitAPI.dll not found at '$(RevitApiDir)'. Set RevitApiDir in Directory.Build.props to your Revit $(RevitVersion) install folder." />
+  </Target>
+
+</Project>

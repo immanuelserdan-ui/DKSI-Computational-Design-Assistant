@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deployed to:  %AppData%\Autodesk\Revit\Addins\2027\Cda.Revit.Addin.addin
+  The <Assembly> path is RELATIVE to this file's folder, so the same manifest works
+  for per-user and all-users installs without editing.
+
+  ClientId values are permanent identity. Generate once, never change them, and never
+  reuse another add-in's GUID - Revit silently refuses to load the second one.
+-->
+<RevitAddIns>
+
+  <AddIn Type="Application">
+    <Name>DKSI Revit Tools</Name>
+    <Assembly>Cda\Cda.Revit.Addin.dll</Assembly>
+    <FullClassName>Cda.Revit.Addin.CdaApplication</FullClassName>
+    <ClientId>3f6a1c4e-8b27-4d19-9a53-1c0e7b25d840</ClientId>
+    <VendorId>DKSI</VendorId>
+    <VendorDescription>DKSI</VendorDescription>
+
+    <!--
+      Revit 2027 add-in isolation. Naming a context loads this add-in and its
+      dependencies into a private AssemblyLoadContext, so our Newtonsoft.Json (or
+      any other shared package) cannot collide with another vendor's version.
+      Remove this element if you need to fall back to 2026-style shared loading.
+    -->
+    <ContextName>CdaTools</ContextName>
+  </AddIn>
+
+</RevitAddIns>

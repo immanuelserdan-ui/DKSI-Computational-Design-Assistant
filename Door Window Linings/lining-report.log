@@ -1,0 +1,64 @@
+﻿Lining clash resolver -- APPLIED
+Examined 53 openings on 17 wall run(s).
+2 need changes; 2 written.
+Settings: max clear gap 60 mm, min remnant kept 50 mm.
+Skipped 31: 28290865 -- no lining parameters; 28290976 -- no lining parameters; 28291293 -- no lining parameters; 28291412 -- no lining parameters; 28292565 -- no lining parameters; 28292677 -- no lining parameters; 28293193 -- no lining parameters; 28293280 -- no lining parameters; 28293436 -- no lining parameters; 28365314 -- no lining parameters ...
+Report written to C:\Users\user\Desktop\Claude Projects\Computational Design Assistant\Door Window Linings\lining-report.csv.
+
+WARNINGS:
+
+
+GEOMETRY (mm):
+  28294748 [610] Doors     host 28280821  u[-3108..-2122] z[0..1751]  w=986 h=1751 leftAt=-2122 liningYN=OFF
+  28297628 [611] Doors     host 28340155  u[-998..-112] z[0..2076]  w=886 h=2076 leftAt=-112 liningYN=OFF
+  28298091 [613] Doors     host 28280074  u[-1513..-627] z[0..2076]  w=886 h=2076 leftAt=-1513 liningYN=OFF
+  28366565 [619] Doors     host 28361856  u[-4693..-3807] z[0..2076]  w=886 h=2076 leftAt=-4693 liningYN=OFF
+  28366667 [620] Doors     host 28362692  u[-1313..-327] z[0..2076]  w=986 h=2076 leftAt=-1313 liningYN=OFF
+  28386882 [623] Doors     host 28377592  u[2337..4123] z[0..2076]  w=1786 h=2076 leftAt=4123 liningYN=on
+  28389388 [624] Doors     host 28377752  u[-7913..-7027] z[0..2076]  w=886 h=2076 leftAt=-7913 liningYN=OFF
+  28389555 [625] Doors     host 28377752  u[-4373..-3487] z[0..2076]  w=886 h=2076 leftAt=-4373 liningYN=OFF
+  28397108 [631] Doors     host 28382360  u[10359..11245] z[0..2076]  w=886 h=2076 leftAt=11245 liningYN=OFF
+  28397214 [632] Doors     host 28382360  u[8259..9145] z[0..2076]  w=886 h=2076 leftAt=9145 liningYN=OFF
+  28397345 [633] Doors     host 28382197  u[18604..20390] z[0..2076]  w=1786 h=2076 leftAt=20390 liningYN=OFF
+  28411072 [638] Doors     host 28384124  u[20455..21341] z[0..2076]  w=886 h=2076 leftAt=20455 liningYN=OFF
+  28411204 [639] Doors     host 28384124  u[23905..24791] z[0..2076]  w=886 h=2076 leftAt=23905 liningYN=OFF
+  28411751 [643] Doors     host 28384120  u[30626..32412] z[0..2076]  w=1786 h=2076 leftAt=32412 liningYN=OFF
+  28426814 [662] Doors     host 28426714  u[-1303..-317] z[0..2076]  w=986 h=2076 leftAt=-1303 liningYN=OFF
+  28428151 [663] Doors     host 28426708  u[64272..65258] z[0..2076]  w=986 h=2076 leftAt=64272 liningYN=OFF
+  28291651 [1860] Windows   host 28338098  u[447..1723] z[937..2113]  w=1276 h=1176 leftAt=447 liningYN=OFF
+  28291802 [1861] Windows   host 28338098  u[2457..3733] z[937..2113]  w=1276 h=1176 leftAt=2457 liningYN=OFF
+  28291834 [1862] Windows   host 28338098  u[4467..5743] z[937..2113]  w=1276 h=1176 leftAt=4467 liningYN=OFF
+  28293946 [1863] Windows   host 28339003  u[1092..2368] z[946..2122]  w=1276 h=1176 leftAt=2368 liningYN=OFF
+  28294013 [1864] Windows   host 28279651  u[-1548..-272] z[946..2122]  w=1276 h=1176 leftAt=-272 liningYN=OFF
+  28294109 [1865] Windows   host 28340509  u[1512..2788] z[946..2122]  w=1276 h=1176 leftAt=1512 liningYN=OFF
+  28294161 [1866] Windows   host 28340509  u[3612..4888] z[900..2076]  w=1276 h=1176 leftAt=3612 liningYN=OFF
+  28294299 [1867] Windows   host 28343254  u[-4128..-3252] z[1340..1751]  w=876 h=411 leftAt=-4128 liningYN=OFF
+  28294565 [1868] Windows   host 28280821  u[-2033..-257] z[1340..1751]  w=1776 h=411 leftAt=-2033 liningYN=OFF
+  28297925 [1869] Windows   host 28280490  u[1472..2748] z[946..2122]  w=1276 h=1176 leftAt=2748 liningYN=OFF
+  28369724 [1870] Windows   host 28361438  u[1332..3108] z[374..1550]  w=1776 h=1176 leftAt=3108 liningYN=OFF
+  28370091 [1871] Windows   host 28362478  u[827..2103] z[843..2019]  w=1276 h=1176 leftAt=2103 liningYN=OFF
+  28370155 [1872] Windows   host 28362478  u[2677..3953] z[843..2019]  w=1276 h=1176 leftAt=3953 liningYN=OFF
+  28370261 [1873] Windows   host 28361856  u[-1999..-723] z[946..2122]  w=1276 h=1176 leftAt=-1999 liningYN=OFF
+  28370419 [1874] Windows   host 28361856  u[-7738..-6162] z[560..2036]  w=1576 h=1476 leftAt=-7738 liningYN=OFF
+  28387099 [1875] Windows   host 28377592  u[4130..4506] z[-0..2076]  w=376 h=2076 leftAt=4506 liningYN=on
+  28388428 [1876] Windows   host 28377592  u[1954..2330] z[-0..2076]  w=376 h=2076 leftAt=1954 liningYN=on
+  28388916 [1877] Windows   host 28377592  u[5574..6550] z[1046..2122]  w=976 h=1076 leftAt=6550 liningYN=OFF
+  28389061 [1878] Windows   host 28539468  u[-937..-261] z[1046..2122]  w=676 h=1076 leftAt=-937 liningYN=OFF
+  28389181 [1879] Windows   host 28377752  u[-1943..-967] z[1046..2122]  w=976 h=1076 leftAt=-1943 liningYN=OFF
+  28389454 [1880] Windows   host 28377752  u[-7003..-6527] z[-0..2076]  w=476 h=2076 leftAt=-7003 liningYN=OFF
+  28397441 [1881] Windows   host 28382197  u[15846..16822] z[1046..2122]  w=976 h=1076 leftAt=16822 liningYN=OFF
+  28397570 [1882] Windows   host 28576654  u[292..968] z[1046..2122]  w=676 h=1076 leftAt=292 liningYN=OFF
+  28410702 [1883] Windows   host 28382197  u[18187..18563] z[0..2076]  w=376 h=2076 leftAt=18563 liningYN=OFF
+  28410966 [1884] Windows   host 28382197  u[20431..20807] z[0..2076]  w=376 h=2076 leftAt=20431 liningYN=OFF
+  28411138 [1885] Windows   host 28384124  u[21365..21841] z[0..2076]  w=476 h=2076 leftAt=21365 liningYN=OFF
+  28411371 [1886] Windows   host 28384124  u[26345..27321] z[1046..2122]  w=976 h=1076 leftAt=26345 liningYN=OFF
+  28411881 [1887] Windows   host 28384120  u[30209..30585] z[-0..2076]  w=376 h=2076 leftAt=30585 liningYN=OFF
+  28412125 [1888] Windows   host 28384120  u[32453..32829] z[-0..2076]  w=376 h=2076 leftAt=32453 liningYN=OFF
+  28412158 [1889] Windows   host 28384120  u[34392..35368] z[1046..2122]  w=976 h=1076 leftAt=35368 liningYN=OFF
+  28413413 [1890] Windows   host 28577187  u[-2173..-1497] z[1046..2122]  w=676 h=1076 leftAt=-2173 liningYN=OFF
+  28426940 [1901] Windows   host 28426704  u[70597..72373] z[946..2122]  w=1776 h=1176 leftAt=72373 liningYN=OFF
+  28427164 [1902] Windows   host 28426712  u[927..2403] z[946..2122]  w=1476 h=1176 leftAt=2403 liningYN=OFF
+  28428411 [1903] Windows   host 28426708  u[61602..62878] z[1046..2222]  w=1276 h=1176 leftAt=61602 liningYN=OFF
+  28428553 [1904] Windows   host 28426708  u[66577..67253] z[1046..2122]  w=676 h=1076 leftAt=66577 liningYN=OFF
+  28430241 [1905] Windows   host 28426708  u[65272..65548] z[0..2076]  w=276 h=2076 leftAt=65272 liningYN=OFF
+  28446720 [1906] Windows   host 28361856  u[-3783..-3507] z[0..2076]  w=276 h=2076 leftAt=-3507 liningYN=OFF

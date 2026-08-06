@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  DKSI Revit Tools - Windows Installer package.
+
+  PER-USER BY DESIGN. Scope="perUser" means no administrator rights, no UAC prompt, and
+  nothing written outside the installing user's profile. That matters more than it sounds:
+  the office machines this has to reach are locked down, and an installer that needs IT to
+  run it is an installer that does not get run. It also puts the files in exactly the
+  folder the developer build deploys to, so a colleague runs byte-for-byte what we test.
+
+  The trade-off accepted: each user installs it for themselves. An all-users MSI would
+  cover every profile on a machine in one go, and would need admin. If IT ever wants to
+  push this centrally, that is the variant to build - it is a Scope change plus a
+  different destination, not a rewrite.
+
+  UpgradeCode is PERMANENT IDENTITY. It is how Windows recognises a later MSI as "the same
+  product, newer". Change it and every future version installs alongside the old one
+  instead of replacing it, and neither can cleanly uninstall the other.
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+      Name="DKSI Revit Tools"
+      Manufacturer="DKSI"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="7b2f4d18-93ac-4e26-8f51-c0a7d6e93b45"
+      Scope="perUser"
+      Compressed="yes">
+
+    <SummaryInformation
+        Description="DKSI Revit Tools for Revit 2027 - room finish quantities, schedules and model data"
+        Manufacturer="DKSI" />
+
+    <!--
+      AllowSameVersionUpgrades is here for the trial, not for tidiness. During evaluation
+      the same version number gets rebuilt several times a day; without this, reinstalling
+      the same version is a no-op that silently leaves the OLD files in place, which is the
+      exact "my fix is not there" trap this project has been bitten by before.
+    -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first if you really want to go back." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      NO "IS REVIT 2027 INSTALLED?" LAUNCH CONDITION. IT WAS TRIED AND REMOVED.
+
+      The obvious check - look for Revit.exe under [ProgramFiles64Folder]Autodesk\Revit 2027
+      - is broken in precisely the package this is. In a PER-USER install Windows Installer
+      redirects the ProgramFiles properties into the user's profile:
+
+          ProgramFiles64Folder = C:\Users\<user>\AppData\Local\Programs\
+
+      so the search looked in the wrong place, found nothing, and the install died with a
+      fatal 1603 on a machine that had Revit 2027 sitting right there. A guard that blocks a
+      correct machine is worse than no guard: the failure it prevents is a missing ribbon
+      tab, and the failure it causes is an installer that does not run at all.
+
+      A RegistrySearch would dodge the redirection, but Revit's registry layout varies by
+      product, language and deployment, so it trades one false negative for another. The
+      requirement is stated in the notice, in the guide, and in the install instructions
+      instead - documentation cannot misfire.
+    -->
+
+    <!--
+      Revit holds the add-in DLL open while it runs. Declaring it lets the Restart Manager
+      spot a running Revit and ask the user to close it, instead of the install half
+      succeeding and leaving a mix of two builds behind.
+    -->
+    <!-- ARPNOMODIFY is set by WixUI_Minimal; declaring it here as well is a hard error. -->
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+
+    <!--
+      PER-USER, STATED EXPLICITLY.
+      Scope="perUser" alone was not enough: the first build of this package registered
+      itself under HKLM, i.e. per-machine, which is incoherent for a product whose files
+      live in one user's roaming profile - and it would demand admin rights on exactly the
+      locked-down machines this has to reach. ALLUSERS=2 with MSIINSTALLPERUSER=1 is the
+      documented combination that pins Windows Installer to the per-user context. Verified
+      after the fact by checking which registry hive the uninstall entry lands in.
+    -->
+    <!--
+      ALLUSERS IS DELIBERATELY EMPTY, NOT 2.
+
+      ALLUSERS=2 means "per-machine if the user has administrative rights, per-user
+      otherwise". That sounds accommodating and is wrong here: the payload goes into ONE
+      user's roaming profile, so a per-machine registration is a lie. On an admin's machine
+      it produced exactly that - Apps & features claimed a machine-wide install that no
+      second user of the PC would actually have, and could not sensibly repair or remove.
+      Verified by checking which hive the uninstall entry landed in on an account that is a
+      member of Administrators.
+
+      ABSENT means per-user always, for everyone, admin or not - one behaviour to support
+      and one to document. WiX will not accept Value="" (an empty property is expressed by
+      omitting it), so ALLUSERS is simply not declared here, and Package/@Scope="perUser"
+      keeps WiX from adding one. MSIINSTALLPERUSER stays, to pin the context explicitly.
+    -->
+    <Property Id="MSIINSTALLPERUSER" Value="1" Secure="yes" />
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.NoticeRtf)" />
+
+    <!--
+      %AppData%\Autodesk\Revit\Addins\2027 - the per-user add-ins folder Revit reads at
+      startup. The manifest sits here and the payload in the Cda subfolder, because the
+      <Assembly> path inside the manifest is relative to the manifest's own folder.
+    -->
+    <StandardDirectory Id="AppDataFolder">
+      <Directory Id="AutodeskFolder" Name="Autodesk">
+        <Directory Id="RevitFolder" Name="Revit">
+          <Directory Id="AddinsFolder" Name="Addins">
+            <Directory Id="Addins2027Folder" Name="2027">
+              <Directory Id="INSTALLFOLDER" Name="Cda" />
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="DKSI Revit Tools" Level="1">
+      <ComponentGroupRef Id="AddinFiles" />
+      <ComponentRef Id="TimeTrackingOff" />
+      <ComponentRef Id="TimeTrackingOn" />
+    </Feature>
+
+  </Package>
+
+  <Fragment>
+
+    <ComponentGroup Id="AddinFiles">
+
+      <!--
+        ONE COMPONENT FOR THE WHOLE ASSEMBLY, AND COMPANION FILES. Both halves of that are
+        load-bearing, and the first build of this package got both wrong.
+
+        Windows Installer decides per file whether to overwrite. A file with NO version
+        resource - .pdb, .deps.json, .runtimeconfig.json, the .addin manifest - is protected
+        by the "unversioned but modified" rule: if it differs from what the installer
+        remembers, it is left alone on the assumption it holds user edits. The first install
+        test hit exactly that and reported SUCCESS while skipping four of six files.
+
+        CompanionFile makes each of these inherit the DLL's version for that decision, so
+        the payload is replaced as one unit or not at all. Grouping them into a single
+        component keeps the companion reference inside one component, which is what MSI
+        wants, and matches reality: these files are one assembly's output and a mixed set is
+        never valid.
+      -->
+      <Component Id="AddinPayload" Directory="INSTALLFOLDER" Guid="9d3b6f52-84c1-4a70-b2e8-53f0a91c7d84">
+        <File Id="AddinDll" Source="$(var.PayloadDir)\Cda.Revit.Addin.dll" KeyPath="yes" />
+
+        <!-- The .pdb ships on purpose: without it a stack trace in the log has no line
+             numbers, and the point of a trial is that problems come back reportable. -->
+        <File Id="AddinPdb" Source="$(var.PayloadDir)\Cda.Revit.Addin.pdb" CompanionFile="AddinDll" />
+        <File Id="DepsJson" Source="$(var.PayloadDir)\Cda.Revit.Addin.deps.json" CompanionFile="AddinDll" />
+        <File Id="RuntimeConfigJson" Source="$(var.PayloadDir)\Cda.Revit.Addin.runtimeconfig.json" CompanionFile="AddinDll" />
+      </Component>
+
+      <!--
+        The manifest lives one folder up, so it cannot share the component above - a
+        component's files must all sit in one directory. It still follows the DLL's version
+        so a changed manifest is not skipped on a machine that already had a hand-copied one.
+      -->
+      <Component Id="AddinManifest" Directory="Addins2027Folder" Guid="4c8e1a37-56b2-49df-a903-2e7f1b58d0c6">
+        <File Id="ManifestFile" Source="$(var.PayloadDir)\..\Cda.Revit.Addin.addin"
+              CompanionFile="AddinDll" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\DKSI\RevitTools"
+                       Name="ManifestInstalled" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!--
+        Per-user installs want an HKCU key path so Windows can tell, per profile, whether
+        the product is present. It also carries the RemoveFolder entries, so uninstalling
+        leaves no empty Cda folder behind.
+      -->
+      <Component Id="InstallMarker" Directory="INSTALLFOLDER" Guid="b83a5c71-0e96-4d24-97f8-a61c4e8b2503">
+        <RegistryValue Root="HKCU" Key="Software\DKSI\RevitTools"
+                       Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!--
+      TIME TRACKING DEFAULTS TO OFF, AND THAT IS A DELIBERATE CHOICE, NOT AN OVERSIGHT.
+
+      The add-in can record time per project and per view. That is reasonable for the team
+      that asked for it and is NOT reasonable to switch on quietly on someone's machine
+      because they installed a finish-area tool. Off by default; the user turns it on from
+      DKSI > Time > Time Tracking having been told it exists.
+
+      An office that wants it on everywhere installs with:
+          msiexec /i DKSI-Revit-Tools.msi TIMETRACKING=1
+    -->
+    <Component Id="TimeTrackingOff" Directory="INSTALLFOLDER" Guid="2d61f095-4a83-47be-b0c7-9e5382f1a6db"
+               Condition="NOT TIMETRACKING">
+      <!--
+        ShortName is set by hand on both variants. They deliberately share one long name -
+        only one of the two is ever installed - but WiX generates 8.3 names from the long
+        name and so produces the same short name twice, which is a collision in the File
+        table rather than a real one on disk.
+      -->
+      <File Id="TimeTrackingOffJson"
+            Source="$(var.InstallerDir)\time-tracking.off.json"
+            Name="time-tracking.defaults.json" ShortName="ttoff.jso" KeyPath="yes" />
+    </Component>
+
+    <Component Id="TimeTrackingOn" Directory="INSTALLFOLDER" Guid="8f40c7a2-159d-4e63-82b1-6d0947ec3f58"
+               Condition="TIMETRACKING">
+      <File Id="TimeTrackingOnJson"
+            Source="$(var.InstallerDir)\time-tracking.on.json"
+            Name="time-tracking.defaults.json" ShortName="tton.jso" KeyPath="yes" />
+    </Component>
+
+  </Fragment>
+
+</Wix>

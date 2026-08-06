@@ -1,0 +1,288 @@
+{
+  "version": "SMB-2026-08",
+  "title": "SMB modelling checklist",
+
+  "_comment": [
+    "THE PAPER CHECKLIST, AS DATA. This file is the single source of truth: the add-in has",
+    "no checklist compiled into it, so adding an item, renaming a view template or changing",
+    "a schedule name is an edit here, not a rebuild and a redeploy.",
+    "",
+    "Every item carries a 'mode':",
+    "  auto     - Revit can prove it. The audit decides pass/fail and nobody signs it off.",
+    "  manual   - a human judgement the model cannot answer. Tracked, listed, never guessed.",
+    "  advisory - checked where possible, but a fail is a question rather than a defect.",
+    "",
+    "An item is 'auto' ONLY where the check is genuinely conclusive. 'Wall Direction' is not",
+    "auto because a wall pointing the wrong way is still a valid wall; ticking it from code",
+    "would turn a checklist into a rubber stamp."
+  ],
+
+  "projectSetup": [
+    {
+      "id": "setup.onedrive",
+      "text": "Data Discipline (Update OneDrive)",
+      "mode": "auto",
+      "rule": "WorkingCopyNotInCloudSync",
+      "note": "A live .rvt inside a OneDrive/Dropbox-synced folder is a known corruption source: the sync client rewrites the file underneath Revit. Work locally, sync the issued copy."
+    },
+    {
+      "id": "setup.folders",
+      "text": "Folder Structure (own PC)",
+      "mode": "auto",
+      "rule": "SavedLocally"
+    },
+    {
+      "id": "setup.projectinfo",
+      "text": "Project Information complete",
+      "mode": "auto",
+      "rule": "ProjectInformationComplete",
+      "args": { "parameters": ["Selskab", "Afdeling", "Operator", "Client Number"] }
+    },
+    {
+      "id": "setup.template",
+      "text": "Create NEW PROJECT > load NEWEST template",
+      "mode": "auto",
+      "rule": "ViewTemplatesExist",
+      "note": "Verified by the presence of the SMB view templates rather than by a version stamp - a model with them came from the template, whatever it was called."
+    },
+    {
+      "id": "setup.references",
+      "text": "Import reference (jpg, dwg, etc.)",
+      "mode": "advisory",
+      "rule": "HasImportedReferences"
+    },
+    {
+      "id": "setup.levels",
+      "text": "Prepare levels inside Revit (ceiling height)",
+      "mode": "auto",
+      "rule": "LevelsDefined"
+    }
+  ],
+
+  "elements": [
+    {
+      "id": "wall", "roman": "I", "name": "Wall",
+      "viewTemplates": ["SMB-01"], "scope": "plan & 3d",
+      "categories": ["OST_Walls"],
+      "items": [
+        { "text": "Type / Thickness", "mode": "manual" },
+        { "text": "Direction", "mode": "manual" },
+        { "text": "Dimension", "mode": "manual" },
+        { "text": "Wall Split (SL)", "mode": "manual" },
+        { "text": "Base Offset", "mode": "manual" },
+        { "text": "Top Constraints (level / ceiling height)", "mode": "auto", "rule": "NoUnconnectedHeights" },
+        { "text": "Bathroom tiles (whole / shower area)", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "floor", "roman": "II", "name": "Floor",
+      "viewTemplates": ["SMB-01"], "scope": "plan & 3d",
+      "categories": ["OST_Floors"],
+      "items": [
+        { "text": "Floor Type / Thickness", "mode": "manual" },
+        { "text": "Lowered floor for bathroom", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "ceiling", "roman": "III", "name": "Ceiling",
+      "viewTemplates": ["SMB-02"], "scope": "ceiling plan & 3d",
+      "categories": ["OST_Ceilings"],
+      "items": [
+        { "text": "Ceiling Type / Thickness", "mode": "manual" },
+        { "text": "Ceiling Height", "mode": "manual" },
+        { "text": "Ceiling manual void for Velux", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "roof", "roman": "IV", "name": "Roof",
+      "viewTemplates": ["SMB-02"], "scope": "ceiling plan & 3d",
+      "categories": ["OST_Roofs"],
+      "items": [
+        { "text": "Roof Type / Thickness", "mode": "manual" },
+        { "text": "Roof Height", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "opening", "roman": "V", "name": "Door & Window",
+      "viewTemplates": ["SMB-03"], "scope": "plan & 3d",
+      "categories": ["OST_Doors", "OST_Windows"],
+      "items": [
+        { "text": "Type (exterior or interior)", "mode": "manual" },
+        { "text": "Dimension (width x height x depth)", "mode": "manual" },
+        { "text": "DR & WN Material", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Window Material" } },
+        { "text": "DR threshold & WN board YN + code", "mode": "manual" },
+        { "text": "DR & WN Lining YN + code", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Lining YN" },
+          "note": "Maintained automatically by OpeningAutomation; a blank here means the automation never reached this opening." },
+        { "text": "DR & WN Lining Change", "mode": "advisory", "rule": "ParameterPopulated",
+          "args": { "parameter": "Lining Change" } },
+        { "text": "DR panel type / WN mullion", "mode": "manual" },
+        { "text": "DR swing & WN placement", "mode": "manual" },
+        { "text": "DR swing add-in", "mode": "manual" },
+        { "text": "Exterior DR override", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "stair", "roman": "VI", "name": "Stair",
+      "viewTemplates": ["SMB-04"], "scope": "3d only",
+      "categories": ["OST_Stairs"],
+      "items": [
+        { "text": "Type (interior or exterior)", "mode": "manual" },
+        { "text": "Stair Lej, Name and Number", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Lejlighed" } },
+        { "text": "Stringers side void", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "room", "roman": "VII", "name": "Room",
+      "viewTemplates": ["SMB-05"], "scope": "plan only",
+      "categories": ["OST_Rooms"],
+      "items": [
+        { "text": "Room Name, Number, Department", "mode": "auto", "rule": "RoomsIdentified" },
+        { "text": "Alrum - (Stue + Kok / Entre + Kok)", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "casework", "roman": "VIII", "name": "Casework",
+      "viewTemplates": ["SMB-06"], "scope": "plan & 3d",
+      "categories": ["OST_Casework"],
+      "items": [
+        { "text": "Type (for Kokken & standard)", "mode": "manual" },
+        { "text": "Type (for wall & ceiling hatch)", "mode": "manual" },
+        { "text": "Dimension W x H x D & swing", "mode": "manual" },
+        { "text": "Wall above casework / splashback", "mode": "manual" },
+        { "text": "Void (side & floor)", "mode": "manual" },
+        { "text": "Code: Overflade_Type (countertop)", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Overflade_Type" } },
+        { "text": "Code: Bordplade_Kode (cabinet)", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Bordplade_Kode" } }
+      ]
+    },
+    {
+      "id": "electrical", "roman": "IX", "name": "Electrical",
+      "viewTemplates": ["SMB-06"], "scope": "plan & 3d",
+      "categories": ["OST_ElectricalEquipment", "OST_ElectricalFixtures"],
+      "items": [
+        { "text": "Type - Ref, cooking range, cooking hood", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "plumbing", "roman": "X", "name": "Plumbing",
+      "viewTemplates": ["SMB-06"], "scope": "plan & 3d",
+      "categories": ["OST_PlumbingFixtures"],
+      "items": [
+        { "text": "Type - water closet, lavatory, shower, tub", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "mechanical", "roman": "XI", "name": "Mechanical",
+      "viewTemplates": ["SMB-06"], "scope": "plan & 3d",
+      "categories": ["OST_MechanicalEquipment"],
+      "items": [
+        { "text": "Type & measurement", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "other", "roman": "XII", "name": "Other",
+      "viewTemplates": ["SMB-06"], "scope": "plan & 3d",
+      "categories": [],
+      "items": [
+        { "text": "Create Altan / Udhus / Skur", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "plan2d", "roman": "XIII", "name": "2D plan prep",
+      "viewTemplates": ["SMB-07"], "scope": "plan only",
+      "categories": [],
+      "items": [
+        { "text": "Dimension", "mode": "manual" },
+        { "text": "View range", "mode": "manual" },
+        { "text": "Crop view", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "parts", "roman": "XIV", "name": "Parts",
+      "viewTemplates": ["SMB-08", "SMB-09", "SMB-10"], "scope": "3d only",
+      "categories": ["OST_Parts"],
+      "items": [
+        { "text": "Create parts for WA, FL, CE, RF", "mode": "auto", "rule": "PartsExist" },
+        { "text": "Divide, exclude, show shape handle", "mode": "manual" },
+        { "text": "SMB Lej + Rum Nm + Rum Nu", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Lejlighed" },
+          "note": "Written by Finish Surface Area onto walls, floors, ceilings and roofs." },
+        { "text": "Surface code for WA, FL, CE, RF (SMB-09)", "mode": "auto", "rule": "ParameterPopulated",
+          "args": { "parameter": "Surface Code" } },
+        { "text": "Wallsweep type + code (SMB-10)", "mode": "manual" }
+      ]
+    }
+  ],
+
+  "selfQa": [
+    {
+      "id": "qa00", "viewTemplate": "SMB_QA-00 Lej Check", "scope": "3d only",
+      "schedules": ["Ceiling Surface Schedule", "Floor Surface Schedule", "Wall Surface Schedule"],
+      "items": [
+        { "text": "Per Lej selection", "mode": "manual" },
+        { "text": "Per Rum selection", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "qa01", "viewTemplate": "SMB_QA-01 Surface Check", "scope": "3d only",
+      "schedules": ["Ceiling Surface Schedule", "Floor Surface Schedule", "Wall Surface Schedule"],
+      "items": [
+        { "text": "Surface room name check", "mode": "auto", "rule": "ParameterPopulated",
+          "args": {
+            "parameter": "Rum",
+            "categories": ["OST_Walls", "OST_Floors", "OST_Ceilings", "OST_Roofs"]
+          } },
+        { "text": "Surface code", "mode": "auto", "rule": "ParameterPopulated",
+          "args": {
+            "parameter": "Surface Code",
+            "categories": ["OST_Walls", "OST_Floors", "OST_Ceilings", "OST_Roofs"]
+          } }
+      ]
+    },
+    {
+      "id": "qa02", "viewTemplate": "SMB_QA-02 DR WN Check", "scope": "plan & 3d",
+      "schedules": ["All Window and Door Schedule"],
+      "items": [
+        { "text": "DR & WN pieces and placement", "mode": "manual" }
+      ]
+    },
+    {
+      "id": "qa03", "viewTemplate": "SMB_QA-03 Other Element", "scope": "3d only",
+      "schedules": ["Stair Schedule", "Casework Schedule", "Electrical Schedule", "Plumbing Schedule", "Radiators Schedule"],
+      "items": [
+        { "text": "Stair Lej, name, number, material & void", "mode": "manual" },
+        { "text": "Casework, electrical, plumbing & mechanical", "mode": "manual" },
+        { "text": "Manual division above casework", "mode": "manual" }
+      ]
+    }
+  ],
+
+  "export": [
+    {
+      "id": "exp2d", "viewTemplate": "SMB_Exp-2d", "format": "jpeg",
+      "text": "2D plan",
+      "mode": "auto", "rule": "ExportNaming",
+      "args": {
+        "extensions": [".jpg", ".jpeg"],
+        "pattern": "(?i)(plan[-_ ]?pls|\\bpl\\d+\\b)",
+        "describe": "must contain 'Plan-pls' or 'pl1', 'pl2', ..."
+      }
+    },
+    {
+      "id": "exp3d", "viewTemplate": "SMB_Exp-3d", "format": "fbx",
+      "text": "FBX filename must equal the type name",
+      "mode": "auto", "rule": "FbxNameMatchesType",
+      "args": { "extensions": [".fbx"] }
+    },
+    {
+      "id": "expexcel", "viewTemplate": "", "format": "xlsx",
+      "text": "Export Excel (DKSI add-in), then validate the workbook",
+      "mode": "auto", "rule": "ExcelExportValidates",
+      "args": { "extensions": [".xlsx"] }
+    }
+  ]
+}

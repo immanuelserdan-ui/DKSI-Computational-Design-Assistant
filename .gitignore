@@ -1,0 +1,67 @@
+# =============================================================================
+#  DKSI Computational Design Assistant
+# =============================================================================
+
+# ---- build output -----------------------------------------------------------
+bin/
+obj/
+.vs/
+artifacts/
+*.user
+*.suo
+
+# ---- Revit binaries ---------------------------------------------------------
+#
+# Excluded BY EXTENSION rather than by folder, deliberately. The model folders
+# also hold the original Dynamo graphs (*.dyn) that the C# tools were ported
+# from, and those are the closest thing to a specification this project has -
+# they belong in history. Ignoring the folders wholesale would lose them.
+#
+# 1.2 GB of .rvt and .rte sits in this tree. Git stores binaries whole, with no
+# delta compression, so one committed model is 200 MB in the repo forever, on
+# every clone, even after it is deleted.
+*.rvt
+*.rte
+*.rfa
+*.rft
+*.dwg
+*.ifc
+*.nwc
+*.nwd
+
+# Revit's own backups and recovery files
+*.[0-9][0-9][0-9][0-9].rvt
+*_backup/
+*.slog
+*.dmp
+
+# ---- installer output -------------------------------------------------------
+# Regenerable from build-installer.ps1 in seconds, and 2 MB per version.
+# VERSION.txt inside the package records what a given ZIP contained.
+#
+# Covers BOTH installers this repo turns out to contain: the WiX/MSI one under
+# Revit Add-in/, and the newer script-based one under Installer/. That overlap is
+# a real duplication to resolve, not a naming accident - see the README note.
+dist/
+Installer/staging/
+*.msi
+*.wixpdb
+
+# ---- generated reports ------------------------------------------------------
+# The tools write CSVs and logs beside the model. They are outputs, not source.
+Vision Modeler/
+*-dryrun-*.csv
+lining-current-*.csv
+lining-current-*.log
+
+# ---- secrets ----------------------------------------------------------------
+# No key has ever been committed here and none should be. ANTHROPIC_API_KEY is
+# read from the environment at runtime; if a .env ever appears, it stays local.
+.env
+*.key
+appsettings.Local.json
+
+# ---- OS ---------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/

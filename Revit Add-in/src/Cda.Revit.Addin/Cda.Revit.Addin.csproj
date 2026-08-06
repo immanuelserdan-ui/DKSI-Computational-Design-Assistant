@@ -1,0 +1,98 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Cda.Revit.Addin</RootNamespace>
+    <AssemblyName>Cda.Revit.Addin</AssemblyName>
+    <UseWPF>true</UseWPF>
+
+    <!--
+      EnableDynamicLoading is the plugin-authoring switch. It emits a .deps.json
+      next to the DLL and copies NuGet dependencies to the output folder, so the
+      AssemblyLoadContext Revit creates for this add-in can resolve them.
+      Without it, any NuGet package you add will throw FileNotFoundException at
+      runtime even though it built fine.
+    -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+
+    <!--
+      RevitAPIUI.dll transitively references ~40 other Revit assemblies, and MSBuild
+      reports version conflicts between them it cannot resolve. Revit loads its own
+      internally-consistent set at runtime, so these are noise. Demoting to messages
+      keeps real warnings visible.
+    -->
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <!--
+    Revit assemblies are referenced, never copied. Private=false keeps them out of
+    the output folder; shipping your own copy of RevitAPI.dll causes type-identity
+    mismatches ("cannot cast Element to Element") at runtime.
+  -->
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitApiDir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Cda.Revit.Addin.addin" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\Icons\*.png" />
+  </ItemGroup>
+
+  <!--
+    Opt-out auto-deploy. Revit locks the DLL while running, so this warns instead of
+    failing the build; if you see the warning, close Revit and rebuild.
+    Disable entirely with:  dotnet build -p:DeployToRevit=false
+  -->
+  <PropertyGroup>
+    <DeployToRevit Condition="'$(DeployToRevit)' == ''">true</DeployToRevit>
+    <RevitDeployDir>$(RevitAddinsDir)\Cda</RevitDeployDir>
+  </PropertyGroup>
+
+  <Target Name="DeployToRevitAddins" AfterTargets="Build" Condition="'$(DeployToRevit)' == 'true'">
+    <ItemGroup>
+      <DeployFiles Include="$(TargetDir)**\*.dll" />
+      <DeployFiles Include="$(TargetDir)**\*.pdb" />
+      <DeployFiles Include="$(TargetDir)**\*.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DeployFiles)"
+          DestinationFiles="@(DeployFiles->'$(RevitDeployDir)\%(RecursiveDir)%(Filename)%(Extension)')"
+          ContinueOnError="WarnAndContinue" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\Cda.Revit.Addin.addin"
+          DestinationFolder="$(RevitAddinsDir)"
+          ContinueOnError="WarnAndContinue" />
+  </Target>
+
+  <!--
+    The copy above is WarnAndContinue, because failing the build when Revit happens to be
+    open would be worse than continuing. But it used to print "Deployed to ..."
+    unconditionally, which meant a blocked copy looked identical to a successful one - and
+    a fix that never reached Revit reads as a fix that did not work.
+
+    This verifies the deployed DLL actually matches what was just built, and says so either
+    way. Compare the timestamp it prints with the one in any DKSI dialog footer.
+  -->
+  <Target Name="VerifyRevitDeploy" AfterTargets="DeployToRevitAddins" Condition="'$(DeployToRevit)' == 'true'">
+    <PropertyGroup>
+      <_DeployedDll>$(RevitDeployDir)\$(AssemblyName).dll</_DeployedDll>
+      <_BuiltStamp>$([System.IO.File]::GetLastWriteTime('$(TargetPath)').ToString('yyyy-MM-dd HH:mm:ss'))</_BuiltStamp>
+      <_DeployedStamp Condition="Exists('$(_DeployedDll)')">$([System.IO.File]::GetLastWriteTime('$(_DeployedDll)').ToString('yyyy-MM-dd HH:mm:ss'))</_DeployedStamp>
+      <_DeployedStamp Condition="!Exists('$(_DeployedDll)')">MISSING</_DeployedStamp>
+    </PropertyGroup>
+
+    <Warning Condition="'$(_BuiltStamp)' != '$(_DeployedStamp)'"
+             Text="DEPLOY DID NOT LAND. Revit is holding the DLL, so it is still running the OLD add-in. Built $(_BuiltStamp), deployed copy is $(_DeployedStamp). Close Revit and rebuild." />
+
+    <Message Condition="'$(_BuiltStamp)' == '$(_DeployedStamp)'" Importance="high"
+             Text="Deploy verified - Revit will load build $(_BuiltStamp) from $(RevitDeployDir)" />
+  </Target>
+
+</Project>

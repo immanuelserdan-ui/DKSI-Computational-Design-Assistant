@@ -1,0 +1,395 @@
+{
+  "Uuid": "52b380d3-d89c-4f8e-a84d-34b414a373ab",
+  "IsCustomNode": false,
+  "Description": "Unchecks lining sides that clash with an adjacent opening and writes the leftover length to Lining Change. Built against Revit 2027 / Dynamo 4.0. Run with Apply changes? = False first.",
+  "Name": "Resolve-Lining-Clashes_v1.0",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "a4ed52aaeccb442fade0ef72a48a70b1",
+      "Name": "Apply changes? (False = dry run)",
+      "Type": "boolean",
+      "Type2": "boolean",
+      "Value": "true",
+      "Description": "True writes the checkboxes and Lining Change. Set False for a report-only dry run."
+    },
+    {
+      "Id": "07c26f929b1d4d8e831c2afc67cfbd75",
+      "Name": "Report CSV path (blank = no file)",
+      "Type": "string",
+      "Type2": "string",
+      "Value": "C:\\Users\\user\\Desktop\\Claude Projects\\Computational Design Assistant\\Door Window Linings\\lining-report.csv",
+      "Description": "Full path for the detail report. A matching .log is written beside it with the summary and warnings. Blank writes no files."
+    }
+  ],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "6ee42009687545cb9497a81fe86dbb34",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "8666927ff3ba438f90f187b8629d5a15",
+          "Name": "sel",
+          "Description": "null",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "sel = null;"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "a4ed52aaeccb442fade0ef72a48a70b1",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "9a605383572e45e698a00b82242b0e02",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "8593364bf4ec47be91759b88822a7362",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "b98698079f9f4d0a9fd693ab930a1221",
+          "Name": "gap_mm",
+          "Description": "60",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "gap_mm = 60;"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "4b78bbf0f3e64968a6c1a69bd8dd9a4e",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "657ff2c0bfb84f23aaeee6e61405531a",
+          "Name": "remnant_mm",
+          "Description": "50",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "remnant_mm = 50;"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "07c26f929b1d4d8e831c2afc67cfbd75",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "0f4a7431230f46cf9c2206cd12ec18ad",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a string.",
+      "InputValue": "C:\\Users\\user\\Desktop\\Claude Projects\\Computational Design Assistant\\Door Window Linings\\lining-report.csv"
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# -*- coding: utf-8 -*-\r\n\"\"\"\r\nResolve Lining Clashes -- Doors & Windows\r\n=========================================\r\n\r\nDynamo Python Script node. Engine: CPython3.\r\n\r\nPROBLEM\r\n-------\r\nWhen a door and a window sit in the same wall with (near) zero gap between them,\r\nthe lining boards on the facing edges occupy the same physical reveal. Exactly one\r\nof the two openings may carry lining there. Today this is fixed by hand:\r\nuncheck \"Lining Top YN\" / \"Lining Left YN\" / \"Lining Right YN\" on the losing\r\nopening. But unchecking a side removes the WHOLE side, including the part that is\r\nNOT covered by the neighbour -- so the drafter then hand-types the leftover length\r\ninto \"Lining Change\".\r\n\r\nWHAT THIS DOES\r\n--------------\r\nFor every door/window, builds the lining rectangle in wall-local coordinates\r\n(u = distance along the wall, z = absolute elevation), finds neighbours whose\r\nlining rectangle touches one of its three lining edges (Top / Left / Right),\r\nsubtracts the covered intervals, and then:\r\n\r\n    * fully covered edge   -> \"<Side> YN\" = 0, contributes 0\r\n    * partly covered edge  -> \"<Side> YN\" = 0, contributes the leftover length\r\n    * uncovered edge       -> \"<Side> YN\" = 1, contributes 0\r\n\r\n\"Lining Change\" is set to the SUM of all leftover lengths. The family formulas\r\nconfirm this is exactly the right lever:\r\n\r\n    Lining Top    = if(Lining Top YN,   Width,  0 mm)\r\n    Lining Left   = if(Lining Left YN,  Height, 0 mm)\r\n    Lining Right  = if(Lining Right YN, Height, 0 mm)\r\n    Lining Length (Door) = Lining Top + Lining Right + Lining Left + Lining Change\r\n\r\nTwo consequences the script is built around:\r\n\r\n  * \"Lining Top\" / \"Lining Left\" / \"Lining Right\" collapse to 0 when their\r\n    checkbox is off, so they CANNOT be used to measure the opening. The script\r\n    reads \"Door Width\" (= Width) and \"Door Height\" (= Height) instead, which are\r\n    plain dimension reporters and are not gated by anything.\r\n  * \"Lining Change\" is added unconditionally, so a stale value left from an\r\n    earlier edit inflates the quantity even when nothing is blocked. The script\r\n    always writes the full recomputed value, zero included.\r\n\r\nThe computation is a full recompute every run -- never an increment -- so the\r\nscript is idempotent and safe to re-run after the model changes.\r\n\r\nVALIDATED AGAINST\r\n-----------------\r\nTest-07-23-2026.rvt, wall 28857314:\r\n    door 28858777 (Mark 629)   sill 0    head 2076   lining 986 x 2076\r\n    window 28858834 (Mark 1869) sill 1100 head 2076   lining 976 x 976   (left of door)\r\n    window 28859726 (Mark 1870) sill 2100 head 2676   lining 976 x 576   (above door)\r\nExpected result for the door:\r\n    Lining Top YN   -> 0   (976 of 986 covered; 10 mm remnant discarded as a sliver)\r\n    Lining Left YN  -> 0   (976 of 2076 covered; 1100 mm remnant kept)\r\n    Lining Right YN -> 1   (nothing adjacent)\r\n    Lining Change   -> 1100\r\n    Lining Length (Door) -> 2076 + 1100 = 3176, i.e. 3.18 Lbm in the schedule\r\n                            (it reads 5.14 today)\r\n\r\nINPUTS (all optional -- safe defaults)\r\n--------------------------------------\r\nIN[0]  Doors/windows to process. Leave empty to process the whole model.\r\nIN[1]  Apply changes?  (Boolean, default False = report only / dry run)\r\nIN[2]  Max clear gap between linings (mm)   default 60\r\nIN[3]  Min lining remnant to keep (mm)      default 50\r\nIN[4]  Report CSV path (string, optional)\r\n\r\nOUTPUT\r\n------\r\nOUT = [summary_text, detail_rows, warnings]\r\n\"\"\"\r\n\r\nimport os\r\nimport clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import (\r\n    FilteredElementCollector, BuiltInCategory, BuiltInParameter,\r\n    FamilyInstance, Wall, Line, UnitUtils, StorageType,\r\n)\r\n\r\n# --------------------------------------------------------------------------\r\n# Runtime bootstrap. The same file runs in two places:\r\n#   * a Dynamo Python node  -- doc and transactions come from RevitServices,\r\n#     settings arrive on IN[0..4]\r\n#   * pyRevit (`pyrevit run`) -- doc comes from __revit__, transactions are\r\n#     plain Revit API, settings come from a JSON file named by the\r\n#     LINING_CONFIG environment variable\r\n# Everything between here and the report section is identical either way.\r\n# --------------------------------------------------------------------------\r\nIS_DYNAMO = True\r\ntry:\r\n    clr.AddReference('RevitServices')\r\n    from RevitServices.Persistence import DocumentManager\r\n    from RevitServices.Transactions import TransactionManager\r\n    doc = DocumentManager.Instance.CurrentDBDocument\r\nexcept Exception:\r\n    IS_DYNAMO = False\r\n    import os\r\n    import json\r\n    from Autodesk.Revit.DB import Transaction\r\n\r\n    doc = __revit__.ActiveUIDocument.Document          # noqa: F821\r\n\r\n    def UnwrapElement(item):                           # noqa: N802\r\n        return item\r\n\r\n    class _TxnShim(object):\r\n        \"\"\"Mimics the two TransactionManager calls the script makes.\"\"\"\r\n\r\n        def __init__(self):\r\n            self._txn = None\r\n            self.Instance = self\r\n\r\n        def EnsureInTransaction(self, document):       # noqa: N802\r\n            if self._txn is None:\r\n                self._txn = Transaction(document, \"Resolve lining clashes\")\r\n                self._txn.Start()\r\n\r\n        def TransactionTaskDone(self):                 # noqa: N802\r\n            if self._txn is not None:\r\n                self._txn.Commit()\r\n                self._txn = None\r\n\r\n    TransactionManager = _TxnShim()\r\n\r\n    # Defaults are the safe ones: dry run, whole model, no report file.\r\n    _cfg = {\"apply\": False, \"gap_mm\": 60.0, \"remnant_mm\": 50.0,\r\n            \"csv\": None, \"log\": None, \"save\": False}\r\n    _cfg_path = os.environ.get(\"LINING_CONFIG\")\r\n    if _cfg_path and os.path.isfile(_cfg_path):\r\n        with open(_cfg_path, \"rb\") as _h:\r\n            _cfg.update(json.loads(_h.read().decode(\"utf-8\")))\r\n\r\n    IN = [None, _cfg[\"apply\"], _cfg[\"gap_mm\"], _cfg[\"remnant_mm\"], _cfg[\"csv\"]]\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Units. Revit internal length is decimal feet.\r\n# --------------------------------------------------------------------------\r\ntry:\r\n    from Autodesk.Revit.DB import UnitTypeId\r\n    _MM = UnitTypeId.Millimeters\r\n\r\n    def ft_to_mm(v):\r\n        return UnitUtils.ConvertFromInternalUnits(v, _MM)\r\n\r\n    def mm_to_ft(v):\r\n        return UnitUtils.ConvertToInternalUnits(v, _MM)\r\nexcept ImportError:                                    # Revit 2020 and older\r\n    from Autodesk.Revit.DB import DisplayUnitType\r\n    _MM = DisplayUnitType.DUT_MILLIMETERS\r\n\r\n    def ft_to_mm(v):\r\n        return UnitUtils.ConvertFromInternalUnits(v, _MM)\r\n\r\n    def mm_to_ft(v):\r\n        return UnitUtils.ConvertToInternalUnits(v, _MM)\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Configuration\r\n# --------------------------------------------------------------------------\r\n\r\n# How a touching pair is resolved.\r\n#\r\n# TRUE = the office rule. BOTH openings uncheck the face that touches, so a\r\n# ticked \"Lining Top/Left/Right\" carries a definite meaning: *nothing touches\r\n# this side*. The checkbox states adjacency, not ownership. Each opening still\r\n# banks its own uncovered remnant in \"Lining Change\" independently -- e.g. a\r\n# 2076 mm door jamb met by a 976 mm window keeps 1100 mm, while the window's\r\n# own 976 mm face is fully met and keeps nothing.\r\n#\r\n# FALSE = ownership instead: exactly one of the pair keeps the lining and only\r\n# the loser unchecks, decided by CATEGORY_PRIORITY below, ties on lower\r\n# ElementId. Kept as a fallback; not the office rule.\r\nSYMMETRIC_UNCHECK = True\r\n\r\n# Only consulted when SYMMETRIC_UNCHECK is False. Higher number keeps.\r\n# Keyed on the built-in category integer so no enum conversion is involved.\r\nCATEGORY_PRIORITY = {\r\n    -2000014: 2,   # OST_Windows\r\n    -2000023: 1,   # OST_Doors\r\n}\r\n\r\n# Which side of the family's own X axis carries the \"Lining Left\" geometry.\r\n#\r\n#   +1 = \"Lining Left\" sits at family +X, i.e. on the HandOrientation side.\r\n#   -1 = the opposite.\r\n#\r\n# +1 follows from the office rule \"the front of the door is the face you see\r\n# standing outside the room\": viewed from the front with up = +Z, the left-hand\r\n# side of the opening is family +X. Only hand-flipping mirrors a family along\r\n# the wall, so HandOrientation alone tracks where that geometry really lands --\r\n# flipping the facing swaps inside/outside and does not move it.\r\n#\r\n# CALIBRATION: dry-run one door that has a window hard against its left jamb.\r\n# If the report says the LEFT edge was blocked, this is right. If it says RIGHT,\r\n# set this to -1. One check settles it for the whole office.\r\nLEFT_IS_FAMILY_PLUS_X = 1\r\n\r\n# Should a neighbour whose master \"Lining YN\" is unchecked still block?\r\n#\r\n# TRUE, and this matters. The office rule is purely geometric: if a door side\r\n# touches a window side at zero distance, that side's lining comes off --\r\n# regardless of whether the window itself happens to carry lining. Both windows\r\n# on wall 28857314 have \"Lining YN\" off, so gating on it found zero clashes and\r\n# the script did nothing at all.\r\n#\r\n# Set False only if you want a neighbour to have to own lining before it can\r\n# take the shared reveal.\r\nLINING_OFF_CAN_BLOCK = True\r\n\r\n# ---- master \"Lining YN\" propagation, door -> touching windows -------------\r\n# A door decides the lining for the windows it physically touches. A door with\r\n# \"Lining YN\" unchecked has no lining at all, and takes any window it touches\r\n# out of the lining schedule with it.\r\n#\r\n# Direct door-to-window contact only. This never chains window-to-window, and\r\n# never affects a window that touches no door -- those stay manual.\r\nPROPAGATE_MASTER_FROM_DOORS = True\r\n\r\n# True  = mirror the door both ways: a touching window is checked when the door\r\n#         is checked, and unchecked when the door is not. This is what removes\r\n#         the manual ticking.\r\n# False = only ever uncheck. Safer if some touching windows are deliberately\r\n#         kept out of the lining schedule, but you keep ticking them by hand.\r\nMIRROR_MASTER_BOTH_WAYS = True\r\n\r\nCAT_DOORS = -2000023\r\nCAT_WINDOWS = -2000014\r\n\r\n# ---- material propagation, door -> touching windows -----------------------\r\n# Same contact rule as above. The first letter of these codes is the element\r\n# (D door, W window, T lining/trim, B board) and the rest is the material, so\r\n# a door's code converts to the window's by swapping the prefix:\r\n#     DDL -> WDL        DYL -> WYL\r\nMATERIAL_FROM_DOORS = True\r\nDOOR_PREFIX = \"D\"\r\nWINDOW_PREFIX = \"W\"\r\n\r\n# Exceptions that do not follow the prefix rule. Keyed on the upper-case door\r\n# code, e.g. {\"DXX\": \"WZZ\"}.\r\nMATERIAL_OVERRIDES = {}\r\n\r\n# Parameter names. Adjust here if the family schema is ever renamed.\r\nP_SIDE_YN = {\"Top\": \"Lining Top YN\", \"Left\": \"Lining Left YN\", \"Right\": \"Lining Right YN\"}\r\nP_SIDE_LEN = {\"Top\": \"Lining Top\", \"Left\": \"Lining Left\", \"Right\": \"Lining Right\"}\r\nP_CHANGE = \"Lining Change\"\r\nP_MASTER = \"Lining YN\"\r\nP_DOOR_MATERIAL = \"Door Material\"\r\nP_WINDOW_MATERIAL = \"Window Material\"\r\nP_TOTAL = [\"Lining Length (Door)\", \"Lining Length (Window)\"]\r\nP_WIDTH = [\"Door Width\", \"Window Width\"]\r\nP_HEIGHT = [\"Door Height\", \"Window Height\"]\r\n\r\n# Elements whose Comments contain this marker are left completely alone.\r\nSKIP_MARKER = \"#nolining-auto\"\r\n\r\n# Treat a side as clashing only if at least this much of it is covered.\r\nMIN_BLOCK_MM = 1.0\r\n\r\n# Two wall location lines count as the same line (joined collinear walls) if\r\n# their directions are parallel and they are no further apart than this.\r\nCOLLINEAR_TOL_FT = mm_to_ft(10.0)\r\n\r\n# How far two lining rectangles may intersect before it is called a modelling\r\n# error rather than rounding noise.\r\nOVERLAP_WARN_MM = 5.0\r\n\r\n# How far a neighbour may sit *inside* an edge and still count as touching it.\r\nTOUCH_SLACK_MM = 5.0\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Inputs\r\n# --------------------------------------------------------------------------\r\ndef _in(index, default):\r\n    try:\r\n        value = IN[index]\r\n    except (NameError, IndexError):\r\n        return default\r\n    if value is None or value == \"\":\r\n        return default\r\n    return value\r\n\r\n\r\n_sel = _in(0, None)\r\nif _sel is None:\r\n    selection = []\r\nelif isinstance(_sel, list):\r\n    selection = _sel\r\nelse:\r\n    selection = [_sel]\r\n\r\nAPPLY = bool(_in(1, False))\r\nGAP_TOL_MM = float(_in(2, 60.0))\r\nMIN_REMNANT_MM = float(_in(3, 50.0))\r\nCSV_PATH = _in(4, None)\r\n\r\nGAP_TOL_FT = mm_to_ft(GAP_TOL_MM)\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Small helpers\r\n# --------------------------------------------------------------------------\r\ndef eid(element_id):\r\n    \"\"\"ElementId -> int.\r\n\r\n    Revit 2024 deprecated ElementId.IntegerValue in favour of .Value (a long)\r\n    and Revit 2026 removed it outright. Try the modern property first so this\r\n    works on 2024+ and still falls back on older releases.\r\n    \"\"\"\r\n    try:\r\n        return int(element_id.Value)\r\n    except AttributeError:\r\n        return element_id.IntegerValue\r\n\r\n\r\ndef location_point(instance):\r\n    \"\"\"World XYZ of a hosted family instance.\r\n\r\n    Autodesk.Revit.DB.LocationPoint exposes .Point -- there is no .Position on\r\n    it. Falls back to the midpoint of a LocationCurve for the rare family that\r\n    is curve-driven.\r\n    \"\"\"\r\n    location = instance.Location\r\n    point = getattr(location, \"Point\", None)\r\n    if point is not None:\r\n        return point\r\n    curve = getattr(location, \"Curve\", None)\r\n    if curve is not None:\r\n        return curve.Evaluate(0.5, True)\r\n    raise AttributeError(\"instance {0} has no usable location\".format(\r\n        eid(instance.Id)))\r\n\r\n\r\ndef p_get(element, name):\r\n    \"\"\"First parameter with this name, or None.\"\"\"\r\n    try:\r\n        return element.LookupParameter(name)\r\n    except Exception:\r\n        return None\r\n\r\n\r\ndef p_num(element, name):\r\n    p = p_get(element, name)\r\n    if p is None or not p.HasValue:\r\n        return None\r\n    if p.StorageType == StorageType.Double:\r\n        return p.AsDouble()\r\n    if p.StorageType == StorageType.Integer:\r\n        return float(p.AsInteger())\r\n    return None\r\n\r\n\r\ndef p_num_any(element, names):\r\n    for n in names:\r\n        v = p_num(element, n)\r\n        if v is not None:\r\n            return v, n\r\n    return None, None\r\n\r\n\r\ndef p_str(element, name):\r\n    p = p_get(element, name)\r\n    if p is None or not p.HasValue or p.StorageType != StorageType.String:\r\n        return \"\"\r\n    return p.AsString() or \"\"\r\n\r\n\r\ndef window_material_for(door_code):\r\n    \"\"\"'DDL' -> 'WDL'. Returns None when no code can be derived.\"\"\"\r\n    code = (door_code or \"\").strip()\r\n    if not code:\r\n        return None\r\n    override = MATERIAL_OVERRIDES.get(code.upper())\r\n    if override:\r\n        return override\r\n    if code[0].upper() != DOOR_PREFIX.upper():\r\n        return None\r\n    return WINDOW_PREFIX + code[1:]\r\n\r\n\r\ndef p_int(element, name):\r\n    p = p_get(element, name)\r\n    if p is None or not p.HasValue or p.StorageType != StorageType.Integer:\r\n        return None\r\n    return p.AsInteger()\r\n\r\n\r\ndef bip(element, builtin):\r\n    try:\r\n        p = element.get_Parameter(builtin)\r\n    except Exception:\r\n        return None\r\n    if p is None or not p.HasValue:\r\n        return None\r\n    if p.StorageType == StorageType.Double:\r\n        return p.AsDouble()\r\n    if p.StorageType == StorageType.Integer:\r\n        return float(p.AsInteger())\r\n    return None\r\n\r\n\r\ndef subtract_intervals(span, blocks):\r\n    \"\"\"span = (a, b). blocks = [(a, b), ...]. Returns the uncovered pieces.\"\"\"\r\n    segments = [span]\r\n    for b_lo, b_hi in blocks:\r\n        nxt = []\r\n        for s_lo, s_hi in segments:\r\n            if b_hi <= s_lo or b_lo >= s_hi:\r\n                nxt.append((s_lo, s_hi))\r\n                continue\r\n            if b_lo > s_lo:\r\n                nxt.append((s_lo, b_lo))\r\n            if b_hi < s_hi:\r\n                nxt.append((b_hi, s_hi))\r\n        segments = nxt\r\n    return segments\r\n\r\n\r\ndef overlap(a_lo, a_hi, b_lo, b_hi):\r\n    lo = max(a_lo, b_lo)\r\n    hi = min(a_hi, b_hi)\r\n    return (lo, hi) if hi > lo else None\r\n\r\n\r\ndef touches(a, b, tol):\r\n    \"\"\"True when two lining rectangles share a face within `tol`.\r\n\r\n    Side by side needs a vertical overlap and a small horizontal gap; stacked\r\n    needs the reverse. Two rectangles meeting only at a corner are NOT touching\r\n    -- there is no shared face there, so no lining is affected.\r\n    \"\"\"\r\n    du = overlap(a.u_lo, a.u_hi, b.u_lo, b.u_hi)\r\n    dz = overlap(a.z_bot, a.z_top, b.z_bot, b.z_top)\r\n    if du and dz:\r\n        return True                                   # genuinely overlapping\r\n    if dz:\r\n        gap = max(a.u_lo - b.u_hi, b.u_lo - a.u_hi)\r\n        if -tol <= gap <= tol:\r\n            return True\r\n    if du:\r\n        gap = max(a.z_bot - b.z_top, b.z_bot - a.z_top)\r\n        if -tol <= gap <= tol:\r\n            return True\r\n    return False\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Wall axes -- group openings that share one straight line, so that joined\r\n# collinear walls and stacked-wall members are treated as one run of wall.\r\n# --------------------------------------------------------------------------\r\nclass Axis(object):\r\n    \"\"\"A straight wall centreline, or an arc fallback keyed to a single wall.\"\"\"\r\n\r\n    def __init__(self, origin, direction, curve, wall_id):\r\n        self.origin = origin\r\n        self.direction = direction        # None for non-linear walls\r\n        self.curve = curve\r\n        self.wall_id = wall_id\r\n\r\n    def u_of(self, point):\r\n        if self.direction is not None:\r\n            return (point - self.origin).DotProduct(self.direction)\r\n        result = self.curve.Project(point)\r\n        return self.curve.ComputeNormalizedParameter(result.Parameter) * self.curve.Length\r\n\r\n    def tangent_at(self, point):\r\n        if self.direction is not None:\r\n            return self.direction\r\n        result = self.curve.Project(point)\r\n        return self.curve.ComputeDerivatives(result.Parameter, False).BasisX.Normalize()\r\n\r\n\r\ndef wall_axis(wall):\r\n    location = wall.Location\r\n    curve = getattr(location, \"Curve\", None)\r\n    if curve is None:\r\n        return None\r\n    if isinstance(curve, Line):\r\n        direction = curve.Direction.Normalize()\r\n        # Canonical sense, so two walls drawn in opposite directions still match.\r\n        for component in (direction.X, direction.Y, direction.Z):\r\n            if abs(component) > 1e-9:\r\n                if component < 0:\r\n                    direction = direction.Negate()\r\n                break\r\n        return Axis(curve.GetEndPoint(0), direction, curve, eid(wall.Id))\r\n    return Axis(curve.GetEndPoint(0), None, curve, eid(wall.Id))\r\n\r\n\r\ndef same_line(a, b):\r\n    if a.direction is None or b.direction is None:\r\n        return False\r\n    if abs(a.direction.DotProduct(b.direction)) < 0.9999:\r\n        return False\r\n    delta = b.origin - a.origin\r\n    perpendicular = delta - a.direction.Multiply(delta.DotProduct(a.direction))\r\n    return perpendicular.GetLength() <= COLLINEAR_TOL_FT\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Opening record\r\n# --------------------------------------------------------------------------\r\nclass Opening(object):\r\n    def __init__(self, instance, axis, level_elevation):\r\n        self.el = instance\r\n        self.id = eid(instance.Id)\r\n        self.axis = axis\r\n        self.warnings = []\r\n\r\n        symbol = instance.Symbol\r\n        self.family = symbol.Family.Name if symbol is not None else \"?\"\r\n        self.type_name = symbol.Name if symbol is not None else \"?\"\r\n        self.category_id = eid(instance.Category.Id)\r\n        self.category = instance.Category.Name\r\n        mark = instance.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)\r\n        self.mark = mark.AsString() if mark is not None else \"\"\r\n\r\n        point = location_point(instance)\r\n        self.u_center = axis.u_of(point)\r\n        tangent = axis.tangent_at(point)\r\n\r\n        # Family +X expressed as a sign along +u. Decides which world edge the\r\n        # family calls \"Left\" and which it calls \"Right\". HandOrientation\r\n        # already accounts for a flipped hand.\r\n        hand = instance.HandOrientation\r\n        self.sx = 1.0 if hand.DotProduct(tangent) > 0 else -1.0\r\n        self.s_left = LEFT_IS_FAMILY_PLUS_X * self.sx\r\n        try:\r\n            basis_x = instance.GetTransform().BasisX\r\n            sx_alt = 1.0 if basis_x.DotProduct(tangent) > 0 else -1.0\r\n            if sx_alt != self.sx:\r\n                self.warnings.append(\"HandOrientation and instance transform disagree on handing\")\r\n        except Exception:\r\n            pass\r\n\r\n        width, self.width_source = p_num_any(instance, P_WIDTH)\r\n        if width is None:\r\n            width = p_num(instance, P_SIDE_LEN[\"Top\"])\r\n            self.width_source = P_SIDE_LEN[\"Top\"]\r\n        self.width = width or 0.0\r\n\r\n        sill = bip(instance, BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM) or 0.0\r\n        head = bip(instance, BuiltInParameter.INSTANCE_HEAD_HEIGHT_PARAM)\r\n\r\n        height, self.height_source = p_num_any(instance, P_HEIGHT)\r\n        if height is None and head is not None:\r\n            height = head - sill\r\n            self.height_source = \"Head - Sill\"\r\n        self.height = height or 0.0\r\n\r\n        self.z_bot = level_elevation + sill\r\n        self.z_top = self.z_bot + self.height\r\n\r\n        if head is not None and abs((sill + self.height) - head) > mm_to_ft(1.0):\r\n            self.warnings.append(\r\n                \"Head Height {0:.0f} does not equal Sill + {1} ({2:.0f})\".format(\r\n                    ft_to_mm(level_elevation + head), self.height_source,\r\n                    ft_to_mm(self.z_top)))\r\n\r\n        # Reported lining lengths should agree with the rectangle we derived.\r\n        top_len = p_num(instance, P_SIDE_LEN[\"Top\"])\r\n        if top_len and abs(top_len - self.width) > mm_to_ft(1.0):\r\n            self.warnings.append(\r\n                \"'Lining Top' {0:.0f} != {1} {2:.0f}\".format(\r\n                    ft_to_mm(top_len), self.width_source, ft_to_mm(self.width)))\r\n        for side in (\"Left\", \"Right\"):\r\n            side_len = p_num(instance, P_SIDE_LEN[side])\r\n            if side_len and abs(side_len - self.height) > mm_to_ft(1.0):\r\n                self.warnings.append(\r\n                    \"'Lining {0}' {1:.0f} != {2} {3:.0f}\".format(\r\n                        side, ft_to_mm(side_len), self.height_source,\r\n                        ft_to_mm(self.height)))\r\n\r\n        self.door_material = p_str(instance, P_DOOR_MATERIAL)\r\n        self.window_material = p_str(instance, P_WINDOW_MATERIAL)\r\n\r\n        self.priority = CATEGORY_PRIORITY.get(self.category_id, 0)\r\n        self.master_on = p_int(instance, P_MASTER)\r\n        # \"Lining YN\" unchecked means this opening has no lining at all -- it is\r\n        # filtered straight out of the lining schedule -- so it has nothing to\r\n        # contest a neighbour's reveal with. A missing parameter counts as on.\r\n        self.has_lining = self.master_on != 0\r\n\r\n        comments = instance.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)\r\n        text = comments.AsString() if comments is not None else None\r\n        self.skip = bool(text) and SKIP_MARKER.lower() in text.lower()\r\n\r\n    # -- lining rectangle -------------------------------------------------\r\n    @property\r\n    def u_lo(self):\r\n        return self.u_center - self.width / 2.0\r\n\r\n    @property\r\n    def u_hi(self):\r\n        return self.u_center + self.width / 2.0\r\n\r\n    def edge(self, side):\r\n        \"\"\"(position, outward_normal, span_lo, span_hi) in the relevant axis.\"\"\"\r\n        if side == \"Top\":\r\n            return self.z_top, 1.0, self.u_lo, self.u_hi\r\n        sign = self.s_left if side == \"Left\" else -self.s_left\r\n        u = self.u_center + sign * self.width / 2.0\r\n        return u, sign, self.z_bot, self.z_top\r\n\r\n    def label(self):\r\n        return \"{0} [{1}] {2} : {3}\".format(\r\n            self.id, self.mark or \"-\", self.family, self.type_name)\r\n\r\n\r\ndef wins(a, b):\r\n    \"\"\"True if a keeps the contested reveal and b must yield.\"\"\"\r\n    if a.priority != b.priority:\r\n        return a.priority > b.priority\r\n    return a.id < b.id\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Collect\r\n# --------------------------------------------------------------------------\r\n# --------------------------------------------------------------------------\r\n# Everything below runs inside one guard. A Python node that raises leaves\r\n# OUT null and the reason only in a transient tooltip, so the traceback is\r\n# written to disk as well.\r\n# --------------------------------------------------------------------------\r\ndef write_utf8(path, text):\r\n    \"\"\"Write UTF-8 with BOM as raw bytes -- identical across CPython and\r\n    IronPython, which disagree about open(encoding=...).\r\n\r\n    Defined outside the guard below so that a crash in the very first lines of\r\n    the body can still be written to the log.\r\n    \"\"\"\r\n    if not isinstance(text, type(u\"\")):\r\n        text = text.decode(\"utf-8\")\r\n    with open(path, \"wb\") as handle:\r\n        handle.write((u\"﻿\" + text).encode(\"utf-8\"))\r\n\r\n\r\n_run_error = None\r\ntry:\r\n    warnings = []\r\n    rows = []\r\n\r\n    if selection:\r\n        instances = []\r\n        for item in selection:\r\n            element = UnwrapElement(item)\r\n            if isinstance(element, FamilyInstance):\r\n                instances.append(element)\r\n    else:\r\n        instances = []\r\n        for category in (BuiltInCategory.OST_Doors, BuiltInCategory.OST_Windows):\r\n            instances.extend(\r\n                FilteredElementCollector(doc)\r\n                .OfCategory(category)\r\n                .WhereElementIsNotElementType()\r\n                .ToElements()\r\n            )\r\n\r\n    axis_cache = {}\r\n    level_cache = {}\r\n    openings = []\r\n    skipped = []\r\n\r\n    for instance in instances:\r\n        try:\r\n            if p_get(instance, P_CHANGE) is None or p_get(instance, P_SIDE_YN[\"Top\"]) is None:\r\n                skipped.append(\"{0} -- no lining parameters\".format(\r\n                    eid(instance.Id)))\r\n                continue\r\n\r\n            host = instance.Host\r\n            if not isinstance(host, Wall):\r\n                skipped.append(\"{0} -- host is not a wall\".format(eid(instance.Id)))\r\n                continue\r\n\r\n            host_key = eid(host.Id)\r\n            if host_key not in axis_cache:\r\n                axis_cache[host_key] = wall_axis(host)\r\n            axis = axis_cache[host_key]\r\n            if axis is None:\r\n                skipped.append(\"{0} -- host wall has no location curve\".format(\r\n                    eid(instance.Id)))\r\n                continue\r\n\r\n            level_id = instance.LevelId\r\n            level_key = eid(level_id)\r\n            if level_key not in level_cache:\r\n                level = doc.GetElement(level_id)\r\n                level_cache[level_key] = level.Elevation if level is not None else 0.0\r\n            elevation = level_cache[level_key]\r\n\r\n            openings.append(Opening(instance, axis, elevation))\r\n        except Exception as ex:\r\n            # This handler must never raise, or one bad element kills the run.\r\n            try:\r\n                ident = eid(instance.Id)\r\n            except Exception:\r\n                ident = \"?\"\r\n            skipped.append(\"{0} -- {1}\".format(ident, ex))\r\n\r\n    # --------------------------------------------------------------------------\r\n    # Group by wall run: same host, then merge collinear hosts.\r\n    # --------------------------------------------------------------------------\r\n    parent = {}\r\n\r\n\r\n    def find(key):\r\n        while parent[key] != key:\r\n            parent[key] = parent[parent[key]]\r\n            key = parent[key]\r\n        return key\r\n\r\n\r\n    def union(a, b):\r\n        ra, rb = find(a), find(b)\r\n        if ra != rb:\r\n            parent[rb] = ra\r\n\r\n\r\n    for opening in openings:\r\n        parent.setdefault(opening.axis.wall_id, opening.axis.wall_id)\r\n\r\n    # Only walls that already point the same way can possibly be collinear, so\r\n    # bucket on a rounded direction first instead of comparing every pair.\r\n    buckets = {}\r\n    for wall_id in parent.keys():\r\n        axis = axis_cache[wall_id]\r\n        if axis.direction is None:\r\n            continue\r\n        key = (round(axis.direction.X, 4), round(axis.direction.Y, 4),\r\n               round(axis.direction.Z, 4))\r\n        buckets.setdefault(key, []).append(wall_id)\r\n\r\n    for bucket in buckets.values():\r\n        for i in range(len(bucket)):\r\n            for j in range(i + 1, len(bucket)):\r\n                if same_line(axis_cache[bucket[i]], axis_cache[bucket[j]]):\r\n                    union(bucket[i], bucket[j])\r\n\r\n    groups = {}\r\n    for opening in openings:\r\n        root = find(opening.axis.wall_id)\r\n        groups.setdefault(root, []).append(opening)\r\n\r\n    # Openings merged into one run must measure u on one shared axis.\r\n    for root, members in groups.items():\r\n        reference = axis_cache[root]\r\n        for opening in members:\r\n            if opening.axis.wall_id != root and reference.direction is not None:\r\n                point = location_point(opening.el)\r\n                opening.u_center = reference.u_of(point)\r\n                tangent = reference.tangent_at(point)\r\n                hand = opening.el.HandOrientation\r\n                opening.sx = 1.0 if hand.DotProduct(tangent) > 0 else -1.0\r\n                opening.s_left = LEFT_IS_FAMILY_PLUS_X * opening.sx\r\n\r\n\r\n    # --------------------------------------------------------------------------\r\n    # Solve\r\n    # --------------------------------------------------------------------------\r\n    MIN_BLOCK_FT = mm_to_ft(MIN_BLOCK_MM)\r\n    MIN_REMNANT_FT = mm_to_ft(MIN_REMNANT_MM)\r\n    OVERLAP_WARN_FT = mm_to_ft(OVERLAP_WARN_MM)\r\n    TOUCH_SLACK_FT = mm_to_ft(TOUCH_SLACK_MM)\r\n\r\n    plans = []\r\n\r\n    for members in groups.values():\r\n        # Two openings in one wall whose lining rectangles genuinely intersect are a\r\n        # modelling error, not a lining question. Reported once per pair.\r\n        for i in range(len(members)):\r\n            for j in range(i + 1, len(members)):\r\n                a, b = members[i], members[j]\r\n                du = overlap(a.u_lo, a.u_hi, b.u_lo, b.u_hi)\r\n                dz = overlap(a.z_bot, a.z_top, b.z_bot, b.z_top)\r\n                if (du and dz\r\n                        and du[1] - du[0] > OVERLAP_WARN_FT\r\n                        and dz[1] - dz[0] > OVERLAP_WARN_FT):\r\n                    warnings.append(\r\n                        \"{0} and {1} intersect by {2:.0f} x {3:.0f} mm in the same \"\r\n                        \"wall -- lining results for both are unreliable\".format(\r\n                            a.label(), b.label(),\r\n                            ft_to_mm(du[1] - du[0]), ft_to_mm(dz[1] - dz[0])))\r\n\r\n        for opening in members:\r\n            if opening.skip:\r\n                skipped.append(\"{0} -- carries {1}\".format(opening.label(), SKIP_MARKER))\r\n                continue\r\n\r\n            desired = {}\r\n            remnant_total = 0.0\r\n            notes = []\r\n\r\n            for side in (\"Top\", \"Left\", \"Right\"):\r\n                position, normal, span_lo, span_hi = opening.edge(side)\r\n                if span_hi - span_lo <= MIN_BLOCK_FT:\r\n                    desired[side] = 1\r\n                    continue\r\n\r\n                blocks = []\r\n                for other in members:\r\n                    if other.id == opening.id:\r\n                        continue\r\n                    # Under the office rule every neighbour that touches\r\n                    # removes the lining on that face, on both sides of the\r\n                    # joint. Ownership is only consulted in the fallback.\r\n                    if not SYMMETRIC_UNCHECK and not wins(other, opening):\r\n                        continue\r\n                    if not (other.has_lining or LINING_OFF_CAN_BLOCK):\r\n                        continue\r\n\r\n                    if side == \"Top\":\r\n                        gap = other.z_bot - position\r\n                        cross = overlap(span_lo, span_hi, other.u_lo, other.u_hi)\r\n                    else:\r\n                        if normal > 0:\r\n                            gap = other.u_lo - position\r\n                        else:\r\n                            gap = position - other.u_hi\r\n                        cross = overlap(span_lo, span_hi, other.z_bot, other.z_top)\r\n\r\n                    # The neighbour has to sit just beyond this edge. A large\r\n                    # negative gap does not mean the two intersect -- it only means\r\n                    # the neighbour is somewhere else along the wall, on the other\r\n                    # side of this opening. Real intersections are caught by the\r\n                    # dedicated pass above.\r\n                    if cross is None or gap > GAP_TOL_FT or gap < -TOUCH_SLACK_FT:\r\n                        continue\r\n\r\n                    blocks.append(cross)\r\n                    notes.append(\"{0} blocked {1:.0f} mm by {2} [{3}] (gap {4:.0f} mm)\".format(\r\n                        side, ft_to_mm(cross[1] - cross[0]), other.id,\r\n                        other.mark or \"-\", ft_to_mm(gap)))\r\n\r\n                # Derive the blocked length from the complement so that blockers\r\n                # overlapping each other are never counted twice.\r\n                remaining = subtract_intervals((span_lo, span_hi), blocks)\r\n                blocked_total = (span_hi - span_lo) - sum(hi - lo for lo, hi in remaining)\r\n                if blocked_total < MIN_BLOCK_FT:\r\n                    desired[side] = 1\r\n                    continue\r\n\r\n                desired[side] = 0\r\n                for lo, hi in remaining:\r\n                    length = hi - lo\r\n                    if length >= MIN_REMNANT_FT:\r\n                        remnant_total += length\r\n                        notes.append(\"{0} remnant kept {1:.0f} mm\".format(\r\n                            side, ft_to_mm(length)))\r\n                    elif length > MIN_BLOCK_FT:\r\n                        notes.append(\"{0} sliver {1:.0f} mm discarded\".format(\r\n                            side, ft_to_mm(length)))\r\n\r\n            current = {s: p_int(opening.el, P_SIDE_YN[s]) for s in (\"Top\", \"Left\", \"Right\")}\r\n            current_change = p_num(opening.el, P_CHANGE) or 0.0\r\n\r\n            # The family adds Lining Change unconditionally, so a value left over\r\n            # from an earlier edit inflates the quantity even with nothing blocked.\r\n            if remnant_total == 0.0 and abs(current_change) > mm_to_ft(0.5):\r\n                notes.append(\"stale Lining Change {0:.0f} mm cleared\".format(\r\n                    ft_to_mm(current_change)))\r\n            if not opening.has_lining:\r\n                notes.append(\"Lining YN is off -- excluded from the lining schedule\")\r\n\r\n            changed = (\r\n                any(current[s] != desired[s] for s in desired)\r\n                or abs(current_change - remnant_total) > mm_to_ft(0.5)\r\n            )\r\n\r\n            kept_length = 0.0\r\n            for side in (\"Top\", \"Left\", \"Right\"):\r\n                if desired.get(side, 1) == 1:\r\n                    kept_length += opening.width if side == \"Top\" else opening.height\r\n            predicted_total = kept_length + remnant_total\r\n\r\n            plans.append({\r\n                \"opening\": opening,\r\n                \"desired\": desired,\r\n                \"current\": current,\r\n                \"change_before\": current_change,\r\n                \"change_after\": remnant_total,\r\n                \"predicted_total\": predicted_total,\r\n                \"changed\": changed,\r\n                \"notes\": notes,\r\n                \"master_desired\": None,\r\n                \"material_desired\": None,\r\n            })\r\n\r\n            for message in opening.warnings:\r\n                warnings.append(\"{0}: {1}\".format(opening.label(), message))\r\n\r\n\r\n    # ----------------------------------------------------------------------\r\n    # Master \"Lining YN\": a door decides for the windows it touches.\r\n    # Only windows in direct contact with a door are affected; a window that\r\n    # touches no door keeps whatever the modeller set.\r\n    # ----------------------------------------------------------------------\r\n    if PROPAGATE_MASTER_FROM_DOORS or MATERIAL_FROM_DOORS:\r\n        plan_by_id = {p[\"opening\"].id: p for p in plans}\r\n        for members in groups.values():\r\n            group_doors = [o for o in members if o.category_id == CAT_DOORS]\r\n            if not group_doors:\r\n                continue\r\n            for opening in members:\r\n                if opening.category_id != CAT_WINDOWS:\r\n                    continue\r\n                plan = plan_by_id.get(opening.id)\r\n                if plan is None:\r\n                    continue\r\n                touching = [d for d in group_doors\r\n                            if touches(opening, d, GAP_TOL_FT)]\r\n                if not touching:\r\n                    continue\r\n\r\n                # -- master \"Lining YN\" --------------------------------------\r\n                if PROPAGATE_MASTER_FROM_DOORS:\r\n                    want = None\r\n                    # Any touching door without lining wins: the window follows\r\n                    # it out of the schedule.\r\n                    if any(not d.has_lining for d in touching):\r\n                        want = 0\r\n                    elif MIRROR_MASTER_BOTH_WAYS:\r\n                        want = 1\r\n                    if want is not None and (1 if opening.has_lining else 0) != want:\r\n                        driver = next((d for d in touching if not d.has_lining),\r\n                                      touching[0])\r\n                        plan[\"master_desired\"] = want\r\n                        plan[\"changed\"] = True\r\n                        plan[\"notes\"].append(\r\n                            \"Lining YN -> {0} (touches door {1} [{2}], whose \"\r\n                            \"Lining YN is {3})\".format(\r\n                                \"on\" if want else \"off\", driver.id,\r\n                                driver.mark or \"-\",\r\n                                \"on\" if driver.has_lining else \"off\"))\r\n\r\n                # -- Window Material from Door Material ----------------------\r\n                if MATERIAL_FROM_DOORS:\r\n                    codes = sorted(set(\r\n                        d.door_material.strip() for d in touching\r\n                        if d.door_material and d.door_material.strip()))\r\n                    if len(codes) > 1:\r\n                        # Two doors disagreeing is a modelling question, not\r\n                        # something to resolve by picking one.\r\n                        warnings.append(\r\n                            \"{0}: touches doors with different Door Material \"\r\n                            \"({1}); Window Material left alone\".format(\r\n                                opening.label(), \", \".join(codes)))\r\n                    elif codes:\r\n                        source = codes[0]\r\n                        target = window_material_for(source)\r\n                        if target is None:\r\n                            warnings.append(\r\n                                \"{0}: door material '{1}' does not start with \"\r\n                                \"'{2}', so no window code could be derived. Add \"\r\n                                \"it to MATERIAL_OVERRIDES if it is a special \"\r\n                                \"case.\".format(opening.label(), source,\r\n                                               DOOR_PREFIX))\r\n                        elif (opening.window_material or \"\") != target:\r\n                            driver = next(\r\n                                (d for d in touching\r\n                                 if d.door_material.strip() == source),\r\n                                touching[0])\r\n                            plan[\"material_desired\"] = target\r\n                            plan[\"changed\"] = True\r\n                            plan[\"notes\"].append(\r\n                                \"Window Material '{0}' -> '{1}' (door {2} [{3}] \"\r\n                                \"is '{4}')\".format(\r\n                                    opening.window_material or \"(blank)\",\r\n                                    target, driver.id, driver.mark or \"-\",\r\n                                    source))\r\n\r\n    # --------------------------------------------------------------------------\r\n    # Apply\r\n    # --------------------------------------------------------------------------\r\n    applied = 0\r\n    failed = []\r\n\r\n    if APPLY:\r\n        to_write = [p for p in plans if p[\"changed\"]]\r\n        if to_write:\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n            for plan in to_write:\r\n                opening = plan[\"opening\"]\r\n                try:\r\n                    for side, value in plan[\"desired\"].items():\r\n                        parameter = p_get(opening.el, P_SIDE_YN[side])\r\n                        if parameter is not None and not parameter.IsReadOnly:\r\n                            parameter.Set(value)\r\n                    parameter = p_get(opening.el, P_CHANGE)\r\n                    if parameter is not None and not parameter.IsReadOnly:\r\n                        parameter.Set(plan[\"change_after\"])\r\n                    if plan[\"master_desired\"] is not None:\r\n                        parameter = p_get(opening.el, P_MASTER)\r\n                        if parameter is not None and not parameter.IsReadOnly:\r\n                            parameter.Set(plan[\"master_desired\"])\r\n                    if plan[\"material_desired\"] is not None:\r\n                        parameter = p_get(opening.el, P_WINDOW_MATERIAL)\r\n                        if parameter is not None and not parameter.IsReadOnly:\r\n                            parameter.Set(plan[\"material_desired\"])\r\n                    applied += 1\r\n                except Exception as ex:\r\n                    failed.append(\"{0} -- {1}\".format(opening.label(), ex))\r\n            # Force reporting parameters to recompute so the read-back is truthful.\r\n            doc.Regenerate()\r\n            for plan in to_write:\r\n                actual, _ = p_num_any(plan[\"opening\"].el, P_TOTAL)\r\n                plan[\"actual_total\"] = actual\r\n            TransactionManager.Instance.TransactionTaskDone()\r\n\r\n\r\n    # --------------------------------------------------------------------------\r\n    # Report\r\n    # --------------------------------------------------------------------------\r\n    HEADER = [\r\n        \"ElementId\", \"Mark\", \"Category\", \"Family\", \"Type\", \"HostWallId\",\r\n        \"Lining YN before\", \"Lining YN after\",\r\n        \"Material before\", \"Material after\",\r\n        \"Top YN before\", \"Top YN after\",\r\n        \"Left YN before\", \"Left YN after\",\r\n        \"Right YN before\", \"Right YN after\",\r\n        \"Lining Change before (mm)\", \"Lining Change after (mm)\",\r\n        \"Predicted total (mm)\", \"Predicted schedule qty (Lbm)\",\r\n        \"Actual total (mm)\", \"Changed\", \"Detail\",\r\n    ]\r\n\r\n\r\n    def row_of(plan):\r\n        opening = plan[\"opening\"]\r\n        actual = plan.get(\"actual_total\")\r\n        return [\r\n            opening.id,\r\n            opening.mark or \"\",\r\n            opening.category,\r\n            opening.family,\r\n            opening.type_name,\r\n            opening.axis.wall_id,\r\n            \"Yes\" if opening.has_lining else \"No\",\r\n            (\"Yes\" if plan[\"master_desired\"] else \"No\")\r\n            if plan[\"master_desired\"] is not None\r\n            else (\"Yes\" if opening.has_lining else \"No\"),\r\n            (opening.window_material if opening.category_id == CAT_WINDOWS\r\n             else opening.door_material),\r\n            (plan[\"material_desired\"] if plan[\"material_desired\"] is not None\r\n             else (opening.window_material if opening.category_id == CAT_WINDOWS\r\n                   else opening.door_material)),\r\n            plan[\"current\"][\"Top\"], plan[\"desired\"][\"Top\"],\r\n            plan[\"current\"][\"Left\"], plan[\"desired\"][\"Left\"],\r\n            plan[\"current\"][\"Right\"], plan[\"desired\"][\"Right\"],\r\n            round(ft_to_mm(plan[\"change_before\"]), 1),\r\n            round(ft_to_mm(plan[\"change_after\"]), 1),\r\n            round(ft_to_mm(plan[\"predicted_total\"]), 1),\r\n            round(ft_to_mm(plan[\"predicted_total\"]) / 1000.0, 2),\r\n            round(ft_to_mm(actual), 1) if actual is not None else \"\",\r\n            \"YES\" if plan[\"changed\"] else \"no\",\r\n            \" | \".join(plan[\"notes\"]),\r\n        ]\r\n\r\n\r\n    rows = [HEADER] + [row_of(p) for p in plans]\r\n\r\n    for plan in plans:\r\n        actual = plan.get(\"actual_total\")\r\n        if actual is None:\r\n            continue\r\n        if abs(actual - plan[\"predicted_total\"]) > mm_to_ft(1.0):\r\n            warnings.append(\r\n                \"{0}: family reports {1:.0f} mm but the sides + Lining Change give \"\r\n                \"{2:.0f} mm -- check the 'Lining Length' formula in the family\".format(\r\n                    plan[\"opening\"].label(), ft_to_mm(actual),\r\n                    ft_to_mm(plan[\"predicted_total\"])))\r\n\r\n    def csv_cell(value):\r\n        text = value if isinstance(value, type(u\"\")) else u\"{0}\".format(value)\r\n        return u'\"{0}\"'.format(text.replace(u'\"', u'\"\"'))\r\n\r\n\r\n    csv_note = \"\"\r\n    if CSV_PATH:\r\n        try:\r\n            write_utf8(CSV_PATH, u\"\\n\".join(\r\n                u\",\".join(csv_cell(cell) for cell in row) for row in rows) + u\"\\n\")\r\n            csv_note = \"Report written to {0}.\".format(CSV_PATH)\r\n        except Exception as ex:\r\n            csv_note = \"Could not write CSV: {0}\".format(ex)\r\n            warnings.append(csv_note)\r\n\r\n    changed_count = sum(1 for p in plans if p[\"changed\"])\r\n    mode = \"APPLIED\" if APPLY else \"DRY RUN -- nothing was modified\"\r\n\r\n    summary = [\r\n        \"Lining clash resolver -- {0}\".format(mode),\r\n        \"Examined {0} openings on {1} wall run(s).\".format(len(plans), len(groups)),\r\n        \"{0} need changes; {1} written.\".format(changed_count, applied),\r\n        \"Settings: max clear gap {0:.0f} mm, min remnant kept {1:.0f} mm.\".format(\r\n            GAP_TOL_MM, MIN_REMNANT_MM),\r\n    ]\r\n    if skipped:\r\n        summary.append(\"Skipped {0}: {1}\".format(\r\n            len(skipped), \"; \".join(skipped[:10]) + (\" ...\" if len(skipped) > 10 else \"\")))\r\n    if failed:\r\n        summary.append(\"Write failures {0}: {1}\".format(len(failed), \"; \".join(failed)))\r\n    if warnings:\r\n        summary.append(\"{0} warning(s) -- see the third output.\".format(len(warnings)))\r\n    if csv_note:\r\n        summary.append(csv_note)\r\n    if not APPLY and changed_count:\r\n        summary.append(\"Set 'Apply changes?' to True to write these values.\")\r\n\r\n    OUT = [\"\\n\".join(summary), rows, warnings]\r\n\r\n    if not IS_DYNAMO:\r\n        # `pyrevit run` has no output window, so the result has to land on disk.\r\n        report = u\"\\n\".join([OUT[0], u\"\", u\"WARNINGS:\"] +\r\n                            [u\"  \" + w for w in warnings] +\r\n                            [u\"\", u\"DETAIL:\"] +\r\n                            [u\"  \" + u\" | \".join(u\"{0}\".format(c) for c in row)\r\n                             for row in rows])\r\n        log_path = _cfg.get(\"log\")\r\n        if log_path:\r\n            try:\r\n                write_utf8(log_path, report)\r\n            except Exception:\r\n                pass\r\n        if APPLY and _cfg.get(\"save\") and applied:\r\n            doc.Save()\r\n\r\n\r\nexcept Exception:\r\n    import traceback as _tb\r\n    _run_error = _tb.format_exc()\r\n    OUT = [\"FAILED\\n\\n\" + _run_error, [], []]\r\n\r\n\r\n# The log is the only channel that survives a crash, an empty Watch, or a\r\n# headless run. It is written whenever a report path is supplied.\r\nif CSV_PATH:\r\n    try:\r\n        _log = os.path.splitext(CSV_PATH)[0] + \".log\"\r\n        _body = OUT[0] if OUT and OUT[0] else u\"(no summary)\"\r\n        _warn = u\"\\n\".join(u\"  \" + w for w in (OUT[2] if OUT else []))\r\n        # The derived rectangles, so a wrong number can be diagnosed straight\r\n        # from the log instead of by another round of guessing.\r\n        _geo = []\r\n        try:\r\n            for _o in openings:\r\n                _geo.append(\r\n                    u\"  {0} [{1}] {2:<9} host {3}  u[{4:.0f}..{5:.0f}] \"\r\n                    u\"z[{6:.0f}..{7:.0f}]  w={8:.0f} h={9:.0f} \"\r\n                    u\"leftAt={10:.0f} liningYN={11}\".format(\r\n                        _o.id, _o.mark or \"-\", _o.category, _o.axis.wall_id,\r\n                        ft_to_mm(_o.u_lo), ft_to_mm(_o.u_hi),\r\n                        ft_to_mm(_o.z_bot), ft_to_mm(_o.z_top),\r\n                        ft_to_mm(_o.width), ft_to_mm(_o.height),\r\n                        ft_to_mm(_o.edge(\"Left\")[0]),\r\n                        \"on\" if _o.has_lining else \"OFF\"))\r\n        except Exception as _ge:\r\n            _geo.append(u\"  (geometry dump failed: {0})\".format(_ge))\r\n        write_utf8(_log, u\"{0}\\n\\nWARNINGS:\\n{1}\\n\\nGEOMETRY (mm):\\n{2}\\n\".format(\r\n            _body, _warn, u\"\\n\".join(_geo)))\r\n    except Exception:\r\n        pass\r\n",
+      "Engine": "PythonNet3",
+      "VariableInputPorts": true,
+      "Id": "cad27512b8f8497dbab487a54221e290",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "32f802a6d28d4c25adcd7b4a3fdee6a5",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "37e1b4a4a3d04f69a3af64903249d936",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "3340a8583dca4bb8b27cc1bab7390c75",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "3843b3372c4a4ed0a14fad95513ad382",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "73447da10c574c1791ad4972c7816b13",
+          "Name": "IN[4]",
+          "Description": "Input #4",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "166f0a6feb5044aca3b95bdb4ec380c4",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 620.0,
+      "WatchHeight": 400.0,
+      "Id": "fd69404ea93548128940aac89d4c2c69",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "6741179836da459e97d284326669525f",
+          "Name": "",
+          "Description": "Node to show output from",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "3e495095b8644e90adf1177a520f26cc",
+          "Name": "",
+          "Description": "Node output",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Visualizes a node's output"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "8666927ff3ba438f90f187b8629d5a15",
+      "End": "32f802a6d28d4c25adcd7b4a3fdee6a5",
+      "Id": "15845f28d7e349ea82369fc4730c270a",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "9a605383572e45e698a00b82242b0e02",
+      "End": "37e1b4a4a3d04f69a3af64903249d936",
+      "Id": "d979d2715ee045428299609eb3d7ed7c",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "b98698079f9f4d0a9fd693ab930a1221",
+      "End": "3340a8583dca4bb8b27cc1bab7390c75",
+      "Id": "0c5f2fc8552c4544ad345dde771b1b7d",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "657ff2c0bfb84f23aaeee6e61405531a",
+      "End": "3843b3372c4a4ed0a14fad95513ad382",
+      "Id": "d7fdaf543070408ba856cdcbf7738e99",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "0f4a7431230f46cf9c2206cd12ec18ad",
+      "End": "73447da10c574c1791ad4972c7816b13",
+      "Id": "ef025b53e2074c51aba651a5180962f3",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "166f0a6feb5044aca3b95bdb4ec380c4",
+      "End": "6741179836da459e97d284326669525f",
+      "Id": "a3115b1463bc4d4684ed94921080561b",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": false,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "4.0",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "10.3",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "4.0.2.3852",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "6ee42009687545cb9497a81fe86dbb34",
+        "Name": "Doors/windows to process (null = whole model)",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": -260.0
+      },
+      {
+        "Id": "a4ed52aaeccb442fade0ef72a48a70b1",
+        "Name": "Apply changes? (True = write to model)",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": -140.0
+      },
+      {
+        "Id": "8593364bf4ec47be91759b88822a7362",
+        "Name": "Max clear gap between linings (mm)",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": -40.0
+      },
+      {
+        "Id": "4b78bbf0f3e64968a6c1a69bd8dd9a4e",
+        "Name": "Min lining remnant to keep (mm)",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": 60.0
+      },
+      {
+        "Id": "07c26f929b1d4d8e831c2afc67cfbd75",
+        "Name": "Report CSV path (blank = no file)",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": 160.0
+      },
+      {
+        "Id": "cad27512b8f8497dbab487a54221e290",
+        "Name": "Resolve lining clashes",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 460.0,
+        "Y": -120.0
+      },
+      {
+        "Id": "fd69404ea93548128940aac89d4c2c69",
+        "Name": "Result",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": true,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 760.0,
+        "Y": -120.0
+      }
+    ],
+    "Annotations": [],
+    "X": 120.0,
+    "Y": 320.0,
+    "Zoom": 0.75
+  }
+}

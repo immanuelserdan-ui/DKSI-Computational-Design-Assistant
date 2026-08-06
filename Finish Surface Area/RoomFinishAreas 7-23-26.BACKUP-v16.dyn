@@ -1,0 +1,517 @@
+{
+  "Uuid": "27f199d3-e98c-46b5-854f-6c0741a8e104",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "RoomFinishAreas 7-23-26",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "DSRevitNodesUI.Categories, DSRevitNodesUI",
+      "SelectedIndex": 514,
+      "SelectedString": "OST_Rooms",
+      "Id": "cfa486043a8a49958c0bb3f786462c92",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "d2323e8be9a049ec83a2186c0c94bbf1",
+          "Name": "Category",
+          "Description": "The selected Category.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "All built-in categories."
+    },
+    {
+      "ConcreteType": "DSRevitNodesUI.ElementsOfCategory, DSRevitNodesUI",
+      "Id": "6f57f29b53d24b2cb2c2e42af850bb2f",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "f8151a0f31d0427881f7ff49a3c1af67",
+          "Name": "Category",
+          "Description": "The Category",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "3461d826cc9d4e7398009a10ecc3f6f9",
+          "Name": "Elements",
+          "Description": "An element class.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Get all elements of the specified category from the model."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "d387fde07a3243698475c4aaad6580f2",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "54831874976f475f8933b6a3946e896d",
+          "Name": "string",
+          "Description": "\"Wall Finish Area\"",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "1be4639cb87448e6bdbb1653f1642e56",
+          "Name": "string",
+          "Description": "\"Floor Finish Area\"",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "99b59314b3c04fbfaadeed0e2a971c0d",
+          "Name": "string",
+          "Description": "\"Ceiling Finish Area\"",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"Wall Finish Area\";\n\"Floor Finish Area\";\n\"Ceiling Finish Area\";"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "f91489e54fe34264859c5d6b90643cc9",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "994b9687df404eb8b16d712f77c7ee28",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# ============================================================\r\n# Room Finish Surface Areas -> Room Parameters\r\n# v4 GEOMETRIC - measures the wall's ACTUAL finish-layer face\r\n# ENGINE: PythonNet3 (Dynamo 4.0's core Python engine - formerly\r\n# named 'CPython3', renamed because it now runs on pythonnet 3.x;\r\n# no add-on package needed, portable to any machine). The code is\r\n# engine-neutral, so it also runs under IronPython, but the node is\r\n# set to PythonNet3 so Dynamo 4.0 runs it natively with no engine-\r\n# conversion prompt. (In Dynamo 4.0 the old 'CPython3' value is no\r\n# longer supported and is auto-converted to PythonNet3 on open.)\r\n#\r\n# ------------------------- INPUTS ---------------------------\r\n# IN[0] : List of Rooms (from \"All Elements of Category\")\r\n# IN[1] : Wall parameter name    (string, \"Wall Finish Area\")\r\n# IN[2] : Floor parameter name   (string, \"Floor Finish Area\")\r\n# IN[3] : Ceiling parameter name (string, \"Ceiling Finish Area\")\r\n# IN[4] : Subtract door/window openings   (bool, default True)\r\n#         (applies only to walls measured via FALLBACK)\r\n# IN[5] : Subtract casework voids         (bool, default True)\r\n#         (applies only to walls measured via FALLBACK)\r\n# IN[6] : OPTIONAL - CSV export file path (string), e.g.\r\n#         \"C:\\\\Temp\\\\FinishAreas.csv\". When given, writes the\r\n#         per-room per-material breakdown (Room Number, Room\r\n#         Name, Surface, Material, Material Code, Is Painted,\r\n#         Area m2) - Excel-ready, UTF-8 with BOM for Danish\r\n#         characters. Material Code = Material's 'Code', 'Mark',\r\n#         or 'Keynote' parameter (first non-empty).\r\n#         'Is Painted' = Yes/No, the SAME distinction Revit's\r\n#         Material Takeoff makes with 'Material: As Paint'.\r\n#         Filter the CSV to Is Painted = Yes to get the paint\r\n#         cost basis; the No rows are wall-type LAYER materials\r\n#         (e.g. 'EM Wall', 'Default Wall') that Revit's paint\r\n#         takeoff excludes. A 'Default Wall' row means a wall\r\n#         layer with no material assigned - a modelling flag,\r\n#         not a finish.\r\n# IN[7] : OPTIONAL - Wall PAINT-area parameter name (string,\r\n#         default \"Wall Paint Area\"). Room-clipped PAINTED-only\r\n#         wall area, written to Rooms and Walls. Schedule this\r\n#         (not 'Wall Finish Area') in a Wall Material Takeoff\r\n#         filtered to 'Material: As Paint = Yes' to match the\r\n#         painted CSV rows per material.\r\n# IN[8] : OPTIONAL - Net floor-area parameter name (string,\r\n#         default \"Net Floor Area\"). The building-code walkable\r\n#         area: room footprint counted ONLY where a real floor/\r\n#         foundation slab sits beneath it, at the slab's finished\r\n#         top face. Area open to below (voids, atria, double-\r\n#         height, stair openings) carries no slab and is deducted.\r\n#         This is Revit's read-only Room.Area corrected - Room.Area\r\n#         itself never deducts floor openings.\r\n#\r\n# OFFICE STANDARD (see BIM manual): one finish material per\r\n# wall/floor/ceiling element (separate 20mm finish walls joined\r\n# to base walls). Split Face + Paint is NOT the office standard;\r\n# walls modeled that way will report their room-side layer/paint\r\n# material only.\r\n#\r\n#\r\n# OUT   : Report list (summary + one line per room)\r\n#\r\n# ------------------ HOW WALLS ARE MEASURED ------------------\r\n# GEOMETRIC (primary): for each wall bounding the room, the\r\n# wall's real side faces are harvested from its full solid\r\n# geometry (see element_faces) - these are the actual surfaces\r\n# of the outermost finish layer (e.g. 'Finish 2 [5]'), whose\r\n# geometry ALREADY\r\n# excludes every cut: door/window openings, casework voids\r\n# (hosted, auto-cut, or manual Cut Geometry), reveals, edited\r\n# profiles. That face is clipped to the room by intersecting\r\n# it with the room's boundary subface (thin-solid boolean).\r\n# Result: exact net finish area per wall per room, no\r\n# deduction parameters needed.\r\n#\r\n# FALLBACK (automatic, per wall): if the geometric method\r\n# fails for a wall (curved wall, linked wall, non-planar face,\r\n# boolean failure), that wall uses the previous approach -\r\n# planar room-subface area minus arithmetic deductions\r\n# ('Void Area' > 'Void Width'x'Void Height' > Width x Height).\r\n# Door/window/casework deductions are skipped for walls that\r\n# were measured geometrically (they are already net).\r\n#\r\n# ---------------------- ALSO HANDLED ------------------------\r\n#  - Auto-enables 'Areas and Volumes' so rooms stop at\r\n#    bounding ceilings (floor finish to ceiling finish)\r\n#  - MULTI-LEVEL room height: when a room on the next level sits\r\n#    directly above, this room's Upper Limit is raised so its\r\n#    volume (and wall-finish height) reaches that next level\r\n#    instead of stopping short at its own base. Reliable even\r\n#    when the separating floor is non-room-bounding.\r\n#  - Floor / Ceiling split via SubfaceType Bottom / Top\r\n#  - Painted DOOR REVEALS / returns inside openings: the\r\n#    wall-thickness jamb + head faces are perpendicular to the\r\n#    room plane, so the boundary sweep never sees them. They are\r\n#    measured off the host wall and reported under the 'Reveals'\r\n#    surface, attributed to each door's FromRoom (else ToRoom),\r\n#    and folded into Wall Finish / Wall Paint Area. Only the\r\n#    VISIBLE return is counted: the door's own solids (lining /\r\n#    frame / leaf) are subtracted, so the part of the reveal\r\n#    hidden behind the frame is excluded (Revit's native takeoff\r\n#    counts the whole painted face - this is stricter, matching\r\n#    the actually-visible painted surface).\r\n#  - Room Separation Line boundaries excluded\r\n#  - Unplaced/unenclosed rooms counted into one summary line\r\n#  - Engine-agnostic input handling (IronPython/.NET lists)\r\n#  - Writes internal sq ft into Area-type parameters\r\n#\r\n# ------------------------ KNOWN LIMITS ----------------------\r\n#  - Geometric mode measures the model as built: reveals,\r\n#    sweep cuts, and profile edits also reduce the number.\r\n#    If your takeoff standard counts those, review results.\r\n#  - Extra finish INSIDE niches (jambs/head/back) not added.\r\n#  - Curtain walls: measured as boundary faces (glazing incl).\r\n#  - Linked-model walls fall back to arithmetic mode.\r\n#\r\n# RE-RUN BEFORE ISSUING DELIVERABLES - values are snapshots.\r\n# ============================================================\r\n\r\nimport clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import (\r\n    AreaVolumeSettings,\r\n    BooleanOperationsType,\r\n    BooleanOperationsUtils,\r\n    BuiltInCategory,\r\n    BuiltInParameter,\r\n    ElementId,\r\n    FilteredElementCollector,\r\n    GeometryCreationUtilities,\r\n    GeometryInstance,\r\n    InstanceVoidCutUtils,\r\n    Options,\r\n    PlanarFace,\r\n    Solid,\r\n    SpatialElementBoundaryOptions,\r\n    SpatialElementBoundaryLocation,\r\n    SpatialElementGeometryCalculator,\r\n    StorageType,\r\n    SubfaceType,\r\n    ViewDetailLevel,\r\n    Wall,\r\n    XYZ\r\n)\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# ============================ INPUTS ============================\r\n# Engine-agnostic normalization (IronPython may pass .NET IList,\r\n# which fails isinstance(x, list) - so we duck-type instead).\r\n_raw = IN[0]\r\nif not hasattr(_raw, \"__iter__\") or isinstance(_raw, str):\r\n    _raw = [_raw]\r\nrooms = [UnwrapElement(r) for r in _raw]\r\n\r\nwall_param_name    = IN[1] if len(IN) > 1 and IN[1] else \"Wall Finish Area\"\r\nfloor_param_name   = IN[2] if len(IN) > 2 and IN[2] else \"Floor Finish Area\"\r\nceiling_param_name = IN[3] if len(IN) > 3 and IN[3] else \"Ceiling Finish Area\"\r\nsubtract_openings  = IN[4] if len(IN) > 4 and IN[4] is not None else True\r\nsubtract_casework  = IN[5] if len(IN) > 5 and IN[5] is not None else True\r\nuse_geometric      = True   # geometric measurement is standard\r\nauto_adjust_limits = True   # sloped-ceiling limit fix is standard\r\n# When a room on the NEXT level sits directly above this one, raise\r\n# this room's upper limit so its volume (and wall finish height)\r\n# reaches that next level instead of stopping short at its own base.\r\nextend_to_room_above = True\r\nexport_csv_path    = IN[6] if len(IN) > 6 and IN[6] else \"\"\r\n\r\n# PAINTED-ONLY wall area (room-clipped), written to rooms AND walls.\r\n# This is the number that makes a Revit Wall Material Takeoff match\r\n# this engine's CSV: on a wall carrying paint over a substrate,\r\n# 'Wall Finish Area' holds the WHOLE face (paint + EM Wall / Default\r\n# Wall) and repeats that whole value on every material row, so\r\n# summing it by material over-reports paint. 'Wall Paint Area' holds\r\n# only the painted face, so a takeoff filtered to 'Material: As Paint\r\n# = Yes' sums per material to the CSV's painted rows. Bind this as a\r\n# NEW Area parameter to Walls (and Rooms) - it does NOT overwrite the\r\n# existing 'Wall Finish Area', which stays = total finish face.\r\npaint_param_name   = IN[7] if len(IN) > 7 and IN[7] else \"Wall Paint Area\"\r\n\r\n# NET (walkable / building-code) floor area, written to rooms. Unlike\r\n# Revit's Room.Area - which is the full plan footprint between the\r\n# bounding walls and does NOT deduct floor openings - this counts only\r\n# the footprint that sits directly over a real floor slab, measured at\r\n# the slab's finished top face. Areas open to below (voids, atria,\r\n# stair/double-height openings) carry no slab and are deducted. This\r\n# is the read-only Room.Area corrected to the code-countable area.\r\nnet_floor_param_name = IN[8] if len(IN) > 8 and IN[8] else \"Net Floor Area\"\r\n\r\nSCRIPT_VERSION = \"v16 (multi-level room height - extend to room above)\"\r\nFT2_TO_M2 = 0.09290304  # internal sq ft -> square metres for CSV\r\n\r\nreport = []\r\nSEP_LINE_CAT_ID = ElementId(BuiltInCategory.OST_RoomSeparationLines)\r\nCEILING_CAT_ID  = ElementId(BuiltInCategory.OST_Ceilings)\r\nROOF_CAT_ID     = ElementId(BuiltInCategory.OST_Roofs)\r\nFLOOR_CAT_ID    = ElementId(BuiltInCategory.OST_Floors)\r\n# Structural foundation slabs (slab-on-grade). The enum member is\r\n# SINGULAR - OST_StructuralFoundation - and can vary/absent across\r\n# API versions, so resolve it defensively: a missing name must never\r\n# break module load. getattr returns None if it is not present.\r\n_FOUND_BIC = getattr(BuiltInCategory, \"OST_StructuralFoundation\", None)\r\nFOUNDATION_CAT_ID = ElementId(_FOUND_BIC) if _FOUND_BIC is not None else None\r\nCEIL_SRC_ORDER  = [\"ceiling\", \"slab above\", \"roof\", \"other\"]\r\n# Categories that count as a \"floor slab underneath\" for the net\r\n# (walkable / building-code) floor area: architectural + structural\r\n# floors, and structural foundation slabs. None entries dropped.\r\nSLAB_CAT_IDS = tuple(c for c in (FLOOR_CAT_ID, FOUNDATION_CAT_ID)\r\n                     if c is not None)\r\n\r\nCOPLANAR_TOL = 0.02   # ft (~6 mm) plane-matching tolerance\r\nEXTRUDE_T    = 0.10   # ft thin-solid thickness for intersection\r\nSCAN_BAND    = 20.0   # ft above room base to search for ceilings/roofs\r\nLIMIT_MARGIN = 0.5    # ft raised above the highest ceiling point\r\n# Reveal-coverage slab thickness. Deliberately THIN (~6 mm) so a door\r\n# lining/frame sitting against the reveal fully spans it (giving the\r\n# true covered footprint), while a leaf offset into the opening does\r\n# not get falsely counted. Larger would under-deduct thin linings.\r\nREVEAL_SLAB_T = 0.02  # ft (~6 mm)\r\n\r\n# ========== PRE-FLIGHT: volume computation (AUTO-FIX) ==========\r\ntry:\r\n    av_settings = AreaVolumeSettings.GetAreaVolumeSettings(doc)\r\n    if not av_settings.ComputeVolumes:\r\n        TransactionManager.Instance.EnsureInTransaction(doc)\r\n        av_settings.ComputeVolumes = True\r\n        doc.Regenerate()\r\n        report.append(\r\n            \"AUTO-FIX: 'Areas and Volumes' computation was OFF and has \"\r\n            \"been enabled, so rooms now stop at bounding ceilings \"\r\n            \"(floor finish to ceiling finish). If a room still reports \"\r\n            \"'no top boundary', its ceiling is not Room Bounding or the \"\r\n            \"room's upper limit stops below it.\")\r\nexcept Exception as e:\r\n    report.append(\"WARNING: could not verify/enable volume \"\r\n                  \"computation: {}\".format(str(e)))\r\n\r\n# =================== GEOMETRY CALCULATOR SETUP ===================\r\nopts = SpatialElementBoundaryOptions()\r\nopts.SpatialElementBoundaryLocation = SpatialElementBoundaryLocation.Finish\r\ncalculator = SpatialElementGeometryCalculator(doc, opts)\r\n\r\n# ============ COLLECT DEDUCTIBLE INSTANCES (fallback) ============\r\ndef collect_category(bic):\r\n    return list(FilteredElementCollector(doc)\r\n                .OfCategory(bic)\r\n                .WhereElementIsNotElementType()\r\n                .ToElements())\r\n\r\nall_openings = []\r\nif subtract_openings:\r\n    all_openings = (collect_category(BuiltInCategory.OST_Doors)\r\n                    + collect_category(BuiltInCategory.OST_Windows))\r\n\r\n# Doors, for measuring PAINTED reveal/return surfaces INSIDE the\r\n# opening (the wall-thickness jamb + head returns). These faces are\r\n# perpendicular to the room-boundary plane, so the room-boundary\r\n# sweep can never see them - yet they are painted and Revit's native\r\n# takeoff counts them. Collected independently of the fallback\r\n# opening-deduction list.\r\ncapture_door_reveals = True\r\n# Deduct the portion of each reveal COVERED by the door's own geometry\r\n# (lining / frame / leaf), so only the visible painted return is\r\n# counted - not the full wall face. Done by subtracting the door's\r\n# real solids from a thin slab hugging the reveal, so it adapts to\r\n# whatever each family models. False -> report the whole painted face.\r\ndeduct_frame_coverage = True\r\nall_doors = collect_category(BuiltInCategory.OST_Doors)\r\n\r\nall_casework = []\r\nif subtract_casework:\r\n    for inst in collect_category(BuiltInCategory.OST_Casework):\r\n        keep = False\r\n        try:\r\n            if isinstance(inst.Host, Wall):\r\n                keep = True\r\n        except Exception:\r\n            pass\r\n        if not keep:\r\n            try:\r\n                for cid in InstanceVoidCutUtils.GetElementsBeingCut(inst):\r\n                    if isinstance(doc.GetElement(cid), Wall):\r\n                        keep = True\r\n                        break\r\n            except Exception:\r\n                pass\r\n        if keep:\r\n            all_casework.append(inst)\r\n\r\n# ============ INTERIOR (MEZZANINE) SLAB COLLECTION ============\r\n# A mezzanine is a slab INSIDE a room, not between rooms. Correct\r\n# setup: Room Bounding UNCHECKED on the slab, so the room volume\r\n# stays whole (full height). But a non-bounding slab never appears\r\n# in boundary faces, so its finishes would be invisible. This pass\r\n# collects non-bounding floors; per room, any that sit inside the\r\n# room's volume contribute their real top faces as FLOOR finish\r\n# (mezzanine deck) and bottom faces as CEILING finish (soffit).\r\ninterior_slabs = []\r\nfor _f in collect_category(BuiltInCategory.OST_Floors):\r\n    try:\r\n        _rb = _f.get_Parameter(BuiltInParameter.WALL_ATTR_ROOM_BOUNDING)\r\n        if _rb is not None and _rb.AsInteger() == 0:\r\n            interior_slabs.append(_f)\r\n    except Exception:\r\n        pass\r\n\r\n# Non-room-bounding interior WALLS (hanging / partial-height /\r\n# freestanding partitions inside a room). Like interior slabs,\r\n# a non-bounding wall never appears in boundary faces, so its\r\n# finish would be invisible. Per room, any that sit inside the\r\n# room's volume contribute BOTH side faces as wall finish\r\n# (a freestanding partition is finished on both sides).\r\ninterior_walls = []\r\nfor _w in collect_category(BuiltInCategory.OST_Walls):\r\n    try:\r\n        _rb = _w.get_Parameter(BuiltInParameter.WALL_ATTR_ROOM_BOUNDING)\r\n        if _rb is not None and _rb.AsInteger() == 0:\r\n            interior_walls.append(_w)\r\n    except Exception:\r\n        pass\r\n\r\n# ========= AUTO-ADJUST ROOM UPPER LIMITS (sloped ceilings) =========\r\n# Revit rule: a room's volume can NEVER rise above its Upper Limit\r\n# + Offset - bounding ceilings only clip WITHIN that allowance. A\r\n# sloped ceiling climbing above the limit leaves the room sliced\r\n# flat, missing the wedge beneath the slope. Fix: raise each room's\r\n# Upper Offset just above the highest overlapping ceiling/roof.\r\n# Raise-only, minimal, with a small margin; the ceiling still clips\r\n# the volume, so extra headroom is harmless.\r\nadjusted_rooms = 0\r\nabove_extended = 0\r\nif auto_adjust_limits:\r\n    TransactionManager.Instance.EnsureInTransaction(doc)\r\n    _top_boxes = []\r\n    for c in (collect_category(BuiltInCategory.OST_Ceilings)\r\n              + collect_category(BuiltInCategory.OST_Floors)\r\n              + collect_category(BuiltInCategory.OST_Roofs)):\r\n        try:\r\n            bb = c.get_BoundingBox(None)\r\n            if bb is not None:\r\n                _top_boxes.append(bb)\r\n        except Exception:\r\n            pass\r\n\r\n    # --- Data for \"room directly above on the next level\" ---------\r\n    # Level elevations (ft), sorted, to find the level just above a\r\n    # room's base; and the plan footprint + level of every placed\r\n    # room in the model, to test whether one sits directly overhead.\r\n    _level_zs = []\r\n    for _lv in collect_category(BuiltInCategory.OST_Levels):\r\n        try:\r\n            _level_zs.append(_lv.Elevation)\r\n        except Exception:\r\n            pass\r\n    _level_zs = sorted(set(_level_zs))\r\n\r\n    def _next_level_above(z):\r\n        for _lz in _level_zs:\r\n            if _lz > z + 1.0:   # strictly above (skip the room's own level)\r\n                return _lz\r\n        return None\r\n\r\n    def _room_level_z(r):\r\n        try:\r\n            if r.Level is not None:\r\n                return r.Level.Elevation\r\n        except Exception:\r\n            pass\r\n        try:\r\n            _bb = r.get_BoundingBox(None)\r\n            if _bb is not None:\r\n                return _bb.Min.Z\r\n        except Exception:\r\n            pass\r\n        return None\r\n\r\n    _above_room_info = []   # (level_z, plan_bbox)\r\n    for _r in collect_category(BuiltInCategory.OST_Rooms):\r\n        try:\r\n            if _r.Area <= 0:\r\n                continue\r\n            _lz = _room_level_z(_r)\r\n            _rbb2 = _r.get_BoundingBox(None)\r\n            if _lz is not None and _rbb2 is not None:\r\n                _above_room_info.append((_lz, _rbb2))\r\n        except Exception:\r\n            pass\r\n\r\n    def _room_sits_above(rbb, nl):\r\n        \"\"\"A placed room is on level nl AND overlaps rbb in plan.\"\"\"\r\n        for (_lz, _bb2) in _above_room_info:\r\n            if abs(_lz - nl) > 1.0:\r\n                continue\r\n            if (_bb2.Max.X < rbb.Min.X or _bb2.Min.X > rbb.Max.X\r\n                    or _bb2.Max.Y < rbb.Min.Y or _bb2.Min.Y > rbb.Max.Y):\r\n                continue\r\n            return True\r\n        return False\r\n\r\n    for room in rooms:\r\n        try:\r\n            if room is None or room.Area <= 0:\r\n                continue\r\n            rbb = room.get_BoundingBox(None)\r\n            if rbb is None:\r\n                continue\r\n            base_z = rbb.Min.Z\r\n            needed_top = None\r\n            for bb in _top_boxes:\r\n                # plan (XY) overlap with the room?\r\n                if (bb.Max.X < rbb.Min.X or bb.Min.X > rbb.Max.X\r\n                        or bb.Max.Y < rbb.Min.Y or bb.Min.Y > rbb.Max.Y):\r\n                    continue\r\n                # only elements starting clearly ABOVE this room's\r\n                # base (excludes the room's own floor slab) and\r\n                # within a sane band (avoids grabbing storeys far\r\n                # above and ballooning the room upward)\r\n                if (bb.Min.Z < base_z + 1.0\r\n                        or bb.Min.Z > base_z + SCAN_BAND):\r\n                    continue\r\n                t = bb.Max.Z + LIMIT_MARGIN\r\n                if needed_top is None or t > needed_top:\r\n                    needed_top = t\r\n\r\n            # If a room on the NEXT level sits directly above, make sure\r\n            # this room reaches that level. This is more reliable than\r\n            # the ceiling/floor scan: the separating floor may be non-\r\n            # room-bounding (so it is skipped as a clip), yet the room\r\n            # above proves the space is occupied to that level. Target\r\n            # the level plane exactly - any real bounding floor still\r\n            # clips the volume at its underside; without one, the room\r\n            # simply meets the upper room's base (no overlap).\r\n            _above_here = False\r\n            if extend_to_room_above:\r\n                _nl = _next_level_above(base_z)\r\n                if _nl is not None and _room_sits_above(rbb, _nl):\r\n                    _above_here = True\r\n                    if needed_top is None or _nl > needed_top:\r\n                        needed_top = _nl\r\n\r\n            if needed_top is None:\r\n                continue\r\n            if rbb.Max.Z >= needed_top - (LIMIT_MARGIN * 0.5):\r\n                continue  # room already reaches high enough\r\n            p = room.get_Parameter(BuiltInParameter.ROOM_UPPER_OFFSET)\r\n            if p is None or p.IsReadOnly:\r\n                continue\r\n            ref_z = base_z\r\n            try:\r\n                if room.UpperLimit is not None:\r\n                    ref_z = room.UpperLimit.Elevation\r\n            except Exception:\r\n                pass\r\n            new_off = needed_top - ref_z\r\n            if new_off > p.AsDouble():\r\n                p.Set(new_off)\r\n                adjusted_rooms += 1\r\n                if _above_here:\r\n                    above_extended += 1\r\n        except Exception:\r\n            continue\r\n    if adjusted_rooms > 0:\r\n        doc.Regenerate()  # rebuild room volumes BEFORE measuring\r\n        _msg = (\"AUTO-ADJUST: raised the upper limit of {} room(s) so \"\r\n                \"sloped ceilings/roofs now bound the full room volume \"\r\n                \"(raise-only, highest overlapping ceiling + margin).\"\r\n                .format(adjusted_rooms))\r\n        if above_extended > 0:\r\n            _msg += (\" Of these, {} room(s) were extended up to the \"\r\n                     \"NEXT LEVEL because a room sits directly above \"\r\n                     \"(multi-level room height).\").format(above_extended)\r\n        report.append(_msg)\r\n\r\n# ==================== FALLBACK DEDUCTION SIZE ====================\r\ndef opening_area(inst):\r\n    \"\"\"Deduction size, internal sq ft. Priority (instance then type):\r\n    1. 'Void Area'  2. 'Void Width' x 'Void Height'\r\n    3. built-in family Width x Height  4. 'Width' x 'Height'.\"\"\"\r\n    holders = [inst]\r\n    try:\r\n        t = doc.GetElement(inst.GetTypeId())\r\n        if t is not None:\r\n            holders.append(t)\r\n    except Exception:\r\n        pass\r\n    for holder in holders:\r\n        va = holder.LookupParameter(\"Void Area\")\r\n        if (va and va.HasValue\r\n                and va.StorageType == StorageType.Double\r\n                and va.AsDouble() > 0):\r\n            return va.AsDouble()\r\n    for holder in holders:\r\n        vw = holder.LookupParameter(\"Void Width\")\r\n        vh = holder.LookupParameter(\"Void Height\")\r\n        if (vw and vh and vw.HasValue and vh.HasValue\r\n                and vw.StorageType == StorageType.Double\r\n                and vh.StorageType == StorageType.Double):\r\n            return vw.AsDouble() * vh.AsDouble()\r\n    for holder in holders:\r\n        w = holder.get_Parameter(BuiltInParameter.FAMILY_WIDTH_PARAM)\r\n        h = holder.get_Parameter(BuiltInParameter.FAMILY_HEIGHT_PARAM)\r\n        if w and h and w.HasValue and h.HasValue:\r\n            return w.AsDouble() * h.AsDouble()\r\n        w = holder.LookupParameter(\"Width\")\r\n        h = holder.LookupParameter(\"Height\")\r\n        if (w and h and w.HasValue and h.HasValue\r\n                and w.StorageType == StorageType.Double\r\n                and h.StorageType == StorageType.Double):\r\n            return w.AsDouble() * h.AsDouble()\r\n    return 0.0\r\n\r\ndef get_room_phase(room):\r\n    try:\r\n        p = room.get_Parameter(BuiltInParameter.ROOM_PHASE)\r\n        if p:\r\n            return doc.GetElement(p.AsElementId())\r\n    except Exception:\r\n        pass\r\n    return None\r\n\r\ndef door_window_deduction(room, phase, exact_wall_ids):\r\n    \"\"\"Openings in FALLBACK-measured walls only - geometric walls\r\n    already have openings removed in their face geometry.\"\"\"\r\n    total, count = 0.0, 0\r\n    for inst in all_openings:\r\n        try:\r\n            host = inst.Host\r\n            if (host is not None and isinstance(host, Wall)\r\n                    and host.Id in exact_wall_ids):\r\n                continue  # already net in geometric measurement\r\n            fr = inst.get_FromRoom(phase) if phase else inst.FromRoom\r\n            tr = inst.get_ToRoom(phase) if phase else inst.ToRoom\r\n        except Exception:\r\n            continue\r\n        if (fr is not None and fr.Id == room.Id) or \\\r\n           (tr is not None and tr.Id == room.Id):\r\n            a = opening_area(inst)\r\n            if a > 0:\r\n                total += a\r\n                count += 1\r\n    return total, count\r\n\r\ndef casework_deduction(room, phase, exact_wall_ids):\r\n    \"\"\"Casework voids in FALLBACK-measured walls only.\"\"\"\r\n    total, count = 0.0, 0\r\n    for inst in all_casework:\r\n        try:\r\n            r = inst.get_Room(phase) if phase else inst.Room\r\n        except Exception:\r\n            continue\r\n        if r is None or r.Id != room.Id:\r\n            continue\r\n        cut_geometric = False\r\n        try:\r\n            host = inst.Host\r\n            if (host is not None and isinstance(host, Wall)\r\n                    and host.Id in exact_wall_ids):\r\n                cut_geometric = True\r\n            if not cut_geometric:\r\n                for cid in InstanceVoidCutUtils.GetElementsBeingCut(inst):\r\n                    if cid in exact_wall_ids:\r\n                        cut_geometric = True\r\n                        break\r\n        except Exception:\r\n            pass\r\n        if cut_geometric:\r\n            continue  # void already carved out of the measured face\r\n        a = opening_area(inst)\r\n        if a > 0:\r\n            total += a\r\n            count += 1\r\n    return total, count\r\n\r\n# ================= GEOMETRIC WALL MEASUREMENT ====================\r\ndef planar_data(face):\r\n    try:\r\n        if isinstance(face, PlanarFace):\r\n            return face.Origin, face.FaceNormal.Normalize()\r\n    except Exception:\r\n        pass\r\n    return None, None\r\n\r\ndef element_faces(elem):\r\n    \"\"\"EVERY face of the element's built geometry. Required instead\r\n    of HostObjectUtils.GetSideFaces/GetTopFaces because those can\r\n    return one reference per side, COLLAPSING Split Face regions -\r\n    each split region is its own Face carrying its own (painted)\r\n    material, and only full-geometry harvesting preserves them.\r\n    Downstream, exact_subface_area's coplanarity filter selects the\r\n    room-facing faces, so harvesting everything is safe.\r\n    Stacked walls: parent geometry can be empty, so member walls\r\n    are harvested individually.\"\"\"\r\n    faces = []\r\n    elems = [elem]\r\n    try:\r\n        if isinstance(elem, Wall) and elem.IsStackedWall:\r\n            elems = [doc.GetElement(i)\r\n                     for i in elem.GetStackedWallMemberIds()]\r\n    except Exception:\r\n        pass\r\n    opt = Options()\r\n    opt.IncludeNonVisibleObjects = False\r\n    opt.DetailLevel = ViewDetailLevel.Fine  # never coarsen regions\r\n    # REQUIRED for paint detection: Document.IsPainted resolves a\r\n    # face through its Reference, which Revit only populates when\r\n    # ComputeReferences is True. Without it every IsPainted call\r\n    # fails and every face silently reports as unpainted, which\r\n    # would collapse the paint/layer split this script exists to\r\n    # produce. Do not turn this off.\r\n    opt.ComputeReferences = True\r\n    for e in elems:\r\n        if e is None:\r\n            continue\r\n        try:\r\n            geo = e.get_Geometry(opt)\r\n            if geo is None:\r\n                continue\r\n            for obj in geo:\r\n                try:\r\n                    for f in obj.Faces:\r\n                        faces.append(f)\r\n                except Exception:\r\n                    continue\r\n        except Exception:\r\n            continue\r\n    return faces\r\n\r\ndef wall_side_faces(wall):\r\n    \"\"\"All wall faces; coplanarity filtering picks the room side.\"\"\"\r\n    return element_faces(wall)\r\n\r\ndef _directional_faces(elem, want_up):\r\n    \"\"\"Planar faces pointing up (top finishes) or down (undersides),\r\n    from full geometry so Split Face regions survive. Used for\r\n    mezzanine slabs where whole faces are summed without clipping.\"\"\"\r\n    out = []\r\n    for f in element_faces(elem):\r\n        _o, _n = planar_data(f)\r\n        if _o is None:\r\n            continue\r\n        if want_up and _n.Z > 0.5:\r\n            out.append(f)\r\n        elif (not want_up) and _n.Z < -0.5:\r\n            out.append(f)\r\n    return out\r\n\r\ndef host_top_faces(elem):\r\n    return _directional_faces(elem, True)\r\n\r\ndef host_bottom_faces(elem):\r\n    return _directional_faces(elem, False)\r\n\r\ndef exact_subface_area(subface, host_faces, owner=None):\r\n    \"\"\"Net finish area within this room: intersect the room's\r\n    boundary subface with the host's coplanar real face(s), whose\r\n    geometry already excludes every cut. Each host face knows its\r\n    material, so the result is keyed per material - a stacked or\r\n    split-region wall (tiles below, paint above) yields separate\r\n    entries per finish.\r\n    Returns (total_area, {materialId: area}) in sq ft, or None if\r\n    the method cannot apply.\"\"\"\r\n    room_face = subface.GetSubface()\r\n    r_origin, r_normal = planar_data(room_face)\r\n    if r_origin is None:\r\n        return None\r\n    total = 0.0\r\n    mats = {}\r\n    matched = False\r\n    for hf in host_faces:\r\n        h_origin, h_normal = planar_data(hf)\r\n        if h_origin is None:\r\n            continue\r\n        # same plane? (normals parallel/antiparallel + zero offset)\r\n        if abs(abs(r_normal.DotProduct(h_normal)) - 1.0) > 0.01:\r\n            continue\r\n        if abs((h_origin - r_origin).DotProduct(r_normal)) > COPLANAR_TOL:\r\n            continue\r\n        matched = True\r\n        try:\r\n            s_room = GeometryCreationUtilities.CreateExtrusionGeometry(\r\n                room_face.GetEdgesAsCurveLoops(), r_normal, EXTRUDE_T)\r\n            s_host = GeometryCreationUtilities.CreateExtrusionGeometry(\r\n                hf.GetEdgesAsCurveLoops(), r_normal, EXTRUDE_T)\r\n            inter = BooleanOperationsUtils.ExecuteBooleanOperation(\r\n                s_room, s_host, BooleanOperationsType.Intersect)\r\n            if inter is not None and inter.Volume > 1e-9:\r\n                a = inter.Volume / EXTRUDE_T\r\n                total += a\r\n                mkey = face_material_key(owner, hf)\r\n                mats[mkey] = mats.get(mkey, 0.0) + a\r\n        except Exception:\r\n            return None  # any boolean failure -> fall back entirely\r\n    # A coplanar face matched but the intersection came back (near-)\r\n    # empty: that is a silent geometric failure (winding/orientation\r\n    # quirks can yield an empty boolean without throwing), NOT a real\r\n    # \"zero finish area\". Return None so the planar fallback engages\r\n    # and the report's fallback note discloses it - never let a\r\n    # failed measurement masquerade as a confident 0.\r\n    if not matched or total <= 1e-6:\r\n        return None\r\n    return (total, mats)\r\n\r\n# ========================== UTILITIES ============================\r\ndef boundary_element(subface):\r\n    try:\r\n        return doc.GetElement(subface.SpatialBoundaryElement.HostElementId)\r\n    except Exception:\r\n        return None\r\n\r\ndef set_area(r, pname, value):\r\n    p = r.LookupParameter(pname)\r\n    if p and not p.IsReadOnly:\r\n        p.Set(value)\r\n        return True\r\n    return False\r\n\r\ndef room_label(room):\r\n    try:\r\n        num = room.get_Parameter(BuiltInParameter.ROOM_NUMBER)\r\n        name = room.get_Parameter(BuiltInParameter.ROOM_NAME)\r\n        return \"{} {}\".format(\r\n            num.AsString() if num else \"\",\r\n            name.AsString() if name else \"\").strip() or str(room.Id)\r\n    except Exception:\r\n        return str(room.Id)\r\n\r\ndef split_key(mkey):\r\n    \"\"\"(material, is_painted) from a material key, tolerant of a\r\n    bare material passed by mistake (treated as unpainted).\"\"\"\r\n    try:\r\n        mid, painted = mkey\r\n        return (mid, bool(painted))\r\n    except Exception:\r\n        return (mkey, False)\r\n\r\ndef material_info(mkey):\r\n    \"\"\"(name, code, is_painted) for a material key. A key is the\r\n    tuple (material, is_painted), where material is either an\r\n    ElementId from Face.MaterialElementId or a descriptive string\r\n    like '(fallback)'. Code = first non-empty of the Material's\r\n    'Code', 'Mark', or 'Keynote' parameter (office codes like\r\n    VBJ/VBF). is_painted carries Document.IsPainted through to the\r\n    output so paint can be costed apart from layer materials.\"\"\"\r\n    mid, painted = split_key(mkey)\r\n    if isinstance(mid, str):\r\n        return (mid, \"\", painted)\r\n    try:\r\n        m = doc.GetElement(mid) if mid is not None else None\r\n        if m is None:\r\n            return (\"(no material)\", \"\", painted)\r\n        name = m.Name\r\n        code = \"\"\r\n        for pname in (\"Code\", \"Mark\", \"Keynote\"):\r\n            p = m.LookupParameter(pname)\r\n            if p and p.HasValue:\r\n                v = p.AsString()\r\n                if v:\r\n                    code = v\r\n                    break\r\n        return (name, code, painted)\r\n    except Exception:\r\n        return (\"(no material)\", \"\", painted)\r\n\r\n# (roomNum, roomName, surface, matName, matCode, isPainted, m2)\r\ncsv_rows = []\r\n\r\n# Keys for area that belongs to no identifiable face material.\r\n# Never painted by definition: arithmetic fallback area is not\r\n# measured off a face at all, so it carries no paint status.\r\nFALLBACK_KEY = (\"(fallback)\", False)\r\n\r\ndef face_material_key(owner, f):\r\n    \"\"\"Material key for a face: (material, is_painted).\r\n\r\n    Document.IsPainted positively identifies painted faces (Split\r\n    Face regions the user painted), whose MaterialElementId then\r\n    reports the PAINT material. Unpainted faces report their wall-\r\n    type LAYER material instead ('EM Wall', 'Default Wall', ...) -\r\n    the same material Revit shows in a Material Takeoff, and the\r\n    same material Revit's paint takeoff EXCLUDES when filtered on\r\n    'Material: As Paint = Yes'.\r\n\r\n    Both cases resolve to a MaterialElementId, so the id alone\r\n    cannot tell paint from substrate. The flag is what makes the\r\n    two reconcilable: painted rows are the paint cost basis,\r\n    unpainted rows are substrate that must not be paint-costed\r\n    (or are missing paint in the model - a modelling flag).\r\n\r\n    NOTE: IsPainted needs face References, so the geometry must be\r\n    harvested with Options.ComputeReferences = True (element_faces\r\n    does this). Without it every face reads as unpainted.\"\"\"\r\n    painted = False\r\n    try:\r\n        if owner is not None and doc.IsPainted(owner.Id, f):\r\n            painted = True\r\n    except Exception:\r\n        painted = False\r\n    try:\r\n        mid = f.MaterialElementId\r\n    except Exception:\r\n        return (\"(no material)\", painted)\r\n    try:\r\n        if mid is None or mid == ElementId.InvalidElementId:\r\n            return (\"(no material)\", painted)\r\n    except Exception:\r\n        pass\r\n    return (mid, painted)\r\n\r\n# ============ DOOR-REVEAL (OPENING RETURN) PAINT =================\r\n# The room-boundary sweep only matches wall faces COPLANAR with the\r\n# room plane, so the wall-thickness returns inside a door opening\r\n# (two jambs + head) are never seen - their normals are ~perpendicular\r\n# to the room face. They are real painted surfaces that Revit's native\r\n# takeoff counts. This pass measures them directly off the host wall's\r\n# geometry and attributes each opening's reveal paint to ONE room, so\r\n# the model-wide total matches Revit without double-counting.\r\n\r\n# element_faces() re-extracts solid geometry each call; cache per wall\r\n# so a wall hosting several doors (and already swept for its room face)\r\n# is harvested once.\r\n_wall_faces_cache = {}\r\ndef wall_faces_cached(wall):\r\n    try:\r\n        wid = wall.Id\r\n    except Exception:\r\n        return element_faces(wall)\r\n    key = wid.IntegerValue if hasattr(wid, \"IntegerValue\") else wid\r\n    fs = _wall_faces_cache.get(key)\r\n    if fs is None:\r\n        fs = element_faces(wall)\r\n        _wall_faces_cache[key] = fs\r\n    return fs\r\n\r\ndef _face_centroid(f):\r\n    \"\"\"A representative world point on the face, averaged from its\r\n    edge vertices (robust for planar reveal faces).\"\"\"\r\n    try:\r\n        pts = []\r\n        for loop in f.GetEdgesAsCurveLoops():\r\n            for c in loop:\r\n                pts.append(c.GetEndPoint(0))\r\n        n = len(pts)\r\n        if n == 0:\r\n            return None\r\n        sx = sum(p.X for p in pts) / n\r\n        sy = sum(p.Y for p in pts) / n\r\n        sz = sum(p.Z for p in pts) / n\r\n        return XYZ(sx, sy, sz)\r\n    except Exception:\r\n        return None\r\n\r\ndef _pt_in_bbox(pt, bb, pad):\r\n    if pt is None or bb is None:\r\n        return False\r\n    return (bb.Min.X - pad <= pt.X <= bb.Max.X + pad and\r\n            bb.Min.Y - pad <= pt.Y <= bb.Max.Y + pad and\r\n            bb.Min.Z - pad <= pt.Z <= bb.Max.Z + pad)\r\n\r\nREVEAL_PAD = 0.05  # ft tolerance around the door bbox\r\n\r\n_door_solids_cache = {}\r\ndef _collect_solids(gobj, out):\r\n    \"\"\"Flatten a door's GeometryElement to world-coordinate solids,\r\n    descending through the family's GeometryInstances.\"\"\"\r\n    try:\r\n        if isinstance(gobj, Solid):\r\n            if gobj.Volume > 1e-9 and gobj.Faces.Size > 0:\r\n                out.append(gobj)\r\n        elif isinstance(gobj, GeometryInstance):\r\n            for g2 in gobj.GetInstanceGeometry():\r\n                _collect_solids(g2, out)\r\n    except Exception:\r\n        pass\r\n\r\ndef door_solids(door):\r\n    \"\"\"Real solids of the door instance (lining, frame, leaf, glass),\r\n    cached per door.\"\"\"\r\n    try:\r\n        did = door.Id\r\n        key = did.IntegerValue if hasattr(did, \"IntegerValue\") else did\r\n    except Exception:\r\n        key = None\r\n    if key is not None and key in _door_solids_cache:\r\n        return _door_solids_cache[key]\r\n    solids = []\r\n    try:\r\n        opt = Options()\r\n        opt.ComputeReferences = False\r\n        opt.IncludeNonVisibleObjects = False\r\n        opt.DetailLevel = ViewDetailLevel.Fine\r\n        geo = door.get_Geometry(opt)\r\n        if geo is not None:\r\n            for g in geo:\r\n                _collect_solids(g, solids)\r\n    except Exception:\r\n        pass\r\n    if key is not None:\r\n        _door_solids_cache[key] = solids\r\n    return solids\r\n\r\ndef visible_reveal_area(face, fnormal, fcentroid, door_c, solids):\r\n    \"\"\"Area of a reveal face NOT covered by the door's own geometry.\r\n\r\n    Extrude the face into the opening as a THIN slab (toward the door\r\n    centre), then subtract the door solids: the lining/frame that sits\r\n    against the reveal carves out its covered footprint, leaving the\r\n    visible painted return. Any boolean failure returns the full face\r\n    area (never over-deducts).\"\"\"\r\n    full = face.Area\r\n    if not solids:\r\n        return full\r\n    try:\r\n        # Extrude toward the door interior so the slab overlaps the\r\n        # lining that sits against the reveal.\r\n        sign = 1.0\r\n        try:\r\n            if (door_c - fcentroid).DotProduct(fnormal) < 0:\r\n                sign = -1.0\r\n        except Exception:\r\n            sign = 1.0\r\n        slab = GeometryCreationUtilities.CreateExtrusionGeometry(\r\n            face.GetEdgesAsCurveLoops(), fnormal, REVEAL_SLAB_T * sign)\r\n    except Exception:\r\n        return full\r\n    for sd in solids:\r\n        try:\r\n            diff = BooleanOperationsUtils.ExecuteBooleanOperation(\r\n                slab, sd, BooleanOperationsType.Difference)\r\n            if diff is not None:\r\n                slab = diff\r\n        except Exception:\r\n            continue\r\n    try:\r\n        vis = slab.Volume / REVEAL_SLAB_T\r\n    except Exception:\r\n        return full\r\n    # Clamp to [0, full]: booleans can leave slivers.\r\n    if vis < 0:\r\n        return 0.0\r\n    if vis > full:\r\n        return full\r\n    return vis\r\n\r\ndef door_reveal_paint(host_wall, door):\r\n    \"\"\"{(material,is_painted): area} for the host wall's PAINTED faces\r\n    that bound this door's opening (jamb + head returns).\r\n\r\n    A reveal face is (a) NOT parallel to the wall's room faces - its\r\n    normal is roughly perpendicular to Wall.Orientation, so it is\r\n    neither of the two big room planes; (b) painted; and (c) sitting\r\n    inside the door's world bounding box. Only painted faces are\r\n    collected - this pass exists to capture paint, and Wall.Orientation\r\n    cleanly separates returns from the room faces the main sweep\r\n    already measured, so there is no double counting.\"\"\"\r\n    out = {}\r\n    try:\r\n        wtx = host_wall.Orientation.Normalize()\r\n    except Exception:\r\n        return out\r\n    dbb = door.get_BoundingBox(None)\r\n    if dbb is None:\r\n        return out\r\n    door_c = None\r\n    try:\r\n        door_c = XYZ((dbb.Min.X + dbb.Max.X) / 2.0,\r\n                     (dbb.Min.Y + dbb.Max.Y) / 2.0,\r\n                     (dbb.Min.Z + dbb.Max.Z) / 2.0)\r\n    except Exception:\r\n        door_c = None\r\n    solids = door_solids(door) if deduct_frame_coverage else []\r\n    for f in wall_faces_cached(host_wall):\r\n        o, n = planar_data(f)\r\n        if o is None:\r\n            continue\r\n        # Skip the two room-facing planes (normal parallel to wall\r\n        # orientation) - those are the main sweep's territory.\r\n        if abs(n.DotProduct(wtx)) > 0.5:\r\n            continue\r\n        try:\r\n            if not doc.IsPainted(host_wall.Id, f):\r\n                continue\r\n        except Exception:\r\n            continue\r\n        _fc = _face_centroid(f)\r\n        if not _pt_in_bbox(_fc, dbb, REVEAL_PAD):\r\n            continue\r\n        # Only the return NOT hidden behind the door's lining/frame.\r\n        if deduct_frame_coverage and solids and door_c is not None:\r\n            area = visible_reveal_area(f, n, _fc, door_c, solids)\r\n        else:\r\n            area = f.Area\r\n        if area <= 0.005:\r\n            continue\r\n        mkey = face_material_key(host_wall, f)\r\n        out[mkey] = out.get(mkey, 0.0) + area\r\n    return out\r\n\r\n# Per-ELEMENT finish totals, for wall/floor/ceiling schedules.\r\n# Accumulated during measurement (a wall between two rooms sums\r\n# both room-side contributions), written after the main loop onto\r\n# any element that carries the same-named parameter.\r\nelem_wall_area    = {}   # wall ElementId    -> sq ft (whole finish face)\r\nelem_wall_paint   = {}   # wall ElementId    -> sq ft (PAINTED face only)\r\nelem_floor_area   = {}   # floor ElementId   -> sq ft (top finish)\r\nelem_ceiling_area = {}   # host ElementId    -> sq ft (underside)\r\ndef _acc(d, eid, val):\r\n    if eid is None or val <= 0:\r\n        return\r\n    d[eid] = d.get(eid, 0.0) + val\r\n\r\ndef _painted_of(mats):\r\n    \"\"\"Sum of the PAINTED areas in a {(material,is_painted): area}\r\n    dict. Unpainted layer/substrate faces (EM Wall, Default Wall,\r\n    fallback) are excluded, so this is the paint cost basis.\"\"\"\r\n    _t = 0.0\r\n    for _k, _v in mats.items():\r\n        if split_key(_k)[1]:\r\n            _t += _v\r\n    return _t\r\n\r\ndef _id_str(eid):\r\n    \"\"\"ElementId -> its integer as a string, across API versions\r\n    (Revit 2024+ renamed ElementId.IntegerValue to .Value).\"\"\"\r\n    try:\r\n        return str(eid.Value)\r\n    except Exception:\r\n        pass\r\n    try:\r\n        return str(eid.IntegerValue)\r\n    except Exception:\r\n        return str(eid)\r\n\r\ndef _painted_mat_count(mats):\r\n    \"\"\"How many DISTINCT painted materials a face set carries. >1\r\n    means a wall with two paint colours on one face (split-face);\r\n    such a wall's single per-element paint value would repeat on\r\n    both paint rows of a takeoff and double-count - flagged for QC.\"\"\"\r\n    _s = set()\r\n    for _k, _v in mats.items():\r\n        if split_key(_k)[1] and _v > 0.005:\r\n            _s.add(split_key(_k)[0])\r\n    return len(_s)\r\n\r\n# Walls carrying >1 paint colour on their room face - a takeoff on\r\n# 'Wall Paint Area' would double-count these. Collected for the QC\r\n# report so they can be handled by hand (rare under the one-finish-\r\n# per-wall office standard).\r\nmultipaint_wall_ids = set()\r\n\r\n# ========================== MAIN LOOP ============================\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\nprocessed_count = 0\r\nskipped_unplaced = 0\r\n\r\nfor room in rooms:\r\n    try:\r\n        if room is None or room.Area <= 0:\r\n            skipped_unplaced += 1\r\n            continue\r\n        if not SpatialElementGeometryCalculator.CanCalculateGeometry(room):\r\n            report.append(\"Skipped (geometry not computable): {}\".format(\r\n                room_label(room)))\r\n            continue\r\n    except Exception:\r\n        report.append(\"Skipped (invalid element)\")\r\n        continue\r\n\r\n    wall_exact   = 0.0   # geometric (already net of every cut)\r\n    gross_wall   = 0.0   # fallback (planar subface, needs deductions)\r\n    floor_area   = 0.0\r\n    ceiling_area = 0.0\r\n    virtual_side = 0.0\r\n    exact_wall_ids = set()\r\n    exact_faces, fallback_faces = 0, 0\r\n    floor_geo, floor_fb = 0, 0\r\n    ceil_geo, ceil_fb = 0, 0\r\n    net_floor_slab = 0.0   # footprint over a real slab (walkable area)\r\n    room_footprint = 0.0   # full bottom-boundary area (incl. open-below)\r\n    open_below     = 0.0   # bottom footprint with NO slab under it\r\n    room_mats = {}  # (surface, materialKey) -> area sq ft\r\n\r\n    def _add_mats(surface, mats):\r\n        for k, v in mats.items():\r\n            key = (surface, k)\r\n            room_mats[key] = room_mats.get(key, 0.0) + v\r\n    # Which element served as the \"ceiling\" (Danish priority chain:\r\n    # Ceiling > slab above > roof) - Revit's clipping picks the\r\n    # nearest bounding element; we RECORD which one it was so the\r\n    # source of every ceiling area is auditable per room.\r\n    ceil_src = {\"ceiling\": 0.0, \"slab above\": 0.0,\r\n                \"roof\": 0.0, \"other\": 0.0}\r\n\r\n    def _ceil_source_key(elem):\r\n        try:\r\n            cid = elem.Category.Id if (elem is not None\r\n                                       and elem.Category) else None\r\n        except Exception:\r\n            cid = None\r\n        if cid == CEILING_CAT_ID:\r\n            return \"ceiling\"\r\n        if cid == FLOOR_CAT_ID:\r\n            return \"slab above\"\r\n        if cid == ROOF_CAT_ID:\r\n            return \"roof\"\r\n        return \"other\"\r\n\r\n    try:\r\n        results = calculator.CalculateSpatialElementGeometry(room)\r\n        room_solid = results.GetGeometry()\r\n\r\n        for face in room_solid.Faces:\r\n            for subface in results.GetBoundaryFaceInfo(face):\r\n                area = subface.GetSubface().Area  # internal sq ft\r\n                stype = subface.SubfaceType\r\n\r\n                if stype == SubfaceType.Bottom:\r\n                    # FLOOR: measure the floor's real top finish face\r\n                    # (voids/openings already absent), clipped to room.\r\n                    # A bottom subface exists across the WHOLE room\r\n                    # footprint - including area that is open to below.\r\n                    # Only footprint backed by a real floor/foundation\r\n                    # slab counts as net (walkable) floor area; the rest\r\n                    # is a floor void and is deducted.\r\n                    elem = boundary_element(subface)\r\n                    room_footprint += area\r\n                    _has_slab = False\r\n                    try:\r\n                        _has_slab = (elem is not None\r\n                                     and elem.Category is not None\r\n                                     and elem.Category.Id in SLAB_CAT_IDS)\r\n                    except Exception:\r\n                        _has_slab = False\r\n                    res = None\r\n                    if use_geometric and _has_slab:\r\n                        res = exact_subface_area(\r\n                            subface, host_top_faces(elem), elem)\r\n                    _fid = elem.Id if _has_slab else None\r\n                    if res is not None:\r\n                        # Geometric result is already clipped to the\r\n                        # slab's real top face, so any open-to-below\r\n                        # part of this subface is excluded here too.\r\n                        floor_area += res[0]\r\n                        net_floor_slab += res[0]\r\n                        _add_mats(\"Floor\", res[1])\r\n                        _acc(elem_floor_area, _fid, res[0])\r\n                        floor_geo += 1\r\n                    elif _has_slab:\r\n                        # A real slab backs this subface but the boolean\r\n                        # clip failed (curved/edited slab). The slab\r\n                        # exists, so its planar footprint still counts.\r\n                        floor_area += area\r\n                        net_floor_slab += area\r\n                        _add_mats(\"Floor\", {FALLBACK_KEY: area})\r\n                        _acc(elem_floor_area, _fid, area)\r\n                        floor_fb += 1\r\n                    else:\r\n                        # OPEN TO BELOW: no floor/foundation slab under\r\n                        # this footprint -> not walkable, not floor\r\n                        # finish. Deducted from the net floor area.\r\n                        open_below += area\r\n                    continue\r\n                if stype == SubfaceType.Top:\r\n                    # CEILING: the bounding element's real bottom\r\n                    # finish face, clipped to room. Works for Ceiling\r\n                    # elements, slab-above undersides, and roofs.\r\n                    elem = boundary_element(subface)\r\n                    res = None\r\n                    if use_geometric and elem is not None:\r\n                        res = exact_subface_area(\r\n                            subface, host_bottom_faces(elem), elem)\r\n                    _cid2 = elem.Id if elem is not None else None\r\n                    if res is not None:\r\n                        amt = res[0]\r\n                        _add_mats(\"Ceiling\", res[1])\r\n                        ceil_geo += 1\r\n                    else:\r\n                        amt = area\r\n                        _add_mats(\"Ceiling\", {FALLBACK_KEY: area})\r\n                        ceil_fb += 1\r\n                    ceiling_area += amt\r\n                    ceil_src[_ceil_source_key(elem)] += amt\r\n                    _acc(elem_ceiling_area, _cid2, amt)\r\n                    continue\r\n                if stype != SubfaceType.Side:\r\n                    continue\r\n\r\n                elem = boundary_element(subface)\r\n                if elem is None or (elem.Category is not None\r\n                        and elem.Category.Id == SEP_LINE_CAT_ID):\r\n                    virtual_side += area\r\n                    continue\r\n\r\n                # Steeply sloped ceilings/roofs can classify as Side\r\n                # subfaces - route them to the CEILING bucket so they\r\n                # never leak into the wall total.\r\n                _cat = elem.Category.Id if elem.Category else None\r\n                if _cat == CEILING_CAT_ID or _cat == ROOF_CAT_ID:\r\n                    res = None\r\n                    if use_geometric:\r\n                        res = exact_subface_area(\r\n                            subface, host_bottom_faces(elem), elem)\r\n                    if res is not None:\r\n                        amt = res[0]\r\n                        _add_mats(\"Ceiling\", res[1])\r\n                        ceil_geo += 1\r\n                    else:\r\n                        amt = area\r\n                        _add_mats(\"Ceiling\", {FALLBACK_KEY: area})\r\n                        ceil_fb += 1\r\n                    ceiling_area += amt\r\n                    ceil_src[_ceil_source_key(elem)] += amt\r\n                    _acc(elem_ceiling_area, elem.Id, amt)\r\n                    continue\r\n\r\n                res = None\r\n                if use_geometric and isinstance(elem, Wall):\r\n                    res = exact_subface_area(\r\n                        subface, wall_side_faces(elem), elem)\r\n\r\n                if res is not None:\r\n                    wall_exact += res[0]\r\n                    _add_mats(\"Walls\", res[1])\r\n                    _acc(elem_wall_area, elem.Id, res[0])\r\n                    _acc(elem_wall_paint, elem.Id, _painted_of(res[1]))\r\n                    if _painted_mat_count(res[1]) > 1:\r\n                        multipaint_wall_ids.add(elem.Id)\r\n                    exact_wall_ids.add(elem.Id)\r\n                    exact_faces += 1\r\n                else:\r\n                    # Fallback = arithmetic planar area, no paint\r\n                    # resolution, so it feeds the total finish face\r\n                    # only - never the painted (cost) parameter.\r\n                    gross_wall += area\r\n                    _acc(elem_wall_area, elem.Id, area)\r\n                    fallback_faces += 1\r\n\r\n    except Exception as e:\r\n        report.append(\"FAILED {}: {}\".format(room_label(room), str(e)))\r\n        continue\r\n\r\n    # ---- Arithmetic deductions for FALLBACK walls only ----\r\n    phase = get_room_phase(room)\r\n\r\n    open_total, open_count = (0.0, 0)\r\n    if subtract_openings and fallback_faces > 0:\r\n        open_total, open_count = door_window_deduction(\r\n            room, phase, exact_wall_ids)\r\n\r\n    cw_total, cw_count = (0.0, 0)\r\n    if subtract_casework and fallback_faces > 0:\r\n        cw_total, cw_count = casework_deduction(\r\n            room, phase, exact_wall_ids)\r\n\r\n    # ---- Interior (mezzanine) slabs inside this room's volume ----\r\n    # Probe a point just above the slab's top (or below its bottom):\r\n    # if that air belongs to this room, the slab lives inside it.\r\n    # Real faces are summed, so voids/stair openings in the slab\r\n    # are already excluded from both contributions.\r\n    mezz_floor, mezz_ceil, mezz_count = 0.0, 0.0, 0\r\n    for slab in interior_slabs:\r\n        try:\r\n            bb = slab.get_BoundingBox(None)\r\n            if bb is None:\r\n                continue\r\n            cx = (bb.Min.X + bb.Max.X) / 2.0\r\n            cy = (bb.Min.Y + bb.Max.Y) / 2.0\r\n            inside = False\r\n            try:\r\n                inside = room.IsPointInRoom(\r\n                    XYZ(cx, cy, bb.Max.Z + 0.3))\r\n            except Exception:\r\n                pass\r\n            if not inside:\r\n                try:\r\n                    inside = room.IsPointInRoom(\r\n                        XYZ(cx, cy, bb.Min.Z - 0.3))\r\n                except Exception:\r\n                    pass\r\n            if not inside:\r\n                continue\r\n            top_a = 0.0\r\n            for f in host_top_faces(slab):\r\n                top_a += f.Area\r\n                _mk2 = face_material_key(slab, f)\r\n                _add_mats(\"Floor\", {_mk2: f.Area})\r\n            bot_a = 0.0\r\n            for f in host_bottom_faces(slab):\r\n                bot_a += f.Area\r\n                _mk2 = face_material_key(slab, f)\r\n                _add_mats(\"Ceiling\", {_mk2: f.Area})\r\n            if top_a > 0 or bot_a > 0:\r\n                mezz_floor += top_a\r\n                mezz_ceil += bot_a\r\n                mezz_count += 1\r\n                _acc(elem_floor_area, slab.Id, top_a)\r\n                _acc(elem_ceiling_area, slab.Id, bot_a)\r\n        except Exception:\r\n            continue\r\n    floor_area += mezz_floor\r\n    ceiling_area += mezz_ceil\r\n\r\n    # ---- Interior (hanging/freestanding) walls inside this room ----\r\n    # Probe the wall's midpoint; if it belongs to this room, add both\r\n    # side faces (vertical faces) as wall finish. Voids/openings are\r\n    # already absent from the real faces. Paint-aware per face.\r\n    hangw_area, hangw_count = 0.0, 0\r\n    for hw in interior_walls:\r\n        try:\r\n            bb = hw.get_BoundingBox(None)\r\n            if bb is None:\r\n                continue\r\n            cx = (bb.Min.X + bb.Max.X) / 2.0\r\n            cy = (bb.Min.Y + bb.Max.Y) / 2.0\r\n            cz = (bb.Min.Z + bb.Max.Z) / 2.0\r\n            inside = False\r\n            try:\r\n                inside = room.IsPointInRoom(XYZ(cx, cy, cz))\r\n            except Exception:\r\n                pass\r\n            if not inside:\r\n                continue\r\n            # Collect vertical (side) faces; prefer PAINTED faces\r\n            # only - a hanging wall / bulkhead is usually finished\r\n            # on the visible side(s) only, its back concealed behind\r\n            # casework. Counting both sides doubles the quantity.\r\n            _side_faces = []\r\n            for f in element_faces(hw):\r\n                _o, _n = planar_data(f)\r\n                if _o is None or abs(_n.Z) > 0.5:\r\n                    continue  # skip non-vertical faces\r\n                _side_faces.append((f, _n))\r\n            _painted_faces = []\r\n            for f, _n in _side_faces:\r\n                try:\r\n                    if doc.IsPainted(hw.Id, f):\r\n                        _painted_faces.append((f, _n))\r\n                except Exception:\r\n                    pass\r\n            # If any face is painted, count ONLY painted faces.\r\n            # If none is painted, fall back to the single face whose\r\n            # normal points most toward the room center (the visible\r\n            # side), never both - avoids doubling on unpainted walls.\r\n            if _painted_faces:\r\n                _use_faces = [f for f, _n in _painted_faces]\r\n            elif _side_faces:\r\n                try:\r\n                    _rc = room.Location.Point\r\n                except Exception:\r\n                    _rc = None\r\n                if _rc is not None:\r\n                    _best, _bestdot = None, -2.0\r\n                    for f, _n in _side_faces:\r\n                        _fo, _fn = planar_data(f)\r\n                        _dir = (_rc - _fo)\r\n                        _dl = _dir.GetLength()\r\n                        if _dl < 1e-9:\r\n                            continue\r\n                        _d = _fn.DotProduct(_dir.Normalize())\r\n                        if _d > _bestdot:\r\n                            _bestdot, _best = _d, f\r\n                    _use_faces = [_best] if _best is not None else []\r\n                else:\r\n                    # no room point: take one face only (first)\r\n                    _use_faces = [_side_faces[0][0]]\r\n            else:\r\n                _use_faces = []\r\n            _wf_area = 0.0\r\n            for f in _use_faces:\r\n                _wf_area += f.Area\r\n                _mk3 = face_material_key(hw, f)\r\n                _add_mats(\"Walls\", {_mk3: f.Area})\r\n                _acc(elem_wall_area, hw.Id, f.Area)\r\n                if split_key(_mk3)[1]:\r\n                    _acc(elem_wall_paint, hw.Id, f.Area)\r\n            if _wf_area > 0:\r\n                hangw_area += _wf_area\r\n                hangw_count += 1\r\n        except Exception:\r\n            continue\r\n\r\n    # ---- Painted door reveals / returns inside openings ----\r\n    # The wall-thickness returns (jambs + head) around each door are\r\n    # perpendicular to the room plane, so the boundary sweep misses\r\n    # them. Measure them off the host wall and attribute each door's\r\n    # reveal to ONE room - its FromRoom, else ToRoom - so the model\r\n    # total matches Revit's native takeoff with no double counting.\r\n    reveal_paint, reveal_count = 0.0, 0\r\n    if capture_door_reveals:\r\n        for _dr in all_doors:\r\n            try:\r\n                _host = _dr.Host\r\n                if not isinstance(_host, Wall):\r\n                    continue\r\n                _fr = _dr.get_FromRoom(phase) if phase else _dr.FromRoom\r\n                _tr = _dr.get_ToRoom(phase) if phase else _dr.ToRoom\r\n                _owner = _fr if _fr is not None else _tr\r\n                if _owner is None or _owner.Id != room.Id:\r\n                    continue\r\n                _rmats = door_reveal_paint(_host, _dr)\r\n                if not _rmats:\r\n                    continue\r\n                _add_mats(\"Reveals\", _rmats)\r\n                for _mk, _av in _rmats.items():\r\n                    _acc(elem_wall_paint, _host.Id, _av)\r\n                    reveal_paint += _av\r\n                reveal_count += 1\r\n            except Exception:\r\n                continue\r\n\r\n    # Fallback wall area (net of arithmetic deductions) cannot be\r\n    # attributed to a specific material - record it transparently.\r\n    _fb_net = max(gross_wall - open_total - cw_total, 0.0)\r\n    if _fb_net > 0.005:\r\n        _add_mats(\"Walls\", {FALLBACK_KEY: _fb_net})\r\n\r\n    # ---- Parameters = SUM of room-visible material areas ----\r\n    # Same measurement basis as Revit's 'Material: Area' (real face\r\n    # areas, openings excluded, paint-aware) restricted to the room\r\n    # boundary. Deriving the three parameters FROM the material\r\n    # ledger makes 'parameter == sum of its material rows' true BY\r\n    # CONSTRUCTION - one ledger, no parallel arithmetic to drift.\r\n    def _sum_surface(_s):\r\n        _t = 0.0\r\n        for _key in room_mats:\r\n            if _key[0] == _s:\r\n                _t += room_mats[_key]\r\n        return _t\r\n\r\n    # Painted-only subset of a surface. This is the figure that\r\n    # reconciles with Revit's Material Takeoff filtered on\r\n    # 'Material: As Paint = Yes' (modulo room clipping); the\r\n    # remainder is layer/substrate material, not a paint quantity.\r\n    def _sum_surface_painted(_s):\r\n        _t = 0.0\r\n        for _key in room_mats:\r\n            if _key[0] == _s and split_key(_key[1])[1]:\r\n                _t += room_mats[_key]\r\n        return _t\r\n\r\n    # Painted door reveals are wall finish too - fold them into both\r\n    # the finish total and the paint total (all reveal entries are\r\n    # painted, so they add the same amount to each).\r\n    net_wall = _sum_surface(\"Walls\") + _sum_surface(\"Reveals\")\r\n    paint_wall = (_sum_surface_painted(\"Walls\")\r\n                  + _sum_surface_painted(\"Reveals\"))\r\n    floor_area = _sum_surface(\"Floor\")\r\n    ceiling_area = _sum_surface(\"Ceiling\")\r\n\r\n    ok_w = set_area(room, wall_param_name, net_wall)\r\n    ok_p = set_area(room, paint_param_name, paint_wall)\r\n    ok_f = set_area(room, floor_param_name, floor_area)\r\n    ok_c = set_area(room, ceiling_param_name, ceiling_area)\r\n    ok_n = set_area(room, net_floor_param_name, net_floor_slab)\r\n\r\n    msg = (\"{} | Wall net: {:.2f} SF\"\r\n           \" [geometric {:.2f} SF on {} face(s)\"\r\n           \" + fallback {:.2f} SF on {} face(s)\"\r\n           \" - {} drs/wins {:.2f} - {} casework {:.2f}]\"\r\n           \" | Floor: {:.2f} SF | Ceiling: {:.2f} SF\").format(\r\n        room_label(room), net_wall,\r\n        wall_exact, exact_faces,\r\n        gross_wall, fallback_faces,\r\n        open_count, open_total, cw_count, cw_total,\r\n        floor_area, ceiling_area)\r\n\r\n    msg += (\" | paint basis: {:.2f} SF painted\"\r\n            \" + {:.2f} SF unpainted layer material\").format(\r\n        paint_wall, max(net_wall - paint_wall, 0.0))\r\n\r\n    # Net (code-countable) floor area vs the full room footprint.\r\n    _open_ded = max(room_footprint - net_floor_slab, 0.0)\r\n    msg += (\" | NET FLOOR (on slab): {:.2f} SF / {:.2f} m2\"\r\n            \" [footprint {:.2f} SF - open-to-below {:.2f} SF / \"\r\n            \"{:.2f} m2]\").format(\r\n        net_floor_slab, net_floor_slab * FT2_TO_M2,\r\n        room_footprint, _open_ded, _open_ded * FT2_TO_M2)\r\n    if open_below > 0.005:\r\n        msg += \" (no-slab footprint {:.2f} SF)\".format(open_below)\r\n\r\n    _srcs = \", \".join(\r\n        \"{} {:.2f} SF\".format(k, ceil_src[k])\r\n        for k in CEIL_SRC_ORDER if ceil_src[k] > 0.005)\r\n    if _srcs:\r\n        msg += \" | ceiling from: \" + _srcs\r\n\r\n    if mezz_count > 0:\r\n        msg += (\" | mezzanine: {} slab(s) adding floor {:.2f} SF\"\r\n                \" + ceiling {:.2f} SF\").format(\r\n            mezz_count, mezz_floor, mezz_ceil)\r\n    if hangw_count > 0:\r\n        msg += (\" | interior walls: {} adding {:.2f} SF\"\r\n                \" finish (both sides)\").format(\r\n            hangw_count, hangw_area)\r\n    if reveal_count > 0:\r\n        msg += (\" | door reveals: {} opening(s) adding {:.2f} SF /\"\r\n                \" {:.2f} m2 painted return\").format(\r\n            reveal_count, reveal_paint, reveal_paint * FT2_TO_M2)\r\n\r\n    if virtual_side > 0:\r\n        msg += \" | excluded {:.2f} SF separation-line boundary\".format(\r\n            virtual_side)\r\n    if ceiling_area == 0:\r\n        msg += \" | NOTE: no top boundary (no bounding ceiling?)\"\r\n    if floor_fb > 0:\r\n        msg += (\" | NOTE: {} floor face(s) via fallback (real slab,\"\r\n                \" planar area; openings WITHIN that slab not deducted\"\r\n                \" there)\").format(floor_fb)\r\n    if ceil_fb > 0:\r\n        msg += (\" | NOTE: {} ceiling face(s) via fallback\"\r\n                \" (ceiling voids NOT deducted there)\").format(ceil_fb)\r\n\r\n    missing = [n for n, ok in\r\n               [(wall_param_name, ok_w),\r\n                (paint_param_name, ok_p),\r\n                (floor_param_name, ok_f),\r\n                (ceiling_param_name, ok_c),\r\n                (net_floor_param_name, ok_n)] if not ok]\r\n    if missing:\r\n        msg += \" | MISSING PARAMS: \" + \", \".join(missing)\r\n\r\n    report.append(msg)\r\n    processed_count += 1\r\n\r\n    # ---- Per-room per-material rows for the CSV export ----\r\n    try:\r\n        _rp = room.get_Parameter(BuiltInParameter.ROOM_NUMBER)\r\n        _np = room.get_Parameter(BuiltInParameter.ROOM_NAME)\r\n        _rnum = _rp.AsString() if _rp else \"\"\r\n        _rnam = _np.AsString() if _np else \"\"\r\n    except Exception:\r\n        _rnum, _rnam = \"\", \"\"\r\n    for (_surf, _mkey), _aval in room_mats.items():\r\n        if _aval <= 0.005:\r\n            continue\r\n        _mname, _mcode, _mpaint = material_info(_mkey)\r\n        csv_rows.append((_rnum, _rnam, _surf, _mname, _mcode,\r\n                         u\"Yes\" if _mpaint else u\"No\",\r\n                         _aval * FT2_TO_M2))\r\n\r\n# ========= WRITE PER-ELEMENT TOTALS (element schedules) =========\r\n# Same parameter names, bound by you (Manage > Project Parameters >\r\n# add Walls / Floors / Ceilings / Roofs categories to the existing\r\n# parameters). The script writes wherever the parameter exists and\r\n# is writable; elements without it are skipped silently.\r\nelems_written = 0\r\nfor _d, _pn in ((elem_wall_area, wall_param_name),\r\n                (elem_wall_paint, paint_param_name),\r\n                (elem_floor_area, floor_param_name),\r\n                (elem_ceiling_area, ceiling_param_name)):\r\n    for _eid in _d:\r\n        try:\r\n            _el = doc.GetElement(_eid)\r\n            if _el is None:\r\n                continue\r\n            _p = _el.LookupParameter(_pn)\r\n            if (_p and not _p.IsReadOnly\r\n                    and _p.StorageType == StorageType.Double):\r\n                _p.Set(_d[_eid])\r\n                elems_written += 1\r\n        except Exception:\r\n            continue\r\n\r\n# Optional per-wall breakdown STRING - the nearest in-schedule\r\n# equivalent of a per-material-row value. Create a TEXT instance\r\n# parameter named 'Wall Finish Breakdown' bound to Walls and every\r\n# wall gets e.g. 'VEJ 3.12 m2 / VEK 5.28 m2' (room-clipped, code\r\n# preferred, name where no code). Walls without the parameter are\r\n# skipped silently.\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\n# ================== CSV EXPORT (per room per material) ==============\r\nif export_csv_path and csv_rows:\r\n    try:\r\n        import io\r\n        with io.open(export_csv_path, \"w\", encoding=\"utf-8-sig\") as fh:\r\n            fh.write(u\"Room Number,Room Name,Surface,Material,\"\r\n                     u\"Material Code,Is Painted,Area (m2)\\n\")\r\n            for r in csv_rows:\r\n                vals = []\r\n                for v in r[:6]:\r\n                    s = u\"{}\".format(v).replace(u'\"', u\"'\")\r\n                    if u\",\" in s:\r\n                        s = u'\"' + s + u'\"'\r\n                    vals.append(s)\r\n                fh.write(u\",\".join(vals) + u\",{:.3f}\\n\".format(r[6]))\r\n        _paint_rows = sum(1 for r in csv_rows if r[5] == u\"Yes\")\r\n        _paint_m2 = sum(r[6] for r in csv_rows if r[5] == u\"Yes\")\r\n        _other_m2 = sum(r[6] for r in csv_rows if r[5] != u\"Yes\")\r\n        report.append(\"CSV EXPORT: {} material row(s) written to {}\"\r\n                      .format(len(csv_rows), export_csv_path))\r\n        report.append(\r\n            \"PAINT SPLIT (all surfaces, all rooms): {} painted row(s) \"\r\n            \"= {:.3f} m2 (filter Is Painted = Yes for the paint cost \"\r\n            \"basis; this is what Revit's Material Takeoff counts under \"\r\n            \"'Material: As Paint = Yes'), plus {:.3f} m2 on unpainted \"\r\n            \"layer materials, which paint costing must exclude - or \"\r\n            \"which flag finishes missing from the model.\"\r\n            .format(_paint_rows, _paint_m2, _other_m2))\r\n    except Exception as e:\r\n        report.append(\"CSV EXPORT FAILED: {}\".format(str(e)))\r\n\r\nsummary = (\"[\" + SCRIPT_VERSION + \"] SUMMARY: measured {} placed \"\r\n           \"room(s); ignored {} unplaced/\"\r\n           \"unenclosed room(s). Wall mode: {}.\").format(\r\n    processed_count, skipped_unplaced,\r\n    \"GEOMETRIC (real finish faces, cuts excluded) with per-wall \"\r\n    \"arithmetic fallback\" if use_geometric else \"arithmetic only\")\r\nreport.insert(0, summary)\r\n\r\nif elems_written > 0:\r\n    report.append(\r\n        \"ELEMENT WRITE: finish-area totals written onto {} wall/\"\r\n        \"floor/ceiling element(s) - visible in element schedules \"\r\n        \"once the parameters are bound to those categories.\".format(\r\n            elems_written))\r\n\r\n# ---- QC for the Wall Paint Area / takeoff reconciliation ----\r\nreport.append(\r\n    \"SCHEDULE FIX: to make a Wall Material Takeoff match this \"\r\n    \"engine's painted CSV, schedule the NEW '{0}' field (NOT 'Wall \"\r\n    \"Finish Area') and filter 'Material: As Paint = Yes'. Summed per \"\r\n    \"material it equals the CSV's Is Painted = Yes rows. 'Wall Finish \"\r\n    \"Area' still holds the whole finish face (paint + substrate), so \"\r\n    \"summing IT per material over-reports paint by the unpainted \"\r\n    \"layer area - that was the 31.72-vs-30.677 gap.\".format(\r\n        paint_param_name))\r\n\r\nif multipaint_wall_ids:\r\n    _mp_ids = \", \".join(_id_str(i) for i in multipaint_wall_ids)\r\n    report.append(\r\n        \"QC - MULTI-PAINT WALLS: {} wall(s) carry more than one paint \"\r\n        \"colour on their room face (split-face). '{}' stores one value \"\r\n        \"per wall, so a takeoff would repeat it on each paint row and \"\r\n        \"DOUBLE-COUNT these. Handle by hand or split the wall. \"\r\n        \"Element Ids: {}\".format(\r\n            len(multipaint_wall_ids), paint_param_name, _mp_ids))\r\n\r\nOUT = report",
+      "Engine": "PythonNet3",
+      "VariableInputPorts": true,
+      "Id": "f580d295785a4aa3b7b1e1b957bd55c9",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "c7e63eb4f56340348df7d0d64a6eba85",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "18e23eb38ca146f7b39b37a0eba88415",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "a6faef748fa44cf89a97ca3fff4491ce",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "6938fdd09aea43bdb390b6993eaec33a",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "108d7e8537794129887efe504f309ee8",
+          "Name": "IN[4]",
+          "Description": "Input #4",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "cfec91206c8a4405b3c77808ea43b65c",
+          "Name": "IN[5]",
+          "Description": "Input #5",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "2902135bf53d46d9a041465b31fe7887",
+          "Name": "IN[6]",
+          "Description": "Input #6",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "744572d86883422289ca431cb245fdbc",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "cf17a1136b8f4c5c870528b0a32de863",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "34cee2d17ce44b29a98ff8b8837ac3c8",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 200.0,
+      "WatchHeight": 200.0,
+      "Id": "5082b172a8244a4ea5f2c8067634b01b",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "cd28e2b60d4643679ed2775386b4bdb9",
+          "Name": "",
+          "Description": "Node to show output from",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "5abeb35fc4c940a48c81eadb8bfcfbb0",
+          "Name": "",
+          "Description": "Node output",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Visualizes a node's output"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "e981d62f9c2c4c72a2805b3eb689d8f1",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "c3bce611e04c4d009584442e0fdabd52",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a string.",
+      "InputValue": "C:\\Temp\\FinishAreas010.csv"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "d2323e8be9a049ec83a2186c0c94bbf1",
+      "End": "f8151a0f31d0427881f7ff49a3c1af67",
+      "Id": "d183d4fc488c454e9e57a68113011b4b",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "3461d826cc9d4e7398009a10ecc3f6f9",
+      "End": "c7e63eb4f56340348df7d0d64a6eba85",
+      "Id": "b1d472c9223f4d76a710a12d69427f57",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "54831874976f475f8933b6a3946e896d",
+      "End": "18e23eb38ca146f7b39b37a0eba88415",
+      "Id": "4d0ff5beea8d4772af051fd325555062",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "1be4639cb87448e6bdbb1653f1642e56",
+      "End": "a6faef748fa44cf89a97ca3fff4491ce",
+      "Id": "73121e3fc60e4fadbc7b985962b47517",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "99b59314b3c04fbfaadeed0e2a971c0d",
+      "End": "6938fdd09aea43bdb390b6993eaec33a",
+      "Id": "ae3b8b619c8a43a49c91b3086dde73a9",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "994b9687df404eb8b16d712f77c7ee28",
+      "End": "108d7e8537794129887efe504f309ee8",
+      "Id": "ac14dd97866a41099678adbd44b9851d",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "744572d86883422289ca431cb245fdbc",
+      "End": "cd28e2b60d4643679ed2775386b4bdb9",
+      "Id": "731535f3af124e4986284bbd6a08f3fd",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "34cee2d17ce44b29a98ff8b8837ac3c8",
+      "End": "cfec91206c8a4405b3c77808ea43b65c",
+      "Id": "8a43448635cb4095ba50a170708ea677",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "c3bce611e04c4d009584442e0fdabd52",
+      "End": "2902135bf53d46d9a041465b31fe7887",
+      "Id": "142f1a4903a649c591954284bdccf0cd",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [
+    {
+      "Name": "DynamoIronPython3",
+      "Version": "1.6.0",
+      "ReferenceType": "Package",
+      "Nodes": [
+        "f580d295785a4aa3b7b1e1b957bd55c9"
+      ]
+    }
+  ],
+  "EnableLegacyPolyCurveBehavior": false,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "4.0",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "10.3",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "4.0.2.3852",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "cfa486043a8a49958c0bb3f786462c92",
+        "Name": "Categories",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -61.95780290755306,
+        "Y": -540.8216663013529
+      },
+      {
+        "Id": "6f57f29b53d24b2cb2c2e42af850bb2f",
+        "Name": "All Elements of Category",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 275.5715276204162,
+        "Y": -535.4133398121221
+      },
+      {
+        "Id": "d387fde07a3243698475c4aaad6580f2",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -56.914368711607494,
+        "Y": -392.51615820592866
+      },
+      {
+        "Id": "f91489e54fe34264859c5d6b90643cc9",
+        "Name": "Boolean",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 16.85040630827416,
+        "Y": -224.63477312120932
+      },
+      {
+        "Id": "f580d295785a4aa3b7b1e1b957bd55c9",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 653.7158026176052,
+        "Y": -363.01224412966064
+      },
+      {
+        "Id": "cf17a1136b8f4c5c870528b0a32de863",
+        "Name": "Boolean",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 9.158045022893475,
+        "Y": -100.78851678067088
+      },
+      {
+        "Id": "5082b172a8244a4ea5f2c8067634b01b",
+        "Name": "Watch",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 883.3629937490729,
+        "Y": -356.6236529041914
+      },
+      {
+        "Id": "e981d62f9c2c4c72a2805b3eb689d8f1",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 174.53832798131543,
+        "Y": 55.019221010834826
+      }
+    ],
+    "Annotations": [
+      {
+        "Id": "a3fb4b92fa184ff394c04003c886825e",
+        "Title": "DO NOT MODIFY!",
+        "DescriptionText": "Description <Double click here to edit group description>",
+        "IsExpanded": true,
+        "WidthAdjustment": 0.0,
+        "HeightAdjustment": 0.0,
+        "UserSetWidth": 0.0,
+        "UserSetHeight": 0.0,
+        "Nodes": [
+          "cfa486043a8a49958c0bb3f786462c92",
+          "6f57f29b53d24b2cb2c2e42af850bb2f",
+          "d387fde07a3243698475c4aaad6580f2",
+          "f91489e54fe34264859c5d6b90643cc9",
+          "f580d295785a4aa3b7b1e1b957bd55c9",
+          "cf17a1136b8f4c5c870528b0a32de863",
+          "5082b172a8244a4ea5f2c8067634b01b",
+          "e981d62f9c2c4c72a2805b3eb689d8f1"
+        ],
+        "HasNestedGroups": false,
+        "Left": -71.95780290755306,
+        "Top": -613.8216663013529,
+        "Width": 1242.3207966566258,
+        "Height": 819.8408873121878,
+        "FontSize": 36.0,
+        "GroupStyleId": "00000000-0000-0000-0000-000000000000",
+        "InitialTop": -540.8216663013529,
+        "InitialHeight": 740.8408873121878,
+        "TextblockHeight": 63.0,
+        "IsOptionalInPortsCollapsed": false,
+        "IsUnconnectedOutPortsCollapsed": false,
+        "HasToggledOptionalInPorts": false,
+        "HasToggledUnconnectedOutPorts": false,
+        "Background": "#FFC1D676"
+      }
+    ],
+    "X": 400.3227818624828,
+    "Y": 582.6313625970689,
+    "Zoom": 0.7438347081605938
+  }
+}

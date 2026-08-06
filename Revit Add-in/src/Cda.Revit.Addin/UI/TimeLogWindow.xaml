@@ -1,0 +1,130 @@
+<Window x:Class="Cda.Revit.Addin.UI.TimeLogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Time Tracking"
+        Width="880"
+        Height="620"
+        MinWidth="700"
+        MinHeight="480"
+        ShowInTaskbar="False"
+        WindowStyle="ToolWindow">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- What the tracker is doing right now. First thing on screen, because it is the
+             only question someone opens this window with. -->
+        <Border Grid.Row="0"
+                BorderBrush="#FF2576B2"
+                BorderThickness="1"
+                Padding="12"
+                Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock x:Name="StatusLine" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock x:Name="StatusDetail" Margin="0,4,0,0" Opacity="0.8" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="Show" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox x:Name="RangeBox" Width="150" SelectionChanged="OnRangeChanged">
+                <ComboBoxItem Content="Today" IsSelected="True" />
+                <ComboBoxItem Content="This week" />
+                <ComboBoxItem Content="This month" />
+                <ComboBoxItem Content="Last 90 days" />
+            </ComboBox>
+            <Button Content="Refresh" Width="90" Height="26" Margin="12,0,0,0" Click="OnRefresh" />
+        </StackPanel>
+
+        <ListView Grid.Row="2" x:Name="EntryList">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Started" Width="130" DisplayMemberBinding="{Binding Started}" />
+                    <GridViewColumn Header="Minutes" Width="70" DisplayMemberBinding="{Binding Minutes}" />
+                    <GridViewColumn Header="Project" Width="170" DisplayMemberBinding="{Binding Project}" />
+                    <GridViewColumn Header="View" Width="150" DisplayMemberBinding="{Binding View}" />
+                    <GridViewColumn Header="Template" Width="100" DisplayMemberBinding="{Binding Template}" />
+                    <GridViewColumn Header="Type" Width="80" DisplayMemberBinding="{Binding Type}" />
+                    <GridViewColumn Header="Description" Width="180" DisplayMemberBinding="{Binding Description}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <TextBlock Grid.Row="3" x:Name="TotalLine" Margin="0,8,0,0" FontWeight="SemiBold" />
+
+        <Expander Grid.Row="4" Header="Settings" Margin="0,12,0,0">
+            <StackPanel Margin="0,10,0,0">
+
+                <CheckBox x:Name="EnabledBox" Content="Track time automatically" Margin="0,0,0,8" />
+
+                <CheckBox x:Name="ForegroundBox"
+                          Content="Count time as idle when Revit is not the front window"
+                          Margin="0,0,0,4" />
+                <TextBlock Margin="20,0,0,8" Opacity="0.75" TextWrapping="Wrap"
+                           Text="Recommended. Without it, an hour of email with Revit open behind it is billed to whatever view was last active." />
+
+                <CheckBox x:Name="PromptBox"
+                          Content="Ask what to do with idle time when I come back"
+                          Margin="0,0,0,8" />
+
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Idle threshold (minutes)" FontWeight="SemiBold" />
+                        <TextBox x:Name="IdleBox" Margin="0,4,0,0" Padding="4" Width="80" HorizontalAlignment="Left" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="Ignore visits shorter than (seconds)" FontWeight="SemiBold" />
+                        <TextBox x:Name="MinimumBox" Margin="0,4,0,0" Padding="4" Width="80" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Text="Shared folder (leave empty for local only)" FontWeight="SemiBold" />
+                <Grid Margin="0,4,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="SharedFolderBox" Grid.Column="0" Padding="4" />
+                    <Button Grid.Column="1" Content="Browse…" Width="90" Height="26" Margin="8,0,0,0" Click="OnBrowse" />
+                    <!-- A folder that exists is not the same as a folder you can write to.
+                         This actually writes, reads back and deletes a probe file. -->
+                    <Button Grid.Column="2" Content="Test path" Width="90" Height="26" Margin="8,0,0,0" Click="OnTestPath" />
+                </Grid>
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="CSV separator" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <ComboBox x:Name="SeparatorBox" Width="220" Margin="8,0,0,0">
+                        <ComboBoxItem Content="Comma  ,  (standard CSV)" />
+                        <ComboBoxItem Content="Semicolon  ;  (Danish Excel)" />
+                    </ComboBox>
+                </StackPanel>
+
+                <TextBlock x:Name="PathsLine" Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,8" />
+
+                <Button Content="Save settings" Width="120" Height="26" HorizontalAlignment="Left" Click="OnSaveSettings" />
+            </StackPanel>
+        </Expander>
+
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="Add Manual Entry…" Width="150" Height="28" Click="OnAddManual" />
+            <Button Content="Export CSV…" Width="120" Height="28" Margin="8,0,0,0" Click="OnExport" />
+            <Button Content="Close" Width="90" Height="28" Margin="8,0,0,0" IsCancel="True" />
+        </StackPanel>
+
+    </Grid>
+</Window>

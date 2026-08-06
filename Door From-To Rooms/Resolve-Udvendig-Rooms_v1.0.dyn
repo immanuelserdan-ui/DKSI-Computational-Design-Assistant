@@ -1,0 +1,305 @@
+{
+  "Uuid": "5b789c66-ccd9-4f6b-a779-0899b9abf743",
+  "IsCustomNode": false,
+  "Description": "Replaces Udvendig room references on doors with the room on the other side, writing to the 02/03/04/05-SCRP parameters. Revit 2027 / Dynamo 4.0.",
+  "Name": "Resolve-Udvendig-Rooms_v1.0",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "342a56ab53354414a18141b0b614f3cd",
+      "Name": "Apply changes? (True = write parameters)",
+      "Type": "boolean",
+      "Type2": "boolean",
+      "Value": "true",
+      "Description": "Writes the four SCRP room parameters on every door."
+    },
+    {
+      "Id": "018766223c0949f58af12a1300ebb996",
+      "Name": "Report CSV path",
+      "Type": "string",
+      "Type2": "string",
+      "Value": "C:\\Users\\user\\Desktop\\Claude Projects\\Computational Design Assistant\\Door From-To Rooms\\udvendig-report.csv",
+      "Description": "Detail report; a matching .log is written beside it."
+    }
+  ],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "f9845dea83504f9fb61777e829895e82",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "b0c26dc398e34c439125095ed4a1a49b",
+          "Name": "sel",
+          "Description": "null",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "sel = null;"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "342a56ab53354414a18141b0b614f3cd",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "c81293e27f9e4c0e96531318c89c116c",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "018766223c0949f58af12a1300ebb996",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "16573bf15de1463bba5f609938140c4e",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a string.",
+      "InputValue": "C:\\Users\\user\\Desktop\\Claude Projects\\Computational Design Assistant\\Door From-To Rooms\\udvendig-report.csv"
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# -*- coding: utf-8 -*-\r\n\"\"\"\r\nResolve 'Udvendig' in the Door Casing FROM / TO schedules\r\n=========================================================\r\n\r\nDynamo Python Script node. Engine: PythonNet3 (Dynamo 4.0) / CPython3.\r\n\r\nTHE RULE\r\n--------\r\nA door that leads outside reports an exterior room -- 'Udvendig', 'Udvendig 1',\r\n'Udvendig 3' -- on one side. The client does not want to see it. Wherever a\r\nside reads 'Udvendig...', it is replaced by the room on the OTHER side of the\r\nsame door:\r\n\r\n    door 629:  FROM 'Room 1' (44)  TO 'Udvendig 1' (47)\r\n            -> FROM 'Room 1' (44)  TO 'Room 1'     (44)\r\n\r\nWHY IT CANNOT BE DONE IN THE SCHEDULE\r\n-------------------------------------\r\nThe 'Rum nr' / 'Rum' columns are Revit's built-in From Room / To Room fields\r\nwith renamed headings. Those are derived from geometry and are read-only -- no\r\nscript and no schedule setting can put different text in them.\r\n\r\nSo this writes the corrected values into the door's own shared parameters,\r\nwhich exist for exactly this purpose:\r\n\r\n    02-SCRP Num fr   04-SCRP Nam fr      (the FROM side)\r\n    03-SCRP Num to   05-SCRP Nam to      (the TO side)\r\n\r\nThe four schedules then have to read those instead of the built-in fields --\r\na one-time change per schedule, described in the README. After that this script\r\nkeeps them correct.\r\n\r\nThe parameters are always written in full, not just when a substitution\r\nhappens, because they become the schedule's source of truth. Re-running is\r\ntherefore idempotent.\r\n\r\nINPUTS (all optional -- safe defaults)\r\n--------------------------------------\r\nIN[0]  Doors to process. Leave empty/null to process every door.\r\nIN[1]  Apply changes?  (Boolean, default False = report only)\r\nIN[2]  Report CSV path (string, optional; a matching .log is written beside it)\r\n\r\nOUTPUT\r\n------\r\nOUT = [summary_text, detail_rows, warnings]\r\n\"\"\"\r\n\r\nimport os\r\nimport clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import (\r\n    FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId,\r\n    FamilyInstance, StorageType, ViewSchedule, ScheduleFieldType,\r\n    ScheduleFilter, ScheduleSortGroupField,\r\n)\r\n\r\nclr.AddReference('System.Core')\r\nfrom System.Collections.Generic import List\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Configuration\r\n# --------------------------------------------------------------------------\r\n\r\n# Any room whose NAME begins with this (case-insensitive) counts as outside.\r\n# 'Udvendig', 'Udvendig 1' and 'Udvendig 3' all match.\r\nEXTERIOR_PREFIX = \"Udvendig\"\r\n\r\nP_NUM_FROM = \"02-SCRP Num fr\"\r\nP_NAM_FROM = \"04-SCRP Nam fr\"\r\nP_NUM_TO = \"03-SCRP Num to\"\r\nP_NAM_TO = \"05-SCRP Nam to\"\r\n\r\n# Doors whose Comments contain this marker are left alone.\r\nSKIP_MARKER = \"#noroom-auto\"\r\n\r\n# ---- schedule re-pointing -------------------------------------------------\r\n# The 'Rum nr' / 'Rum' columns ship as Revit's built-in From Room / To Room\r\n# fields, which are derived and read-only -- writing the SCRP parameters alone\r\n# changes nothing on screen. This stage swaps those columns over to the SCRP\r\n# parameters, preserving heading, width, alignment and visibility.\r\n#\r\n# It is idempotent: a schedule already pointing at the SCRP parameters is left\r\n# alone. Set False to do the swap by hand instead.\r\nREPOINT_SCHEDULES = True\r\n\r\n# Only schedules whose name contains one of these are touched.\r\nSCHEDULE_NAME_CONTAINS = [\"Door Casing\"]\r\n\r\n# (ScheduleFieldType, room property) -> parameter that should replace it\r\nFIELD_MAP = [\r\n    (\"FromRoom\", BuiltInParameter.ROOM_NUMBER, P_NUM_FROM),\r\n    (\"FromRoom\", BuiltInParameter.ROOM_NAME, P_NAM_FROM),\r\n    (\"ToRoom\", BuiltInParameter.ROOM_NUMBER, P_NUM_TO),\r\n    (\"ToRoom\", BuiltInParameter.ROOM_NAME, P_NAM_TO),\r\n]\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Inputs\r\n# --------------------------------------------------------------------------\r\ndef _in(index, default):\r\n    try:\r\n        value = IN[index]\r\n    except (NameError, IndexError):\r\n        return default\r\n    if value is None or value == \"\":\r\n        return default\r\n    return value\r\n\r\n\r\n_sel = _in(0, None)\r\nif _sel is None:\r\n    selection = []\r\nelif isinstance(_sel, list):\r\n    selection = _sel\r\nelse:\r\n    selection = [_sel]\r\n\r\nAPPLY = bool(_in(1, False))\r\nCSV_PATH = _in(2, None)\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Helpers\r\n# --------------------------------------------------------------------------\r\ndef eid(element_id):\r\n    \"\"\"ElementId -> int. .Value on Revit 2024+, .IntegerValue before that.\"\"\"\r\n    try:\r\n        return int(element_id.Value)\r\n    except AttributeError:\r\n        return element_id.IntegerValue\r\n\r\n\r\ndef p_get(element, name):\r\n    try:\r\n        return element.LookupParameter(name)\r\n    except Exception:\r\n        return None\r\n\r\n\r\ndef bip_str(element, builtin):\r\n    try:\r\n        p = element.get_Parameter(builtin)\r\n    except Exception:\r\n        return \"\"\r\n    if p is None or not p.HasValue or p.StorageType != StorageType.String:\r\n        return \"\"\r\n    return p.AsString() or \"\"\r\n\r\n\r\ndef write_utf8(path, text):\r\n    if not isinstance(text, type(u\"\")):\r\n        text = text.decode(\"utf-8\")\r\n    with open(path, \"wb\") as handle:\r\n        handle.write((u\"﻿\" + text).encode(\"utf-8\"))\r\n\r\n\r\ndef room_of(instance, which):\r\n    \"\"\"The From or To room of a door, resolved in the door's own phase.\r\n\r\n    Revit exposes these as phase-dependent accessors; the bare property is a\r\n    fallback for models with a single phase.\r\n    \"\"\"\r\n    phase = None\r\n    p = instance.get_Parameter(BuiltInParameter.PHASE_CREATED)\r\n    if p is not None:\r\n        phase = doc.GetElement(p.AsElementId())\r\n    if phase is not None:\r\n        try:\r\n            if which == \"From\":\r\n                return instance.get_FromRoom(phase)\r\n            return instance.get_ToRoom(phase)\r\n        except Exception:\r\n            pass\r\n    try:\r\n        return instance.FromRoom if which == \"From\" else instance.ToRoom\r\n    except Exception:\r\n        return None\r\n\r\n\r\ndef room_id(room):\r\n    \"\"\"(number, name) of a room, or ('', '') when there is no room.\"\"\"\r\n    if room is None:\r\n        return \"\", \"\"\r\n    return (bip_str(room, BuiltInParameter.ROOM_NUMBER),\r\n            bip_str(room, BuiltInParameter.ROOM_NAME))\r\n\r\n\r\ndef is_exterior(name):\r\n    return bool(name) and name.strip().lower().startswith(EXTERIOR_PREFIX.lower())\r\n\r\n\r\ndef repoint_schedules(sample_door, apply_now):\r\n    \"\"\"Swap built-in From/To Room columns over to the SCRP shared parameters.\r\n\r\n    Idempotent: a column already pointing at a SCRP parameter is not a\r\n    From/To Room field, so it is simply not matched. Never raises -- a schedule\r\n    that cannot be converted is reported and skipped.\r\n\r\n    Returns (rows, notes).\r\n    \"\"\"\r\n    rows = []\r\n    notes = []\r\n\r\n    if sample_door is None:\r\n        notes.append(\"no door available to read the SCRP parameter ids from\")\r\n        return rows, notes\r\n\r\n    # ElementId of each SCRP parameter, taken from a real door instance.\r\n    wanted = {}\r\n    for ftype, room_bip, pname in FIELD_MAP:\r\n        parameter = p_get(sample_door, pname)\r\n        if parameter is None:\r\n            notes.append(\"parameter '{0}' not found on door {1}\".format(\r\n                pname, eid(sample_door.Id)))\r\n            continue\r\n        wanted[(ftype, str(room_bip))] = (parameter.Id, pname)\r\n\r\n    for sched in FilteredElementCollector(doc).OfClass(ViewSchedule).ToElements():\r\n        try:\r\n            if sched.IsTemplate:\r\n                continue\r\n            name = sched.Name\r\n            if not any(t.lower() in name.lower() for t in SCHEDULE_NAME_CONTAINS):\r\n                continue\r\n            defn = sched.Definition\r\n\r\n            # Reverse order: inserting at i and removing i+1 keeps the field\r\n            # count stable, so lower indices stay valid either way.\r\n            for index in reversed(range(defn.GetFieldCount())):\r\n                field = defn.GetField(index)\r\n                ftype = str(field.FieldType)\r\n                if ftype not in (\"FromRoom\", \"ToRoom\"):\r\n                    continue\r\n\r\n                key = None\r\n                for map_type, room_bip, _ in FIELD_MAP:\r\n                    if map_type != ftype:\r\n                        continue\r\n                    try:\r\n                        if eid(field.ParameterId) == eid(ElementId(room_bip)):\r\n                            key = (ftype, str(room_bip))\r\n                            break\r\n                    except Exception:\r\n                        pass\r\n                if key is None or key not in wanted:\r\n                    rows.append([name, field.GetName(), ftype, \"-\",\r\n                                 \"no mapping for this column\"])\r\n                    continue\r\n\r\n                new_pid, pname = wanted[key]\r\n\r\n                # Refuse to touch a column a filter or sort rule depends on --\r\n                # dropping those silently would change which rows appear.\r\n                blocked = False\r\n                try:\r\n                    for flt in defn.GetFilters():\r\n                        if eid(flt.FieldId) == eid(field.FieldId):\r\n                            blocked = True\r\n                    for sortfield in defn.GetSortGroupFields():\r\n                        if eid(sortfield.FieldId) == eid(field.FieldId):\r\n                            blocked = True\r\n                except Exception:\r\n                    pass\r\n                if blocked:\r\n                    rows.append([name, field.GetName(), ftype, pname,\r\n                                 \"SKIPPED - a filter or sort rule uses it\"])\r\n                    notes.append(\r\n                        \"{0}: column '{1}' drives a filter or sort rule, so it \"\r\n                        \"was left alone. Clear that rule, then re-run.\".format(\r\n                            name, field.GetName()))\r\n                    continue\r\n\r\n                schedulable = None\r\n                for cand in defn.GetSchedulableFields():\r\n                    try:\r\n                        if eid(cand.ParameterId) == eid(new_pid):\r\n                            schedulable = cand\r\n                            break\r\n                    except Exception:\r\n                        pass\r\n                if schedulable is None:\r\n                    rows.append([name, field.GetName(), ftype, pname,\r\n                                 \"SKIPPED - parameter not schedulable here\"])\r\n                    continue\r\n\r\n                if not apply_now:\r\n                    rows.append([name, field.GetName(), ftype, pname,\r\n                                 \"would swap\"])\r\n                    continue\r\n\r\n                heading = field.ColumnHeading\r\n                width = field.GridColumnWidth\r\n                align = field.HorizontalAlignment\r\n                hidden = field.IsHidden\r\n                try:\r\n                    new_field = defn.InsertField(schedulable, index)\r\n                except Exception as ex:\r\n                    rows.append([name, heading, ftype, pname,\r\n                                 \"FAILED to insert: {0}\".format(ex)])\r\n                    continue\r\n                for prop, value in ((\"ColumnHeading\", heading),\r\n                                    (\"GridColumnWidth\", width),\r\n                                    (\"HorizontalAlignment\", align),\r\n                                    (\"IsHidden\", hidden)):\r\n                    try:\r\n                        setattr(new_field, prop, value)\r\n                    except Exception:\r\n                        pass\r\n                try:\r\n                    defn.RemoveField(index + 1)\r\n                    rows.append([name, heading, ftype, pname, \"swapped\"])\r\n                except Exception as ex:\r\n                    rows.append([name, heading, ftype, pname,\r\n                                 \"FAILED to remove old column: {0}\".format(ex)])\r\n                    notes.append(\r\n                        \"{0}: '{1}' now appears twice -- delete the built-in \"\r\n                        \"one by hand.\".format(name, heading))\r\n        except Exception as ex:\r\n            rows.append([getattr(sched, \"Name\", \"?\"), \"-\", \"-\", \"-\",\r\n                         \"schedule skipped: {0}\".format(ex)])\r\n    return rows, notes\r\n\r\n\r\n# --------------------------------------------------------------------------\r\n# Collect\r\n# --------------------------------------------------------------------------\r\nwarnings = []\r\nplans = []\r\nskipped = []\r\n\r\n_run_error = None\r\ntry:\r\n    if selection:\r\n        doors = [d for d in (UnwrapElement(i) for i in selection)\r\n                 if isinstance(d, FamilyInstance)]\r\n    else:\r\n        doors = list(FilteredElementCollector(doc)\r\n                     .OfCategory(BuiltInCategory.OST_Doors)\r\n                     .WhereElementIsNotElementType()\r\n                     .ToElements())\r\n\r\n    # ----------------------------------------------------------------------\r\n    # Stage 1 -- point the schedule columns at the SCRP parameters. Without\r\n    # this the parameter writes below are invisible, because the columns read\r\n    # Revit's derived From/To Room fields.\r\n    # ----------------------------------------------------------------------\r\n    sched_rows = []\r\n    if REPOINT_SCHEDULES:\r\n        sample = None\r\n        for candidate in doors:\r\n            if p_get(candidate, P_NUM_FROM) is not None:\r\n                sample = candidate\r\n                break\r\n        if APPLY:\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n            sched_rows, sched_notes = repoint_schedules(sample, True)\r\n            TransactionManager.Instance.TransactionTaskDone()\r\n        else:\r\n            sched_rows, sched_notes = repoint_schedules(sample, False)\r\n        warnings.extend(sched_notes)\r\n\r\n    # ----------------------------------------------------------------------\r\n    # Stage 2 -- compute and write the corrected room values.\r\n    # ----------------------------------------------------------------------\r\n    for door in doors:\r\n        try:\r\n            if p_get(door, P_NUM_FROM) is None:\r\n                skipped.append(\"{0} -- no SCRP room parameters\".format(eid(door.Id)))\r\n                continue\r\n\r\n            comments = bip_str(door, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)\r\n            if SKIP_MARKER.lower() in comments.lower():\r\n                skipped.append(\"{0} -- carries {1}\".format(eid(door.Id), SKIP_MARKER))\r\n                continue\r\n\r\n            mark = bip_str(door, BuiltInParameter.ALL_MODEL_MARK)\r\n            symbol = door.Symbol\r\n            type_name = \"{0}: {1}\".format(\r\n                symbol.Family.Name, symbol.Name) if symbol is not None else \"?\"\r\n\r\n            from_num, from_name = room_id(room_of(door, \"From\"))\r\n            to_num, to_name = room_id(room_of(door, \"To\"))\r\n\r\n            ext_from = is_exterior(from_name)\r\n            ext_to = is_exterior(to_name)\r\n\r\n            out_from = (from_num, from_name)\r\n            out_to = (to_num, to_name)\r\n            note = \"\"\r\n\r\n            if ext_from and ext_to:\r\n                note = \"both sides exterior -- left unchanged\"\r\n                warnings.append(\r\n                    \"{0} [{1}]: both sides are '{2}' rooms ({3} / {4}); no \"\r\n                    \"interior counterpart exists\".format(\r\n                        eid(door.Id), mark or \"-\", EXTERIOR_PREFIX,\r\n                        from_name, to_name))\r\n            elif ext_to:\r\n                if to_num or to_name:\r\n                    out_to = (from_num, from_name)\r\n                    note = \"TO '{0}' ({1}) -> '{2}' ({3})\".format(\r\n                        to_name, to_num, from_name, from_num)\r\n                if not (from_num or from_name):\r\n                    warnings.append(\r\n                        \"{0} [{1}]: TO is '{2}' but there is no room on the \"\r\n                        \"other side to copy\".format(\r\n                            eid(door.Id), mark or \"-\", to_name))\r\n                    out_to = (to_num, to_name)\r\n                    note = \"no counterpart -- left unchanged\"\r\n            elif ext_from:\r\n                if from_num or from_name:\r\n                    out_from = (to_num, to_name)\r\n                    note = \"FROM '{0}' ({1}) -> '{2}' ({3})\".format(\r\n                        from_name, from_num, to_name, to_num)\r\n                if not (to_num or to_name):\r\n                    warnings.append(\r\n                        \"{0} [{1}]: FROM is '{2}' but there is no room on the \"\r\n                        \"other side to copy\".format(\r\n                            eid(door.Id), mark or \"-\", from_name))\r\n                    out_from = (from_num, from_name)\r\n                    note = \"no counterpart -- left unchanged\"\r\n\r\n            if not (from_num or from_name):\r\n                warnings.append(\"{0} [{1}]: no FROM room\".format(\r\n                    eid(door.Id), mark or \"-\"))\r\n            if not (to_num or to_name):\r\n                warnings.append(\"{0} [{1}]: no TO room\".format(\r\n                    eid(door.Id), mark or \"-\"))\r\n\r\n            current = (\r\n                (p_get(door, P_NUM_FROM).AsString() or \"\"),\r\n                (p_get(door, P_NAM_FROM).AsString() or \"\"),\r\n                (p_get(door, P_NUM_TO).AsString() or \"\"),\r\n                (p_get(door, P_NAM_TO).AsString() or \"\"),\r\n            )\r\n            desired = (out_from[0], out_from[1], out_to[0], out_to[1])\r\n\r\n            plans.append({\r\n                \"el\": door,\r\n                \"id\": eid(door.Id),\r\n                \"mark\": mark,\r\n                \"type\": type_name,\r\n                \"raw\": (from_num, from_name, to_num, to_name),\r\n                \"desired\": desired,\r\n                \"current\": current,\r\n                \"changed\": current != desired,\r\n                \"note\": note,\r\n            })\r\n        except Exception as ex:\r\n            try:\r\n                ident = eid(door.Id)\r\n            except Exception:\r\n                ident = \"?\"\r\n            skipped.append(\"{0} -- {1}\".format(ident, ex))\r\n\r\n    # ----------------------------------------------------------------------\r\n    # Apply\r\n    # ----------------------------------------------------------------------\r\n    applied = 0\r\n    failed = []\r\n    if APPLY:\r\n        to_write = [p for p in plans if p[\"changed\"]]\r\n        if to_write:\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n            for plan in to_write:\r\n                try:\r\n                    for name, value in zip(\r\n                            (P_NUM_FROM, P_NAM_FROM, P_NUM_TO, P_NAM_TO),\r\n                            plan[\"desired\"]):\r\n                        parameter = p_get(plan[\"el\"], name)\r\n                        if parameter is not None and not parameter.IsReadOnly:\r\n                            parameter.Set(value)\r\n                    applied += 1\r\n                except Exception as ex:\r\n                    failed.append(\"{0} -- {1}\".format(plan[\"id\"], ex))\r\n            TransactionManager.Instance.TransactionTaskDone()\r\n\r\n    # ----------------------------------------------------------------------\r\n    # Report\r\n    # ----------------------------------------------------------------------\r\n    HEADER = [\r\n        \"ElementId\", \"Mark\", \"Type\",\r\n        \"Revit FROM nr\", \"Revit FROM name\", \"Revit TO nr\", \"Revit TO name\",\r\n        \"Written FROM nr\", \"Written FROM name\", \"Written TO nr\",\r\n        \"Written TO name\", \"Changed\", \"Detail\",\r\n    ]\r\n    rows = [HEADER]\r\n    for plan in plans:\r\n        rows.append([\r\n            plan[\"id\"], plan[\"mark\"], plan[\"type\"],\r\n            plan[\"raw\"][0], plan[\"raw\"][1], plan[\"raw\"][2], plan[\"raw\"][3],\r\n            plan[\"desired\"][0], plan[\"desired\"][1],\r\n            plan[\"desired\"][2], plan[\"desired\"][3],\r\n            \"YES\" if plan[\"changed\"] else \"no\", plan[\"note\"],\r\n        ])\r\n\r\n    if sched_rows:\r\n        rows.append([])\r\n        rows.append([\"Schedule\", \"Column\", \"Was\", \"Now\", \"Result\"])\r\n        rows.extend(sched_rows)\r\n\r\n    swapped = sum(1 for r in sched_rows if len(r) > 4 and r[4] == \"swapped\")\r\n    substituted = sum(1 for p in plans if p[\"note\"].find(\"->\") >= 0)\r\n    mode = \"APPLIED\" if APPLY else \"DRY RUN -- nothing was modified\"\r\n    summary = [\r\n        \"Udvendig room resolver -- {0}\".format(mode),\r\n        \"Schedules: {0} column(s) re-pointed to the SCRP parameters \"\r\n        \"({1} examined).\".format(swapped, len(sched_rows)),\r\n        \"Examined {0} doors.\".format(len(plans)),\r\n        \"{0} had an '{1}' side substituted.\".format(substituted, EXTERIOR_PREFIX),\r\n        \"{0} need parameter writes; {1} written.\".format(\r\n            sum(1 for p in plans if p[\"changed\"]), applied),\r\n    ]\r\n    if skipped:\r\n        summary.append(\"Skipped {0}: {1}\".format(len(skipped), \"; \".join(skipped[:10])))\r\n    if failed:\r\n        summary.append(\"Write failures: {0}\".format(\"; \".join(failed)))\r\n    if warnings:\r\n        summary.append(\"{0} warning(s) -- see the third output.\".format(len(warnings)))\r\n    if not APPLY and any(p[\"changed\"] for p in plans):\r\n        summary.append(\"Set 'Apply changes?' to True to write these values.\")\r\n    if REPOINT_SCHEDULES and APPLY and swapped == 0:\r\n        summary.append(\r\n            \"No columns were re-pointed. Either it was already done on a \"\r\n            \"previous run, or no From/To Room columns were found -- the table \"\r\n            \"in the report lists what was actually there.\")\r\n\r\n    csv_note = \"\"\r\n    if CSV_PATH:\r\n        try:\r\n            write_utf8(CSV_PATH, u\"\\n\".join(\r\n                u\",\".join(u'\"{0}\"'.format(u\"{0}\".format(c).replace(u'\"', u'\"\"'))\r\n                          for c in row) for row in rows) + u\"\\n\")\r\n            csv_note = \"Report written to {0}.\".format(CSV_PATH)\r\n            summary.append(csv_note)\r\n        except Exception as ex:\r\n            warnings.append(\"Could not write CSV: {0}\".format(ex))\r\n\r\n    OUT = [\"\\n\".join(summary), rows, warnings]\r\n\r\nexcept Exception:\r\n    import traceback as _tb\r\n    _run_error = _tb.format_exc()\r\n    OUT = [\"FAILED\\n\\n\" + _run_error, [], []]\r\n\r\n\r\nif CSV_PATH:\r\n    try:\r\n        _log = os.path.splitext(CSV_PATH)[0] + \".log\"\r\n        _warn = u\"\\n\".join(u\"  \" + w for w in (OUT[2] if OUT else []))\r\n        write_utf8(_log, u\"{0}\\n\\nWARNINGS:\\n{1}\\n\".format(OUT[0], _warn))\r\n    except Exception:\r\n        pass\r\n",
+      "Engine": "PythonNet3",
+      "VariableInputPorts": true,
+      "Id": "bf736fe0ce1741bb8657e6e42e292ee8",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "a5746a00e33949dba3b9e852f4477211",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "4066dcc91316458abc2ecc0290e9b329",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "490e22194bf04d759717a94fae0dde8a",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "394c3ddc341c41daa5fd1fbf06697e9c",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 620.0,
+      "WatchHeight": 400.0,
+      "Id": "e2c9afe3d42440ab8027793c397bd42f",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "3671f61bf1d546c5bb2a6b14c82621ce",
+          "Name": "",
+          "Description": "Node to show output from",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "89cbc91be34f44cc8cedce39fd65c036",
+          "Name": "",
+          "Description": "Node output",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Visualizes a node's output"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "b0c26dc398e34c439125095ed4a1a49b",
+      "End": "a5746a00e33949dba3b9e852f4477211",
+      "Id": "e7a1958e81c047a3ac4a8b06e5bddf9d",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "c81293e27f9e4c0e96531318c89c116c",
+      "End": "4066dcc91316458abc2ecc0290e9b329",
+      "Id": "a256c4e58a884434b6bb3a7c03071761",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "16573bf15de1463bba5f609938140c4e",
+      "End": "490e22194bf04d759717a94fae0dde8a",
+      "Id": "9df814472e6245e8b725cac32e0b9e47",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "394c3ddc341c41daa5fd1fbf06697e9c",
+      "End": "3671f61bf1d546c5bb2a6b14c82621ce",
+      "Id": "8445f8aa8d374bfb90fe6f40884acd2f",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": false,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "4.0",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "10.3",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "4.0.2.3852",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "f9845dea83504f9fb61777e829895e82",
+        "Name": "Doors to process (null = every door)",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": -200.0
+      },
+      {
+        "Id": "342a56ab53354414a18141b0b614f3cd",
+        "Name": "Apply changes? (True = write parameters)",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": -80.0
+      },
+      {
+        "Id": "018766223c0949f58af12a1300ebb996",
+        "Name": "Report CSV path",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -60.0,
+        "Y": 40.0
+      },
+      {
+        "Id": "bf736fe0ce1741bb8657e6e42e292ee8",
+        "Name": "Resolve Udvendig rooms",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 460.0,
+        "Y": -120.0
+      },
+      {
+        "Id": "e2c9afe3d42440ab8027793c397bd42f",
+        "Name": "Result",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": true,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 760.0,
+        "Y": -120.0
+      }
+    ],
+    "Annotations": [],
+    "X": 120.0,
+    "Y": 320.0,
+    "Zoom": 0.75
+  }
+}

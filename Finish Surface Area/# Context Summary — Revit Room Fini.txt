@@ -1,0 +1,60 @@
+# Context Summary — Revit Room Finish Takeoff Engine (Paint/Wall Extraction)
+
+**File under active development:** `RoomFinishAreas_FINAL.py`
+**Runtime:** Dynamo Python node. Portability fix pending: switch engine from IronPython3 → **CPython3** (IronPython3 requires the `DynamoIronPython3` package, absent on other machines; CPython3 is core/universal). Script is engine-neutral by design.
+**Language/API:** Revit API via `clr` (`RevitAPI`), `RevitServices` (DocumentManager, TransactionManager).
+
+---
+
+## 1. Core Problem (current open item)
+
+The CSV export and Revit's native Material Takeoff **do not reconcile on total**, and this was traced to a real, correct cause — not a bug:
+
+- **CSV** counts *all* wall finish faces: painted materials **plus** unpainted layer materials (`EM Wall`, `Default Wall`).
+- **Revit paint Material Takeoff** (filtered `Material: As Paint = Yes`) counts *only painted* materials, so it **excludes** `EM Wall` and `Default Wall`.
+
+**Reconciliation (room 35 "Bad", Walls surface), verified by hand:**
+- CSV all-walls sum = **57.607 m²** (matches Revit `Wall Finish Area` column summed = 57.62; agree to rounding).
+- Painted-only subset = Værksted-LBM 4.735 + VEF 0.094 + VBM 30.677 + VBP 0.337 + VEM 5.437 + VER 2.666 = **43.946 m²** ← this is the true paint-cost basis.
+- Unpainted layer faces = EM Wall 10.942 + Default Wall 2.719 = **13.661 m²** ← must be excluded from paint costing (or flagged as missing paint in the model).
+
+**`EM Wall` / `Default Wall` = wall-type LAYER materials, not paint.** They surface because `face_material_key()` falls back to `MaterialElementId` (layer material) when a face is not painted. `Default Wall` specifically indicates a wall layer with no assigned material — a modeling quality flag.
+
+**Secondary (resolved, no code fix needed):**
+- `Material: Area` (Revit native) ≠ CSV because Revit's is whole-wall/not room-clipped; CSV is room-clipped. Expected divergence = paint outside room boundary (above ceiling/plenum).
+- Custom `Wall Finish Area` is a **per-element** parameter → repeats across each material row in a Material Takeoff → must NOT be summed there. Sums correctly only because current office standard = one material per wall.
+- Door/jamb paint (VBP, GAL) already separated correctly in CSV as own material rows.
+
+---
+
+## 2. Data, Variables & Objects
+
+**Core measurement:**
+- `SpatialElementGeometryCalculator` + `SpatialElementBoundaryOptions.SpatialElementBoundaryLocation = Finish` → room solid.
+- `SubfaceType.Side / Bottom / Top` → wall / floor / ceiling classification.
+- `element_faces(elem)` → full `Options(DetailLevel=Fine)` geometry harvest (NOT `HostObjectUtils.GetSideFaces`, which collapses Split Face regions). Handles stacked walls via `GetStackedWallMemberIds()`.
+- `exact_subface_area(subface, host_faces, owner)` → coplanarity filter + `BooleanOperationsUtils.ExecuteBooleanOperation(Intersect)` on thin extrusions (`GeometryCreationUtilities.CreateExtrusionGeometry`, `EXTRUDE_T=0.10 ft`, `COPLANAR_TOL=0.02 ft`). Returns `(total_sqft, {materialKey: sqft})` or `None` (→ planar fallback). Empty-intersection guard: `total <= 1e-6 → None`.
+
+**Material identity (the crux for paint vs layer):**
+- `face_material_key(owner, f)`:
+  - `f.MaterialElementId` → material ID.
+  - `doc.IsPainted(owner.Id, f)` → **True = paint material (costable), False = layer material**.
+  - Currently returns the same `mid` type in both cases → **paint status is NOT preserved downstream.** This is the gap to fix.
+- `material_info(mkey)` → `(name, code)`; code = first non-empty of Material params `Code` / `Mark` / `Keynote` (office codes: VBM, VEM, VER, VBP, VEF, GAL, etc.).
+
+**Accumulators:**
+- `room_mats` keyed `(surface, materialKey) → sqft` → drives CSV rows + room parameters (`net_wall = _sum_surface("Walls")`, etc.).
+- `elem_wall_area / elem_floor_area / elem_ceiling_area` keyed `ElementId → sqft` → per-element schedule params.
+- `csv_rows`: tuple `(roomNum, roomName, surface, matName, matCode, m2)`; `FT2_TO_M2 = 0.09290304`.
+
+**CSV export:** `IN[6]` = path; UTF-8-BOM; header `Room Number,Room Name,Surface,Material,Material Code,Area (m2)`.
+
+**Special-case handlers already implemented:** openings/casework void deduction; `InstanceVoidCutUtils`; mezzanine slabs + hanging walls via `IsPointInRoom`; sloped ceiling/roof underside; `AreaVolumeSettings.ComputeVolumes` auto-enable; room upper-limit auto-raise; Danish roof/slab-as-ceiling chain with source labelling.
+
+---
+
+## 3. Algorithmic Logic to Match Revit Native Paint Takeoff
+
+Revit's paint area = `Element.GetMaterialArea(materialId, paint=True)` over `Element.GetMaterialIds(paint=True)`; whole-element, NOT room-clipped. Our engine already reproduces the paint separation per face via `IsPainted` — the missing piece is **carrying paint status into the output** so costing can isolate paint from layer/substrate.
+
+**Required change:** make the material key (or an adjacent flag) encode paint status.

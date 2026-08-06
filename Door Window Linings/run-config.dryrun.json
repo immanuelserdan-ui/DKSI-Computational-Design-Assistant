@@ -1,0 +1,8 @@
+{
+  "apply": false,
+  "gap_mm": 60.0,
+  "remnant_mm": 50.0,
+  "csv": "C:\\Users\\user\\Desktop\\Claude Projects\\Computational Design Assistant\\Door Window Linings\\lining-report.csv",
+  "log": "C:\\Users\\user\\Desktop\\Claude Projects\\Computational Design Assistant\\Door Window Linings\\lining-run.log",
+  "save": false
+}

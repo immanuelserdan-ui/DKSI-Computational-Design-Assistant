@@ -1,0 +1,12 @@
+﻿Udvendig room resolver -- APPLIED
+Schedules: 6 column(s) re-pointed to the SCRP parameters (24 examined).
+Examined 2 doors.
+1 had an 'Udvendig' side substituted.
+2 need parameter writes; 2 written.
+3 warning(s) -- see the third output.
+Report written to C:\Users\user\Desktop\Claude Projects\Computational Design Assistant\Door From-To Rooms\udvendig-report585.csv.
+
+WARNINGS:
+  Door Casing FROM @V03: column 'From Room: Number' drives a filter or sort rule, so it was left alone. Clear that rule, then re-run.
+  Door Casing TO @V03: column 'To Room: Number' drives a filter or sort rule, so it was left alone. Clear that rule, then re-run.
+  28861918 [630]: no TO room
