@@ -168,6 +168,7 @@ public partial class RoomFinishCheckWindow : Window
         var includeContents = ContentsBox.IsChecked == true;
         var isolate = IsolateBox.IsChecked == true;
         var sectionBox = SectionBoxBox.IsChecked == true;
+        var hatch = HatchBox.IsChecked == true;
 
         // Parsed here, on the UI thread, so a typo is reported before anything happens to the
         // model rather than as a silent fallback to some default the user did not choose.
@@ -258,6 +259,14 @@ public partial class RoomFinishCheckWindow : Window
                 scopeMessage = scope.Message;
             }
 
+            // LAST. The hatch is a graphic override, so it has to be applied to a set the
+            // view is already showing - overriding an element that isolation is about to
+            // hide is work thrown away, and overriding one the section box then cuts is
+            // fine only because the cut faces carry the pattern too.
+            string? hatchMessage = null;
+
+            if (hatch) hatchMessage = RoomHatch.Apply(uiDoc, set).Message;
+
             Log.Info($"QA finish highlight: room {entry.Id.Value}, {ids.Count} element(s), " +
                      $"isolate={isolate}, isolated={isolated}, sectionBox={sectionBox}");
 
@@ -278,6 +287,7 @@ public partial class RoomFinishCheckWindow : Window
                 var notes = set.Notes.Concat(set.LinkedNotes).ToList();
                 if (isolateProblem is not null) notes.Add(isolateProblem);
                 if (scopeMessage is not null) notes.Add(scopeMessage);
+                if (hatchMessage is not null) notes.Add(hatchMessage);
 
                 NotesLine.Text = string.Join(Environment.NewLine + Environment.NewLine, notes);
             });
@@ -346,8 +356,15 @@ public partial class RoomFinishCheckWindow : Window
 
             RoomViewScope.Clear(uiDoc);
 
+            // Found by pattern signature rather than by anything this window remembers, so
+            // this clears a hatch applied in an earlier session too.
+            var hatches = RoomHatch.Clear(uiDoc);
+
             Dispatcher.Invoke(() =>
-                NotesLine.Text = "Isolation and section box cleared. The saved view is unchanged.");
+                NotesLine.Text =
+                    "Isolation and section box cleared" +
+                    (hatches > 0 ? $", {hatches} hatch override(s) removed" : string.Empty) +
+                    ". The saved view and the model are unchanged.");
         });
     }
 

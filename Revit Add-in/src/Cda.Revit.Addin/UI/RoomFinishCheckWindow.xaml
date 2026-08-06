@@ -95,8 +95,13 @@
                 <TextBox x:Name="OffsetBox" Text="1000" Width="56" Padding="3" Margin="8,0,0,0" />
                 <TextBlock Text="mm" VerticalAlignment="Center" Margin="6,0,0,0" />
             </StackPanel>
-            <TextBlock Margin="20,2,0,0" Opacity="0.7" TextWrapping="Wrap"
+            <TextBlock Margin="20,2,0,8" Opacity="0.7" TextWrapping="Wrap"
                        Text="A wall is ONE element, so isolating it shows its whole length — including the part that runs into the next room. Cutting the view is the only way to hide that. In a non-3D view a crop region is used instead." />
+
+            <CheckBox x:Name="HatchBox"
+                      Content="Hatch the measured surfaces (walls blue, floor green, ceiling amber)" />
+            <TextBlock Margin="20,2,0,0" Opacity="0.7" TextWrapping="Wrap"
+                       Text="View-specific graphic overrides — nothing is written to the elements, no other view changes, and no schedule is affected. Cleared by Clear scope." />
         </StackPanel>
 
         <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
