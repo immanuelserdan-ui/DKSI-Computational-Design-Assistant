@@ -114,6 +114,31 @@ public sealed class RoomFinishCalculator
 
     private int _fallbackRoomCount;
 
+    /// <summary>Exterior placeholder rooms skipped this pass.</summary>
+    private int _exteriorRooms;
+
+    /// <summary>
+    /// Elements bounding a skipped exterior room. Collected so a value written by an EARLIER
+    /// run - before those rooms were skipped - can be cleared rather than left frozen on the
+    /// wall. An element in here that no interior room also claimed has no business carrying
+    /// an interior finish area.
+    /// </summary>
+    private readonly HashSet<long> _exteriorElements = [];
+
+    /// <summary>Cached name test per room id, so the identity tie-break is not re-resolving.</summary>
+    private readonly Dictionary<long, bool> _exteriorRoomCache = [];
+
+    /// <summary>
+    /// Painted area per element PER ROOM. The parallel of <see cref="_elemRoomClaims"/> for
+    /// paint, and what makes a room-consistent paint figure possible at all.
+    /// </summary>
+    private readonly Dictionary<long, Dictionary<long, double>> _elemRoomPaint = [];
+
+    /// <summary>Paint measured for a room other than the one its element is attributed to.</summary>
+    private double _unattributedPaint;
+
+    private int _unattributedElements;
+
     private readonly ElementId _sepLineCategory = new(BuiltInCategory.OST_RoomSeparationLines);
     private readonly ElementId _ceilingCategory = new(BuiltInCategory.OST_Ceilings);
     private readonly ElementId _roofCategory = new(BuiltInCategory.OST_Roofs);
@@ -171,6 +196,21 @@ public sealed class RoomFinishCalculator
                     _report.Add($"Skipped (geometry not computable): {RoomLabel(room)}");
                     continue;
                 }
+
+                // OUTDOORS. Measured before this existed, and what it measured was the
+                // outside face of the building in interior paint. See
+                // FinishSettings.ExteriorRoomPrefix.
+                //
+                // Still visited, though, and that is the point: the elements it bounds are
+                // collected so any value a PREVIOUS run wrote onto them can be cleared. A
+                // skip alone would leave the wrong numbers frozen on those walls forever,
+                // because WriteElementTotals only ever writes elements the pass touched.
+                if (IsExteriorRoom(room))
+                {
+                    _exteriorRooms++;
+                    CollectExteriorElements(room, calculator);
+                    continue;
+                }
             }
             catch
             {
@@ -192,12 +232,44 @@ public sealed class RoomFinishCalculator
         var elementsWritten = WriteElementTotals();
         var elementsTagged = WriteRoomIdentity();
 
+        // AFTER both writes, so "did any interior room claim this element?" is answerable.
+        var elementsCleared = ClearExteriorOnlyElements();
+
         _report.Insert(0,
             $"[v15 port] SUMMARY: measured {processed} placed room(s); ignored " +
             $"{skippedUnplaced} unplaced/unenclosed room(s). Wall mode: " +
             (_settings.UseGeometric
                 ? "GEOMETRIC (real finish faces, cuts excluded) with per-wall arithmetic fallback."
                 : "arithmetic only."));
+
+        if (_unattributedElements > 0)
+        {
+            _report.Add(
+                $"PAINT APPORTIONED TO ONE ROOM: {_unattributedElements} element(s) are painted on " +
+                $"more than one room's side. Each now carries only the paint of the room named in " +
+                $"'{_settings.RoomNumberParameter}', so a takeoff grouped by room no longer bills a " +
+                $"room for its neighbour's paint. " +
+                $"{Measure.ToSquareMetres(_unattributedPaint):0.00} m² belongs to the OTHER side(s) " +
+                "and is therefore not visible in an element takeoff - it is not lost, it is on those " +
+                "rooms' own parameters, which remain the authority. Modelling finishes as separate " +
+                "room-side layers - the office standard - removes the split entirely, because those " +
+                "elements face one room each.");
+        }
+
+        if (_exteriorRooms > 0)
+        {
+            _report.Add(
+                $"EXTERIOR ROOMS SKIPPED: {_exteriorRooms} room(s) named '{_settings.ExteriorRoomPrefix}...' " +
+                "were not measured. They are placeholder rooms enclosing a terrace, balcony or " +
+                "entrance so it can be scheduled for area - their 'walls' are the OUTSIDE faces " +
+                "of the building, and measuring them put exterior surfaces into the interior " +
+                "paint takeoff. It also let an exterior room out-claim a small interior one and " +
+                "take its wall's 'Rum' value, which is how interior paint area came to be " +
+                $"hosted by '{_settings.ExteriorRoomPrefix}'. " +
+                (elementsCleared > 0
+                    ? $"{elementsCleared} element(s) carrying values from an earlier run were reset to zero."
+                    : "No stale values from earlier runs were found."));
+        }
 
         if (elementsWritten > 0)
         {
@@ -706,7 +778,7 @@ public sealed class RoomFinishCalculator
                                 // The finish-material subset, read off the same ledger, so the
                                 // element's two numbers can never disagree with the CSV rows
                                 // they were both derived from.
-                                Accumulate(_elemFloorPaint, element.Id, floor.Materials.PaintedTotal);
+                                AccumulatePaint(_elemFloorPaint, element.Id, room, floor.Materials.PaintedTotal);
                                 Claim(element.Id, room, floor.Total);
                             }
                             else if (hasSlab)
@@ -764,7 +836,7 @@ public sealed class RoomFinishCalculator
                             if (element is not null)
                             {
                                 Accumulate(_elemCeilingArea, element.Id, amount);
-                                Accumulate(_elemCeilingPaint, element.Id, painted);
+                                AccumulatePaint(_elemCeilingPaint, element.Id, room, painted);
                                 Claim(element.Id, room, amount);
                             }
                             continue;
@@ -811,7 +883,7 @@ public sealed class RoomFinishCalculator
 
                         ceilingSource[CeilingSourceKey(element)] += amount;
                         Accumulate(_elemCeilingArea, element.Id, amount);
-                        Accumulate(_elemCeilingPaint, element.Id, painted);
+                        AccumulatePaint(_elemCeilingPaint, element.Id, room, painted);
                         Claim(element.Id, room, amount);
                         continue;
                     }
@@ -825,7 +897,7 @@ public sealed class RoomFinishCalculator
                         wallExact += wall.Total;
                         AddMaterials(FinishSettings.SurfaceWalls, wall.Materials);
                         Accumulate(_elemWallArea, element.Id, wall.Total);
-                        Accumulate(_elemWallPaint, element.Id, wall.Materials.PaintedTotal);
+                        AccumulatePaint(_elemWallPaint, element.Id, room, wall.Materials.PaintedTotal);
                         Claim(element.Id, room, wall.Total);
 
                         if (wall.Materials.DistinctPaintedMaterials > 1)
@@ -885,7 +957,7 @@ public sealed class RoomFinishCalculator
 
                     // The PT subset. Read off the ORIGINAL element faces, so this is Revit's
                     // own paint state rather than an assumption about which layer is finish.
-                    Accumulate(_elemCeilingPaint, hit.Element, hit.Materials.PaintedTotal);
+                    AccumulatePaint(_elemCeilingPaint, hit.Element, room, hit.Materials.PaintedTotal);
                     Claim(hit.Element, room, hit.Area);
 
                     ceilingClaimed.Add(hit.Element.Value);
@@ -1047,7 +1119,7 @@ public sealed class RoomFinishCalculator
                     // Same reason as the ceiling side below: a mezzanine top measured through
                     // this path would otherwise carry a floor area but no finish area, while
                     // the takeoff's own 'Material: As Paint' column says Yes on that row.
-                    Accumulate(_elemFloorPaint, slab.Id, topLedger.PaintedTotal);
+                    AccumulatePaint(_elemFloorPaint, slab.Id, room, topLedger.PaintedTotal);
                     Claim(slab.Id, room, topArea);
                 }
 
@@ -1061,7 +1133,7 @@ public sealed class RoomFinishCalculator
                     // Without this a slab measured through the interior-slab path reports a
                     // ceiling area but no PT area, while the takeoff's own 'Material: As
                     // Paint' column says Yes on the same row - two answers to one question.
-                    Accumulate(_elemCeilingPaint, slab.Id, bottomLedger.PaintedTotal);
+                    AccumulatePaint(_elemCeilingPaint, slab.Id, room, bottomLedger.PaintedTotal);
                 }
 
                 count++;
@@ -1172,7 +1244,7 @@ public sealed class RoomFinishCalculator
                     ledger.Add(key, face.Area);
                     Accumulate(_elemWallArea, wall.Id, face.Area);
                     Claim(wall.Id, room, face.Area);
-                    if (key.Painted) Accumulate(_elemWallPaint, wall.Id, face.Area);
+                    if (key.Painted) AccumulatePaint(_elemWallPaint, wall.Id, room, face.Area);
                 }
 
                 if (area <= 0) continue;
@@ -1224,7 +1296,7 @@ public sealed class RoomFinishCalculator
 
                 foreach (var (_, area) in ledger.Areas)
                 {
-                    Accumulate(_elemWallPaint, host.Id, area);
+                    AccumulatePaint(_elemWallPaint, host.Id, room, area);
 
                     // The reveal is this room's finish on that wall, so it counts toward
                     // which room owns the wall — the deciding case being an internal door
@@ -1244,6 +1316,258 @@ public sealed class RoomFinishCalculator
         return (paint, count);
     }
 
+    /// <summary>
+    /// Which room owns an element, from its per-room finish claims.
+    ///
+    /// AN INTERIOR ROOM ALWAYS BEATS AN EXTERIOR ONE, whatever the areas say. Ordering by
+    /// area alone let a large terrace out-claim the small room on the other side of the same
+    /// wall, and the wall then carried 'Rum = Udvendig' - an interior wall's paint area filed
+    /// under an exterior space. This is the half of that fix which survives someone setting
+    /// <see cref="FinishSettings.SkipExteriorRooms"/> to false.
+    ///
+    /// Then by area; then by the lower room id, so a wall dead-centre between two rooms lands
+    /// on the same one every run instead of flipping with dictionary order.
+    /// </summary>
+    /// <summary>Element to owning room, for every element any room claimed.</summary>
+    private Dictionary<long, long> ResolveOwners()
+    {
+        var owners = new Dictionary<long, long>();
+
+        foreach (var (elementId, byRoom) in _elemRoomClaims)
+        {
+            if (byRoom.Count == 0) continue;
+            owners[elementId] = OwnerOf(byRoom);
+        }
+
+        return owners;
+    }
+
+    private long OwnerOf(Dictionary<long, double> byRoom) => byRoom
+        .OrderBy(e => IsExteriorRoomId(e.Key) ? 1 : 0)
+        .ThenByDescending(e => e.Value)
+        .ThenBy(e => e.Key)
+        .First().Key;
+
+    /// <summary>
+    /// The paint figure to write onto an element: the OWNING room's share, not the sum.
+    ///
+    /// THE BUG THIS FIXES
+    ///   These element parameters exist to be grouped by room - that is their stated purpose,
+    ///   and it is what turns a material takeoff into a Roombook. But the value was the sum
+    ///   across every room the element serves, while the room label is a single winner. So a
+    ///   partition between Stue and Kokken put BOTH sides' paint into one number and filed all
+    ///   of it under whichever room was larger. Grouped by room, one room was billed for paint
+    ///   that belongs to its neighbour.
+    ///
+    /// WHAT IS GIVEN UP, STATED PLAINLY
+    ///   The other room's share is no longer visible in an ELEMENT takeoff. It is not lost -
+    ///   the room parameters carry every room's own total and remain the authority - but a
+    ///   schedule of elements no longer sums to the building's painted area. That is the right
+    ///   trade for a parameter whose whole purpose is per-room grouping, and the residual is
+    ///   measured and reported rather than left to be discovered.
+    /// </summary>
+    private double PaintShare(long elementId, double total, IReadOnlyDictionary<long, long> owners)
+    {
+        if (!_settings.RoomConsistentPaint) return total;
+
+        if (!_elemRoomPaint.TryGetValue(elementId, out var byRoom)) return total;
+
+        // Attributed to no room: nothing to apportion against, so the total stands.
+        if (!owners.TryGetValue(elementId, out var owner)) return total;
+
+        var share = byRoom.GetValueOrDefault(owner);
+        var residual = total - share;
+
+        if (residual > 1e-6)
+        {
+            _unattributedPaint += residual;
+            _unattributedElements++;
+        }
+
+        return share;
+    }
+
+    // ------------------------------------------------------------------ exterior
+
+    /// <summary>
+    /// Is this one of the outdoor placeholder rooms?
+    ///
+    /// Prefix, not substring, and the same test the skirting generator and the door resolver
+    /// apply: 'Udvendig', 'Udvendig 1' and 'Udvendig 3' all match, while a room called
+    /// 'Trappe udvendig belysning' does not.
+    /// </summary>
+    private bool IsExteriorRoom(Room room) =>
+        _settings.SkipExteriorRooms && IsExteriorRoomId(room.Id.Value);
+
+    /// <summary>
+    /// <see cref="IsExteriorRoom"/> by id, for the identity tie-break.
+    ///
+    /// Ignores <see cref="FinishSettings.SkipExteriorRooms"/> deliberately: that flag decides
+    /// whether an exterior room is MEASURED, and this decides whether it may own an element.
+    /// A model configured to measure terraces still must not label an interior wall with one.
+    /// </summary>
+    private bool IsExteriorRoomId(long roomIdValue)
+    {
+        if (_exteriorRoomCache.TryGetValue(roomIdValue, out var cached)) return cached;
+
+        var prefix = _settings.ExteriorRoomPrefix;
+        var result = false;
+
+        if (!string.IsNullOrWhiteSpace(prefix) &&
+            _doc.GetElement(new ElementId(roomIdValue)) is Room room)
+        {
+            result = RoomText(room, BuiltInParameter.ROOM_NAME)
+                .TrimStart()
+                .StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        _exteriorRoomCache[roomIdValue] = result;
+        return result;
+    }
+
+    /// <summary>
+    /// Which elements bound a skipped exterior room. Boundary faces only - no booleans, no
+    /// materials, no reveals - so an exterior room costs a fraction of a measured one.
+    /// </summary>
+    private void CollectExteriorElements(Room room, SpatialElementGeometryCalculator calculator)
+    {
+        try
+        {
+            var results = calculator.CalculateSpatialElementGeometry(room);
+
+            foreach (Face face in results.GetGeometry().Faces)
+            {
+                IList<SpatialElementBoundarySubface> subfaces;
+                try { subfaces = results.GetBoundaryFaceInfo(face); }
+                catch { continue; }
+
+                if (subfaces is null) continue;
+
+                foreach (var subface in subfaces)
+                {
+                    try
+                    {
+                        var boundary = subface.SpatialBoundaryElement;
+
+                        if (boundary.LinkInstanceId != ElementId.InvalidElementId) continue;
+                        if (boundary.HostElementId == ElementId.InvalidElementId) continue;
+
+                        _exteriorElements.Add(boundary.HostElementId.Value);
+                    }
+                    catch
+                    {
+                        // Unreadable subface; the rest of the room still contributes.
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // An exterior room whose geometry will not compute simply contributes no
+            // clean-up candidates. Nothing else in the pass depends on it.
+        }
+    }
+
+    /// <summary>
+    /// Zeroes finish values left on elements that ONLY an exterior room ever claimed.
+    ///
+    /// WHY THIS IS NOT OPTIONAL
+    ///   <see cref="WriteElementTotals"/> writes only the elements a pass measured. It never
+    ///   clears. So the first run after exterior rooms became skipped would stop writing the
+    ///   bad numbers and leave every one of them exactly where it was - a fix that changes
+    ///   nothing anybody can see, on precisely the walls that prompted it.
+    ///
+    ///   The condition is narrow on purpose. An exterior wall's INTERIOR face is still
+    ///   measured by the room inside, so that element is claimed and is left alone; only an
+    ///   element no interior room touched at all is reset. The parameters are engine outputs,
+    ///   so a stale one is not user data being discarded - it is a wrong answer being
+    ///   withdrawn.
+    /// </summary>
+    private int ClearExteriorOnlyElements()
+    {
+        if (_exteriorElements.Count == 0) return 0;
+
+        var claimed = new HashSet<long>(_elemRoomClaims.Keys);
+
+        foreach (var set in new[]
+                 {
+                     _elemWallArea, _elemWallPaint, _elemFloorArea,
+                     _elemFloorPaint, _elemCeilingArea, _elemCeilingPaint,
+                 })
+        {
+            foreach (var key in set.Keys) claimed.Add(key);
+        }
+
+        var areaParameters = new[]
+        {
+            _settings.WallParameter, _settings.PaintParameter,
+            _settings.FloorParameter, _settings.FloorPaintParameter,
+            _settings.CeilingParameter, _settings.CeilingPaintParameter,
+        };
+
+        var identityParameters = new[]
+        {
+            _settings.ApartmentParameter, _settings.RoomNumberParameter, _settings.RoomNameParameter,
+        };
+
+        var cleared = 0;
+
+        foreach (var idValue in _exteriorElements)
+        {
+            if (claimed.Contains(idValue)) continue;
+
+            var elementId = new ElementId(idValue);
+
+            try
+            {
+                var element = _doc.GetElement(elementId);
+                if (element is null) continue;
+
+                if (!Worksharing.CanWrite(_doc, elementId))
+                {
+                    _lockedElements.Add(idValue);
+                    continue;
+                }
+
+                var touched = false;
+
+                foreach (var name in areaParameters)
+                {
+                    var parameter = ParameterHelper.Find(element, name);
+
+                    // Only where there is something to clear: writing 0 over 0 on every
+                    // exterior wall in the building would make a no-op pass look like work.
+                    if (parameter is { IsReadOnly: false, StorageType: StorageType.Double } &&
+                        Math.Abs(parameter.AsDouble()) > 1e-9)
+                    {
+                        parameter.Set(0.0);
+                        touched = true;
+                    }
+                }
+
+                foreach (var name in identityParameters)
+                {
+                    var parameter = ParameterHelper.Find(element, name);
+
+                    if (parameter is { IsReadOnly: false, StorageType: StorageType.String } &&
+                        !string.IsNullOrEmpty(parameter.AsString()))
+                    {
+                        parameter.Set(string.Empty);
+                        touched = true;
+                    }
+                }
+
+                if (touched) cleared++;
+            }
+            catch
+            {
+                // Element gone or parameter unwritable; nothing else depends on this one.
+            }
+        }
+
+        return cleared;
+    }
+
     // ------------------------------------------------------------------- writing
 
     /// <summary>
@@ -1255,20 +1579,30 @@ public sealed class RoomFinishCalculator
     {
         var written = 0;
 
-        var sets = new (Dictionary<long, double> Values, string Parameter)[]
+        // Resolved once, up front, because the paint figures below need to know which room
+        // each element is attributed to - and WriteRoomIdentity, which used to be the only
+        // thing that knew, runs after this.
+        var owners = ResolveOwners();
+
+        var sets = new (Dictionary<long, double> Values, string Parameter, bool IsPaint)[]
         {
-            (_elemWallArea, _settings.WallParameter),
-            (_elemWallPaint, _settings.PaintParameter),
-            (_elemFloorArea, _settings.FloorParameter),
-            (_elemFloorPaint, _settings.FloorPaintParameter),
-            (_elemCeilingArea, _settings.CeilingParameter),
-            (_elemCeilingPaint, _settings.CeilingPaintParameter),
+            (_elemWallArea, _settings.WallParameter, false),
+            (_elemWallPaint, _settings.PaintParameter, true),
+            (_elemFloorArea, _settings.FloorParameter, false),
+            (_elemFloorPaint, _settings.FloorPaintParameter, true),
+            (_elemCeilingArea, _settings.CeilingParameter, false),
+            (_elemCeilingPaint, _settings.CeilingPaintParameter, true),
         };
 
-        foreach (var (values, name) in sets)
+        foreach (var (values, name, isPaint) in sets)
         {
-            foreach (var (id, value) in values)
+            foreach (var (id, total) in values)
             {
+                // Paint is apportioned to the owning room; the finish AREAS stay as the
+                // element's own full quantity, which is what they have always meant and what
+                // a material takeoff of surfaces needs.
+                var value = isPaint ? PaintShare(id, total, owners) : total;
+
                 try
                 {
                     var elementId = new ElementId(id);
@@ -1346,12 +1680,7 @@ public sealed class RoomFinishCalculator
                     continue;
                 }
 
-                // Ties broken by the lower room id, so a wall dead-centre between two rooms
-                // lands on the same one every run instead of flipping with dictionary order.
-                var owner = byRoom
-                    .OrderByDescending(e => e.Value)
-                    .ThenBy(e => e.Key)
-                    .First().Key;
+                var owner = OwnerOf(byRoom);
 
                 if (_doc.GetElement(new ElementId(owner)) is not Room room) continue;
 
@@ -1453,6 +1782,32 @@ public sealed class RoomFinishCalculator
     {
         if (id is null || value <= 0) return;
         target[id.Value] = target.GetValueOrDefault(id.Value) + value;
+    }
+
+    /// <summary>
+    /// Accumulates paint onto the element total AND records which room it came from.
+    ///
+    /// WHY THE PER-ROOM SPLIT HAD TO BE RECORDED
+    ///   The element totals are cross-room sums. A wall between two rooms carries the paint
+    ///   of BOTH sides in one number, while <see cref="WriteRoomIdentity"/> gives it a single
+    ///   'Rum'. A takeoff grouped by room therefore credits one room with the other's paint -
+    ///   the spillover this split exists to stop.
+    ///
+    ///   <see cref="Claim"/> could not answer it: it deliberately records finish AREA and
+    ///   never paint, because counting both would weight painted walls twice when deciding
+    ///   which room owns an element. So paint needs its own ledger.
+    /// </summary>
+    private void AccumulatePaint(
+        Dictionary<long, double> target, ElementId? id, Room room, double value)
+    {
+        Accumulate(target, id, value);
+
+        if (id is null || value <= 0) return;
+
+        if (!_elemRoomPaint.TryGetValue(id.Value, out var byRoom))
+            _elemRoomPaint[id.Value] = byRoom = [];
+
+        byRoom[room.Id.Value] = byRoom.GetValueOrDefault(room.Id.Value) + value;
     }
 
     /// <summary>

@@ -123,6 +123,53 @@ public sealed class FinishSettings
     /// </summary>
     public bool UseCeilingFallback { get; init; } = true;
 
+    /// <summary>
+    /// Rooms whose name STARTS with this are outdoors and get no finish measured.
+    ///
+    /// WHY THIS HAD TO EXIST
+    ///   These are the placeholder rooms drawn with room separation lines to enclose a
+    ///   terrace, balcony or entrance so it can be scheduled for AREA. They are real Room
+    ///   elements with real bounding walls, and nothing else in this engine could tell them
+    ///   apart from an interior room - so it measured them, and what it measured was the
+    ///   OUTSIDE FACE of the building's exterior walls, in interior paint materials, into an
+    ///   interior paint takeoff.
+    ///
+    ///   It was worse than a stray row. Because <c>WriteRoomIdentity</c> gives an element to
+    ///   whichever room claimed the most area, a wall between a small interior room and a
+    ///   large terrace was credited entirely to the terrace - so a genuinely interior wall's
+    ///   paint area appeared in the schedule hosted by 'Udvendig'.
+    ///
+    ///   Defaulted from <see cref="Doors.UdvendigSettings.ExteriorPrefix"/> rather than
+    ///   repeating the literal, so this engine, the skirting generator and the door resolver
+    ///   cannot drift to different ideas of what 'outside' is named.
+    /// </summary>
+    public string ExteriorRoomPrefix { get; init; } = new Doors.UdvendigSettings().ExteriorPrefix;
+
+    /// <summary>
+    /// Skip exterior placeholder rooms entirely. ON, and it should stay on.
+    ///
+    /// Turning it off restores measurement of terrace and balcony walls into the interior
+    /// finish parameters. The identity tie-break still refuses to let an exterior room win,
+    /// so the labelling stays correct either way - but the AREAS would be wrong again, which
+    /// is the more expensive half of the problem.
+    /// </summary>
+    public bool SkipExteriorRooms { get; init; } = true;
+
+    /// <summary>
+    /// Write each element's paint area as the OWNING room's share rather than the sum across
+    /// every room the element serves. ON.
+    ///
+    /// A partition between two rooms carries the paint of both faces, and the element gets a
+    /// single 'Rum'. Summed as-is, a takeoff grouped by room bills one room for its
+    /// neighbour's paint. This makes the number agree with the label it is filed under.
+    ///
+    /// Turn OFF only to reproduce an older takeoff. The trade is deliberate and reported: the
+    /// other room's share stops appearing in an ELEMENT schedule, so element schedules no
+    /// longer sum to the building's painted area. The ROOM parameters carry every room's own
+    /// total and remain the authority for quantities either way.
+    /// </summary>
+    public bool RoomConsistentPaint { get; init; } = true;
+
     /// <summary>Measure the painted jamb/head returns inside door openings.</summary>
     public bool CaptureDoorReveals { get; init; } = true;
 
