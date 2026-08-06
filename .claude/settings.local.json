@@ -107,7 +107,8 @@
       "Bash(git check-ignore *)",
       "Bash(git checkout *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\user\\\\Desktop\\\\Claude Projects\\\\Computational Design Assistant\\\\Revit Add-in'; dotnet build 'src\\\\Cda.Revit.Addin\\\\Cda.Revit.Addin.csproj' -c Release -v minimal 2>&1 | Where-Object { $_ -notmatch 'MSB3026|retry' } | Select-Object -Last 15)"
     ]
   }
 }
