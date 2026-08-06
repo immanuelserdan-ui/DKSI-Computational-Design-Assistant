@@ -96,6 +96,25 @@ internal static class RibbonBuilder
             icon: "finish",
             availability: typeof(ProjectDocumentAvailability));
 
+        // Sits directly after Finish Surface Area because it exists to explain that command's
+        // numbers: same engine, same measurement, drawn instead of written.
+        AddButton(reportPanel,
+            name: "CdaPaintHighlight",
+            text: "Paint\nHighlight",
+            command: typeof(Commands.PaintHighlightCommand),
+            tooltip: "Draws the net painted area of the selected element, instead of highlighting the whole wall.",
+            longDescription: "A toggle. While it is on, selecting a row in a Material Takeoff " +
+                             "schedule draws that element's measured paint area on the surfaces it " +
+                             "was measured from - openings and unpainted substrate excluded. " +
+                             "Revit has no per-face selection or override, so the only way to show " +
+                             "exactly the area behind a row is to draw it: the overlay is temporary " +
+                             "Generic Model geometry, removed when you turn the toggle off, clear " +
+                             "the selection, or close the model. Each shape is named with its room, " +
+                             "so clicking one tells you which row it belongs to. Off by default " +
+                             "because every highlight costs a room-geometry pass.",
+            icon: "highlight",
+            availability: typeof(ProjectDocumentAvailability));
+
         // RETIRED FROM THE RIBBON — Auto-Update Finish Areas.
         //
         // It drove the same engine as Finish Surface Area, so once it gained a "run now"

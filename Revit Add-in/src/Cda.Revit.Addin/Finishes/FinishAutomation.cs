@@ -44,6 +44,15 @@ internal static class FinishAutomation
     /// </summary>
     internal const string TransactionPrefix = "Finish Automation: ";
 
+    /// <summary>
+    /// True if a transaction name belongs to this add-in and so must not trigger a
+    /// recalculation. Anything that writes to the model from inside DKSI code should name its
+    /// transaction with a prefix listed here.
+    /// </summary>
+    private static bool IsSelfAuthored(string name) =>
+        name.StartsWith(TransactionPrefix, StringComparison.Ordinal) ||
+        name.StartsWith(Overlay.PaintHighlight.TransactionPrefix, StringComparison.Ordinal);
+
     private static UIControlledApplication? _uiApp;
     private static FinishStaleUpdater? _updater;
     private static bool _warnedAboutMissingParameter;
@@ -469,8 +478,16 @@ internal static class FinishAutomation
 
             // Defence in depth against reacting to our own writes: the suppression flag is
             // a bool that a future bug could leave unset, but a transaction we opened
-            // always carries our prefix.
-            if (e.GetTransactionNames().Any(n => n.StartsWith(TransactionPrefix, StringComparison.Ordinal)))
+            // always carries one of our prefixes.
+            //
+            // The paint highlight is listed alongside the automation's own prefix because it
+            // is a LOOKING tool that happens to write: it draws temporary DirectShapes to show
+            // where a paint area was measured. Without this, drawing an overlay queued a room
+            // recalculation and clearing one queued a full-model sweep - the tool for
+            // inspecting the numbers was changing them. That was the exact defect recorded
+            // when the earlier QA overlay was removed in 65e0d45, whose transactions were
+            // named "QA - ..." and matched nothing here.
+            if (e.GetTransactionNames().Any(IsSelfAuthored))
             {
                 Log.Debug($"DocumentChanged #{_documentChangedCount}: skipped, self-authored transaction.");
                 return;

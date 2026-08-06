@@ -28,6 +28,10 @@ public sealed class CdaApplication : IExternalApplication
             // already on screen and the user has lost a feature rather than the add-in.
             Finishes.FinishAutomation.Register(application);
 
+            // Subscribes to SelectionChanged, but does nothing until the ribbon toggle arms
+            // it - so an unarmed session pays one early-return per selection and no more.
+            Overlay.PaintHighlightService.Register(application);
+
             // Same reasoning, and last of all: time tracking is the only feature here that
             // subscribes to Idling, so a fault in it would otherwise be felt on every tick.
             // It swallows its own failures for the same reason.
@@ -53,6 +57,7 @@ public sealed class CdaApplication : IExternalApplication
         // otherwise cost the user the stretch of work they just finished.
         TimeTracking.TimeTrackingService.Unregister(application);
 
+        Overlay.PaintHighlightService.Unregister(application);
         Finishes.FinishAutomation.Unregister(application);
         Log.Info("Shutdown");
         return Result.Succeeded;
