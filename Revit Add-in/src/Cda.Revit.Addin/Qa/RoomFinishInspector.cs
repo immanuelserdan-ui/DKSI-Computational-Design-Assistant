@@ -204,11 +204,17 @@ public sealed class RoomFinishInspector
             SpatialElementBoundaryLocation = SpatialElementBoundaryLocation.Finish,
         };
 
+        // Held beyond the try so the geometric pass below can reuse it. Recomputing the room
+        // volume for that pass would double the most expensive call in this method.
+        Solid? roomSolid = null;
+
         try
         {
             var calculator = new SpatialElementGeometryCalculator(_doc, options);
             var results = calculator.CalculateSpatialElementGeometry(room);
             var solid = results.GetGeometry();
+
+            roomSolid = solid;
 
             var seen = new HashSet<long>();
             var linkedCount = 0;
@@ -267,6 +273,12 @@ public sealed class RoomFinishInspector
 
         // SECOND SOURCE for the walls. See the method for why one is not enough.
         AddBoundarySegmentWalls(room, options, set);
+
+        // THIRD SOURCE, and the only one that asks the geometry rather than the room model.
+        // Catches the wall that encloses the room without Revit calling it bounding - room
+        // bounding switched off, a separation line doing the bounding, or a neighbour's wall
+        // standing against the face. Those are the holes in the isolated view.
+        AddEnclosingWalls(room, roomSolid, set);
 
         // Separation-line-only boundaries produce no wall at all, which is legitimate and
         // very confusing to look at. Say it rather than showing an empty selection.
@@ -358,6 +370,59 @@ public sealed class RoomFinishInspector
                 "its measured faces. They enclose the room but contribute no measurable finish " +
                 "area on this side - typically a wall met at a corner, or one whose room face is " +
                 "entirely taken up by an opening.");
+        }
+    }
+
+    /// <summary>
+    /// Adds walls that physically enclose the room but that Revit does not call bounding.
+    ///
+    /// THE BUG THIS FIXES
+    ///   An isolated view built from the two boundary sources alone had holes in it: a stretch
+    ///   of room with floor, ceiling and no wall above the floor edge. The wall was there in
+    ///   the model the whole time. It was missing from the isolation because every earlier
+    ///   pass asks the ROOM which walls it references, and a wall with Room Bounding switched
+    ///   off - or one shadowed by a room separation line, or one belonging to the neighbour
+    ///   and merely standing against the face - is referenced by no room at all.
+    ///
+    ///   <see cref="RoomWallFinder"/> asks the geometry instead. It is deliberately the LAST
+    ///   pass: the two boundary sources carry provenance that matters for finish areas, and
+    ///   a wall they found should keep their label rather than be relabelled by this one.
+    /// </summary>
+    private void AddEnclosingWalls(Room room, Solid? roomSolid, RoomFinishSet set)
+    {
+        if (!_settings.IncludeEnclosingWalls) return;
+
+        try
+        {
+            var known = set.Walls.Concat(set.Floors).Concat(set.Ceilings).ToList();
+
+            var finder = new RoomWallFinder(_doc, _settings.WallTouchToleranceMm);
+            var extra = finder.Find(room, roomSolid, known);
+
+            if (extra.Count == 0) return;
+
+            foreach (var (id, _) in extra) set.Walls.Add(id);
+
+            var inside = extra.Count(e => e.Source == WallSource.IntersectsVolume);
+            var touching = extra.Count(e => e.Source == WallSource.TouchesBoundary);
+
+            var parts = new List<string>();
+            if (inside > 0) parts.Add($"{inside} standing inside the room volume");
+            if (touching > 0) parts.Add($"{touching} touching a boundary face");
+
+            set.Notes.Add(
+                $"{extra.Count} enclosing wall(s) added by geometry rather than by the room's own " +
+                $"boundary - {string.Join(", ", parts)}. Revit does not report these as bounding " +
+                "this room, usually because Room Bounding is switched off on them or a room " +
+                "separation line is doing the bounding instead. They are kept visible so the " +
+                "isolated view is not left with a hole in the enclosure.");
+        }
+        catch (Exception ex)
+        {
+            // Never fatal. The boundary passes have already produced a usable answer, and
+            // losing this one costs completeness, not correctness.
+            Log.Warn($"QA: enclosing-wall pass failed for room {room.Id.Value}: {ex.Message}");
+            set.Notes.Add($"Enclosing-wall check failed: {ex.Message}");
         }
     }
 

@@ -174,4 +174,27 @@ public sealed class QaSettings
     /// any opening, and little enough that the neighbouring room stays out.
     /// </summary>
     public double SectionBoxOffsetMm { get; init; } = 1000.0;
+
+    /// <summary>
+    /// Keep a wall visible when it stands inside the room's volume or against a boundary
+    /// face, whether or not Revit calls it bounding.
+    ///
+    /// ON, and it should stay on. Off restores the behaviour that leaves holes in the
+    /// isolated view wherever a wall has Room Bounding switched off - which is a normal,
+    /// deliberate modelling choice, not an error, so the holes appear in correct models.
+    /// The switch exists to isolate a suspicion, not as a preference.
+    /// </summary>
+    public bool IncludeEnclosingWalls { get; init; } = true;
+
+    /// <summary>
+    /// How close a wall must come to a boundary face to count as touching it, in
+    /// MILLIMETRES, measured from the wall's centreline against half its own thickness.
+    ///
+    /// Ten is deliberately tight. This test runs against every wall near the room, so a
+    /// loose value drags in the neighbour's partitions through a party wall and the isolated
+    /// view fills up with things that are not this room. A wall genuinely built against a
+    /// boundary face is modelled ON it, not near it - the tolerance is there for rounding in
+    /// the boundary calculation, not for finding walls that are approximately close.
+    /// </summary>
+    public double WallTouchToleranceMm { get; init; } = 10.0;
 }
