@@ -31,7 +31,7 @@ HOW TO INSTALL
 WHAT YOU GET
 ------------
 
-  DKSI tab, five panels:
+  DKSI tab, four panels:
 
   Model Data
     Sync Material Parameters   Copies material Manufacturer/Comments into
@@ -58,12 +58,6 @@ WHAT YOU GET
                                material, a type and an instance. Run this
                                first when a tool says "missing" or writes
                                nothing.
-
-  Vision Modeler
-    Drawings to BIM            Two-step wizard. Scale a drawing image inside
-                               Revit, pick it, then generate walls and floors
-                               from it. Traces locally by default - no API key,
-                               no cost, works offline.
 
   RUNNING WITHOUT BUTTONS
 
@@ -93,7 +87,6 @@ WHERE THINGS GO
 
   Settings, logs and reports (always per-user):
     %LocalAppData%\Cda\RevitAddin\
-    %LocalAppData%\Dksi\VisionModeler\
 
 
 IF THE DKSI TAB DOES NOT APPEAR
@@ -134,7 +127,11 @@ REQUIREMENTS
   Autodesk Revit 2027 (this build targets .NET 10, which is what Revit 2027
   runs on - it will not load into Revit 2026 or earlier).
 
-  The Vision Modeler's optional Claude vision path needs an ANTHROPIC_API_KEY
-  environment variable. The default local tracer does not - it needs nothing.
+  Nothing else. No API key, no account, no network access.
+
+  NOTE: if you previously installed a DKSI package that included "Vision
+  Modeler", this installer removes it. That tool is parked, and leaving it in
+  place would load about 6 MB into every Revit session for no visible feature.
 
 ===============================================================================
+

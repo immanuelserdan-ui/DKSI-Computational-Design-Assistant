@@ -71,8 +71,8 @@ function Test-Admin {
 # ---------------------------------------------------------------- preflight
 
 Write-Host ''
-Write-Host '  DKSI Revit Tools + Vision Modeler' -ForegroundColor Cyan
-Write-Host '  ---------------------------------' -ForegroundColor Cyan
+Write-Host '  DKSI Revit Tools' -ForegroundColor Cyan
+Write-Host '  ----------------' -ForegroundColor Cyan
 Write-Host ''
 
 Write-Log "Installer started. Package: $Root"
@@ -131,10 +131,23 @@ if ($AllUsers -and -not (Test-Admin)) {
 $scope = if ($AllUsers) { 'all users' } else { 'you only' }
 Write-Log "Installing for: $scope"
 
-# The two add-ins, and the folder each one's manifest points at with a relative path.
+# What this package installs. Each manifest's <Assembly> path is relative, so the
+# same manifest works for a per-user and an all-users install without editing.
 $addins = @(
-    @{ Manifest = 'Cda.Revit.Addin.addin';           Folder = 'Cda';           Name = 'DKSI Revit Tools' }
-    @{ Manifest = 'Dksi.VisionModeler.Addin.addin';  Folder = 'VisionModeler'; Name = 'DKSI Vision Modeler' }
+    @{ Manifest = 'Cda.Revit.Addin.addin'; Folder = 'Cda'; Name = 'DKSI Revit Tools' }
+)
+
+# Components this package deliberately no longer ships, removed wherever they are found.
+#
+# THIS LIST IS NOT OPTIONAL HOUSEKEEPING. Dropping an add-in from the payload does
+# nothing to the machines that already have it — the old manifest stays in the
+# add-ins folder and Revit keeps loading it forever, so "we removed it" is true of
+# the package and false of the office. Retiring a component means actively taking
+# it off, not merely ceasing to send it.
+$retired = @(
+    @{ Manifest = 'Dksi.VisionModeler.Addin.addin'; Folder = 'VisionModeler'
+       Name = 'DKSI Vision Modeler'
+       Why  = 'Drawings to BIM is parked, so it contributed no UI and loaded ~5.9 MB for nothing.' }
 )
 
 foreach ($version in $installed) {
@@ -148,6 +161,29 @@ foreach ($version in $installed) {
     Write-Log "Revit $version -> $target"
 
     New-Item -ItemType Directory -Path $target -Force | Out-Null
+
+    # Retired components first, from BOTH scopes, before anything is installed.
+    foreach ($old in $retired) {
+        foreach ($dir in @($userDir, $allDir)) {
+            $oldManifest = Join-Path $dir $old.Manifest
+            $oldFolder   = Join-Path $dir $old.Folder
+
+            if (-not (Test-Path $oldManifest) -and -not (Test-Path $oldFolder)) { continue }
+
+            try {
+                if (Test-Path $oldManifest) { Remove-Item $oldManifest -Force }
+                if (Test-Path $oldFolder)   { Remove-Item $oldFolder -Recurse -Force }
+                Write-Log ("  Removed retired component {0} from {1}" -f $old.Name, $dir) 'WARN'
+                Write-Log ("    {0}" -f $old.Why)
+            }
+            catch {
+                # An all-users copy needs admin to remove. Say so rather than failing the
+                # whole install over a component that is only wasting memory.
+                Write-Log ("  Could not remove {0} from {1} - run the installer as " -f $old.Name, $dir +
+                           "administrator to finish removing it.") 'WARN'
+            }
+        }
+    }
 
     foreach ($addin in $addins) {
         # Remove the SAME add-in from the other scope first.

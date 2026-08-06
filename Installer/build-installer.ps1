@@ -42,9 +42,16 @@ function Note { param([string] $m) Write-Host "    $m" }
 
 # ---------------------------------------------------------------- build
 
+# Ship = goes into the package. Everything here is BUILT either way, so a project
+# that is temporarily not shipped still fails the build if someone breaks it —
+# which is the whole reason not to simply comment it out.
 $builds = @(
-    @{ Name = 'DKSI Revit Tools';   Project = $CdaProject;    Folder = 'Cda';           Manifest = 'Cda.Revit.Addin.addin' }
-    @{ Name = 'DKSI Vision Modeler'; Project = $VisionProject; Folder = 'VisionModeler'; Manifest = 'Dksi.VisionModeler.Addin.addin' }
+    @{ Name = 'DKSI Revit Tools';    Project = $CdaProject;    Folder = 'Cda';           Manifest = 'Cda.Revit.Addin.addin';           Ship = $true }
+
+    # Parked: Drawings to BIM is off the ribbon, so this add-in would load into every
+    # Revit session, contribute no UI, and cost ~5.9 MB of assemblies and one
+    # unknown-publisher prompt for nothing. Set Ship = $true to put it back.
+    @{ Name = 'DKSI Vision Modeler'; Project = $VisionProject; Folder = 'VisionModeler'; Manifest = 'Dksi.VisionModeler.Addin.addin'; Ship = $false }
 )
 
 foreach ($build in $builds) {
@@ -71,6 +78,11 @@ if (Test-Path $Staging) { Remove-Item $Staging -Recurse -Force }
 New-Item -ItemType Directory -Path (Join-Path $Staging 'payload') -Force | Out-Null
 
 foreach ($build in $builds) {
+    if (-not $build.Ship) {
+        Note "$($build.Name): built but NOT shipped (parked)"
+        continue
+    }
+
     $projectDir = Split-Path -Parent $build.Project
     $binDir     = Join-Path $projectDir 'bin\Release'
 
