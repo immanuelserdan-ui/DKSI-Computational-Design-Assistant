@@ -457,21 +457,45 @@ public sealed class RoomFinishCalculator
             }
         }
 
-        _report.Add(
+        // Assembled rather than written as one literal because two of its claims are only
+        // true under conditions this run may not meet. A report that overstates its own
+        // certainty is the thing this whole pass exists to stop doing.
+        var paintSchedule =
             "WHICH SCHEDULE TO READ FOR PAINT: run 'Paint Takeoff' and read " +
             $"'{Schedules.PaintTakeoffBuilder.ScheduleName}'. One row per room, surface, wall and " +
             "material, built from this same measurement pass - so both faces of a shared wall appear " +
             "against the rooms they face and the row count matches the painted face count. " +
             $"DO NOT sum '{_settings.PaintParameter}' in a Wall Material Takeoff. This line used to " +
-            "advise exactly that, and it was wrong twice over: the parameter is an INSTANCE parameter " +
-            "on the wall, so Revit repeats the identical figure on every (wall, material) row and the " +
-            "column double-counts; and the repeated figure is only the OWNING room's share, so the " +
-            "neighbour's face is not in it at all. The two errors partly cancel, which is why the " +
-            "grand total can look right while every row is misattributed. The line above reporting " +
-            "area that is 'not visible in an element takeoff' is the same fact stated honestly. " +
+            "advise exactly that, and it was wrong: the parameter is an INSTANCE parameter on the " +
+            "wall, so Revit repeats the identical figure on every (wall, material) row and the column " +
+            "double-counts. ";
+
+        // Only with apportionment ON is the repeated figure the owner's share rather than the
+        // element's total. Turn RoomConsistentPaint off and the double-count is still real but
+        // this second error is not - see FinishSettings.RoomConsistentPaint.
+        if (_settings.RoomConsistentPaint)
+        {
+            paintSchedule +=
+                "It is also only the OWNING room's share, so the neighbour's face is not in it at " +
+                "all - two errors that partly cancel, which is why the grand total can look right " +
+                "while every row is misattributed. ";
+
+            // ...and only if that block actually printed. It is guarded on the same count, so
+            // referring to it unconditionally would point at a line this run never wrote.
+            if (_unattributedElements > 0)
+            {
+                paintSchedule +=
+                    "The PAINT APPORTIONED TO ONE ROOM line above is the same fact stated " +
+                    "honestly, and it is the one to believe. ";
+            }
+        }
+
+        paintSchedule +=
             $"'{_settings.WallParameter}' is unaffected and does belong in a Wall Material Takeoff: " +
             "it is the element's own whole finish face and is never apportioned - just do not price " +
-            "paint against it, because it includes the unpainted substrate.");
+            "paint against it, because it includes the unpainted substrate.";
+
+        _report.Add(paintSchedule);
 
         if (_lockedElements.Count > 0)
         {
