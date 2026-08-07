@@ -200,6 +200,12 @@ public sealed class FinishParameterSetup
                 SpecTypeId.String.Text, TakeoffCategories,
                 "the type of the element the row was measured on - 'IV-Gips-100mm'"),
 
+            // Text rather than Integer: element ids are 64-bit and a Revit Integer parameter
+            // is 32-bit, so a large model would overflow one silently.
+            new(_settings.PaintHostParameter, "d3f4a681-27b9-4e5c-91a0-6c8b53e7f24d",
+                SpecTypeId.String.Text, TakeoffCategories,
+                "the element id of the wall the row was measured on - what makes a row traceable"),
+
             // Not a finish area, but the reason the automation reports itself unavailable in
             // every model that has never been set up. Binding it here is what turns the
             // banner from a warning into a status.

@@ -138,6 +138,30 @@ public sealed class FinishSettings
     public string PaintTypeParameter { get; init; } = "Paint Type";
 
     /// <summary>
+    /// The ELEMENT ID of the wall, floor or ceiling a takeoff row was measured on.
+    ///
+    /// WHY AN ID AND NOT JUST THE TYPE NAME
+    ///   <see cref="PaintTypeParameter"/> tells you the row was measured on an
+    ///   "EM_Int - 100mm". It does not tell you WHICH one, and a flat has a dozen. That gap is
+    ///   what makes the takeoff untraceable: the row is a number nobody can walk back to a
+    ///   surface, which is exactly what an audit or a quantity dispute needs to do.
+    ///
+    ///   It also cannot be recovered by clicking. The rows are geometry-less DirectShapes on
+    ///   purpose, so selecting one highlights nothing in the model - correct behaviour for an
+    ///   invisible data carrier, and useless for finding the wall. This is the answer to that:
+    ///   Select by ID reaches the element, and <see cref="Overlay.PaintHighlight"/> uses it to
+    ///   draw the row's painted face on request.
+    ///
+    /// TEXT, NOT INTEGER, and deliberately. Revit element ids are 64-bit and a Revit Integer
+    /// parameter is 32-bit, so a large model would silently overflow. It is also read far more
+    /// often than it is arithmetic on.
+    ///
+    /// Blank on the arithmetic fallback bucket, which has no single host - the same rule and
+    /// the same reason as <see cref="PaintTypeParameter"/>.
+    /// </summary>
+    public string PaintHostParameter { get; init; } = "Paint Host Id";
+
+    /// <summary>
     /// Text parameter on Rooms recording WHICH element the ceiling area came from -
     /// "ceiling", "slab above", "roof", or "none", suffixed "(fallback)" when nothing
     /// bounded the room and the priority chain had to look overhead itself.

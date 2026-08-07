@@ -1,3 +1,4 @@
+using System.Globalization;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
@@ -88,6 +89,15 @@ internal static class PaintHighlight
     {
         var doc = uiDoc.Document;
         var view = uiDoc.ActiveGraphicalView;
+
+        // A TAKEOFF ROW IS NOT A SURFACE, so follow it to the wall it was measured on.
+        //
+        // Selecting a row in 'DKSI Paint Takeoff by Room' selects a geometry-less DirectShape.
+        // Without this, RoomsTouching finds nothing - the element has no bounding box to search
+        // around - and the reading mode that exists to explain schedule figures drew a blank on
+        // the only schedule whose figures are correct, while working fine on the Wall Material
+        // Takeoff whose figures are not. That was exactly backwards.
+        hostId = ResolveTakeoffRow(doc, hostId);
 
         var host = doc.GetElement(hostId);
         if (host is null) return ClearAndReport(uiDoc, "That element no longer exists.");
@@ -349,6 +359,49 @@ internal static class PaintHighlight
     }
 
     /// <summary>True if <paramref name="id"/> is one of our overlay shapes.</summary>
+    /// <summary>
+    /// If <paramref name="id"/> is a paint-takeoff row, the element it was measured on.
+    /// Anything else is returned unchanged.
+    ///
+    /// Reads the row's own 'Paint Host Id' rather than trying to re-derive the host from room
+    /// and material, because the row already knows: the takeoff writes it at placement time
+    /// from the same measurement pass that produced the area. Re-deriving would be a second
+    /// answer that could disagree with the first.
+    ///
+    /// Returns the row's id unchanged when the parameter is absent (a takeoff placed before
+    /// this existed) or blank (the arithmetic fallback bucket, which has no single host). The
+    /// caller then reports "no room touches this element", which is true of the row and is a
+    /// better outcome than silently highlighting the wrong wall.
+    /// </summary>
+    private static ElementId ResolveTakeoffRow(Document doc, ElementId id)
+    {
+        try
+        {
+            var element = doc.GetElement(id);
+
+            if (element is not DirectShape) return id;
+            // Same two arguments the takeoff's own DeleteExisting passes: the tool name doubles
+            // as the legacy Comments prefix, so a row from before Extensible Storage is still
+            // recognised as ours.
+            var stamp = Schedules.PaintTakeoffBuilder.Stamp;
+            if (ElementStamp.Read(element, stamp, stamp) is null) return id;
+
+            var parameter = ParameterHelper.Find(element, new FinishSettings().PaintHostParameter);
+            var text = parameter?.AsString();
+
+            if (string.IsNullOrWhiteSpace(text)) return id;
+            if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hostId))
+                return id;
+
+            var host = doc.GetElement(new ElementId(hostId));
+            return host is null ? id : host.Id;
+        }
+        catch
+        {
+            return id;
+        }
+    }
+
     public static bool IsOurs(Document doc, ElementId id)
     {
         try

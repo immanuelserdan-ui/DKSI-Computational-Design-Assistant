@@ -254,13 +254,20 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
     private static void WriteMaterialCsv(string path, IReadOnlyList<FinishCsvRow> rows)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Lejlighed,Room Number,Room Name,Surface,Type,Material,Material Code,Is Painted,Area (m2)");
+        sb.AppendLine(
+            "Lejlighed,Room Number,Room Name,Surface,Type,Host Id,Material,Material Code,Is Painted,Area (m2)");
 
         foreach (var row in rows)
         {
+            // Blank rather than "-1" for the fallback bucket: a spreadsheet reading -1 as an
+            // element id would send someone looking for an element that does not exist.
+            var hostId = row.HostId < 0
+                ? string.Empty
+                : row.HostId.ToString(CultureInfo.InvariantCulture);
+
             var fields = new[]
             {
-                row.Apartment, row.RoomNumber, row.RoomName, row.Surface, row.HostType,
+                row.Apartment, row.RoomNumber, row.RoomName, row.Surface, row.HostType, hostId,
                 row.Material, row.MaterialCode, row.Painted ? "Yes" : "No",
             };
 

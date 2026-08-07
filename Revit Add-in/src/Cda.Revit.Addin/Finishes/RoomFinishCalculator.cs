@@ -17,9 +17,15 @@ namespace Cda.Revit.Addin.Finishes;
 ///   Apartment is carried so this groups the way a Roombook does, per Lejlighed, without
 ///   having to join back to the model.
 /// </summary>
+/// <param name="HostId">
+/// Element id of the wall/floor/ceiling the row was measured on, or -1 for the arithmetic
+/// fallback bucket, which belongs to the room rather than to any one element. What turns a
+/// row from a number into something that can be walked back to a surface.
+/// </param>
 public sealed record FinishCsvRow(
     string Apartment, string RoomNumber, string RoomName, string Surface,
-    string HostType, string Material, string MaterialCode, bool Painted, double AreaSqM);
+    string HostType, long HostId, string Material, string MaterialCode, bool Painted,
+    double AreaSqM);
 
 public sealed class FinishResult
 {
@@ -2260,7 +2266,7 @@ public sealed class RoomFinishCalculator
 
             var (materialName, code, painted) = key.Describe(_doc);
             _csvRows.Add(new FinishCsvRow(apartment, number, name, surface, HostTypeName(host),
-                materialName, code, painted, Measure.ToSquareMetres(area)));
+                host, materialName, code, painted, Measure.ToSquareMetres(area)));
         }
     }
 

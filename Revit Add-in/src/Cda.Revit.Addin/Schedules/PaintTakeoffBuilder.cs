@@ -1,3 +1,4 @@
+using System.Globalization;
 using Autodesk.Revit.DB;
 using Cda.Revit.Addin.Finishes;
 using Cda.Revit.Addin.Infrastructure;
@@ -167,6 +168,12 @@ internal static class PaintTakeoffBuilder
             Write(shape, settings.PaintSurfaceParameter, row.Surface, unwritable);
             Write(shape, settings.PaintMaterialParameter, row.Material, unwritable);
             Write(shape, settings.PaintTypeParameter, row.HostType, unwritable);
+
+            // Blank for the fallback bucket, which has no single host. Writing "-1" would look
+            // like an element id and send someone hunting for an element that does not exist.
+            Write(shape, settings.PaintHostParameter,
+                row.HostId < 0 ? string.Empty : row.HostId.ToString(CultureInfo.InvariantCulture),
+                unwritable);
 
             WriteArea(shape, settings.PaintAreaParameter, row.AreaSqM, unwritable);
 
@@ -383,6 +390,7 @@ internal static class PaintTakeoffBuilder
             settings.RoomNameParameter,
             settings.PaintSurfaceParameter,
             settings.PaintTypeParameter,
+            settings.PaintHostParameter,
             settings.PaintMaterialParameter,
             settings.PaintAreaParameter,
         };
