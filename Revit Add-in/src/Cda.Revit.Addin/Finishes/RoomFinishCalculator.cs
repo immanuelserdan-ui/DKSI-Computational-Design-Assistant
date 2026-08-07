@@ -458,11 +458,20 @@ public sealed class RoomFinishCalculator
         }
 
         _report.Add(
-            $"SCHEDULE FIX: to make a Wall Material Takeoff match this engine's painted CSV, schedule " +
-            $"the NEW '{_settings.PaintParameter}' field (NOT '{_settings.WallParameter}') and filter " +
-            "'Material: As Paint = Yes'. Summed per material it equals the CSV's Is Painted = Yes rows. " +
-            $"'{_settings.WallParameter}' still holds the whole finish face (paint + substrate), so " +
-            "summing IT per material over-reports paint by the unpainted layer area.");
+            "WHICH SCHEDULE TO READ FOR PAINT: run 'Paint Takeoff' and read " +
+            $"'{Schedules.PaintTakeoffBuilder.ScheduleName}'. One row per room, surface, wall and " +
+            "material, built from this same measurement pass - so both faces of a shared wall appear " +
+            "against the rooms they face and the row count matches the painted face count. " +
+            $"DO NOT sum '{_settings.PaintParameter}' in a Wall Material Takeoff. This line used to " +
+            "advise exactly that, and it was wrong twice over: the parameter is an INSTANCE parameter " +
+            "on the wall, so Revit repeats the identical figure on every (wall, material) row and the " +
+            "column double-counts; and the repeated figure is only the OWNING room's share, so the " +
+            "neighbour's face is not in it at all. The two errors partly cancel, which is why the " +
+            "grand total can look right while every row is misattributed. The line above reporting " +
+            "area that is 'not visible in an element takeoff' is the same fact stated honestly. " +
+            $"'{_settings.WallParameter}' is unaffected and does belong in a Wall Material Takeoff: " +
+            "it is the element's own whole finish face and is never apportioned - just do not price " +
+            "paint against it, because it includes the unpainted substrate.");
 
         if (_lockedElements.Count > 0)
         {
