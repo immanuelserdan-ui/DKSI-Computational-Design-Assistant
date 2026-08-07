@@ -22,10 +22,18 @@ namespace Cda.Revit.Addin.Finishes;
 /// fallback bucket, which belongs to the room rather than to any one element. What turns a
 /// row from a number into something that can be walked back to a surface.
 /// </param>
+/// <param name="RoomSurfacePaintSqM">
+/// The owning room's PAINT total for this row's surface. Reference only - it is identical on
+/// every row of the same room and surface, so summing it multiplies the room by its row count.
+/// See FinishSettings.RoomPaintTotalParameter.
+/// </param>
+/// <param name="RoomSurfaceFinishSqM">
+/// The owning room's FINISH total for this row's surface. Same caution.
+/// </param>
 public sealed record FinishCsvRow(
     string Apartment, string RoomNumber, string RoomName, string Surface,
     string HostType, long HostId, string Material, string MaterialCode, bool Painted,
-    double AreaSqM);
+    double AreaSqM, double RoomSurfacePaintSqM, double RoomSurfaceFinishSqM);
 
 public sealed class FinishResult
 {
@@ -1235,7 +1243,9 @@ public sealed class RoomFinishCalculator
             hangingCount, hangingArea, revealCount, revealPaint, virtualSide, linkedSide, linkedFaces,
             floorFallback, ceilingFallback, fallback, missing));
 
-        AppendCsvRows(room, roomMaterials);
+        AppendCsvRows(room, roomMaterials,
+            (paintWall, netWall, paintFloor, floorArea, paintCeiling, ceilingArea));
+
         return true;
     }
 
@@ -2242,8 +2252,16 @@ public sealed class RoomFinishCalculator
         }
     }
 
+    /// <param name="totals">
+    /// The room's own per-surface figures, so each row can carry the total it contributes to.
+    /// Passed in rather than re-derived: these are the values just written to the ROOM
+    /// parameters, and a second derivation is a second answer that could disagree with them.
+    /// </param>
     private void AppendCsvRows(
-        Room room, Dictionary<(string Surface, long Host, MaterialKey Key), double> materials)
+        Room room, Dictionary<(string Surface, long Host, MaterialKey Key), double> materials,
+        (double WallPaint, double WallFinish,
+         double FloorPaint, double FloorFinish,
+         double CeilingPaint, double CeilingFinish) totals)
     {
         string number = string.Empty, name = string.Empty, apartment = string.Empty;
         try
@@ -2265,8 +2283,19 @@ public sealed class RoomFinishCalculator
             if (area <= 0.005) continue;
 
             var (materialName, code, painted) = key.Describe(_doc);
+
+            // Reveal rows take the WALL totals: their area is summed into the wall bucket, so
+            // the wall total is genuinely the figure they contribute to.
+            var (surfacePaint, surfaceFinish) = surface switch
+            {
+                FinishSettings.SurfaceFloor => (totals.FloorPaint, totals.FloorFinish),
+                FinishSettings.SurfaceCeiling => (totals.CeilingPaint, totals.CeilingFinish),
+                _ => (totals.WallPaint, totals.WallFinish),
+            };
+
             _csvRows.Add(new FinishCsvRow(apartment, number, name, surface, HostTypeName(host),
-                host, materialName, code, painted, Measure.ToSquareMetres(area)));
+                host, materialName, code, painted, Measure.ToSquareMetres(area),
+                Measure.ToSquareMetres(surfacePaint), Measure.ToSquareMetres(surfaceFinish)));
         }
     }
 

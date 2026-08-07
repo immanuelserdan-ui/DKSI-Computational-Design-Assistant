@@ -157,6 +157,13 @@ public sealed class PaintTakeoffCommand : CommandBase
             "takeoff to issue - a Wall Material Takeoff cannot carry a room column and drops " +
             "the face whose wall belongs to the neighbour.");
 
+        lines.Add(
+            $"\n'{settings.RoomPaintTotalParameter}' and '{settings.RoomFinishTotalParameter}' are " +
+            "the OWNING ROOM's totals for that row's surface, shown for comparison. They repeat " +
+            "on every row of the same room, so NEVER total those two columns - it multiplies each " +
+            $"room by its row count. '{settings.PaintAreaParameter}' is the quantity; group by " +
+            $"'{settings.RoomNameParameter}' with a footer to get correct per-room subtotals.");
+
         if (takeoff.Notes.Count > 0) lines.Add("\n" + string.Join("\n", takeoff.Notes));
         if (problems.Count > 0) lines.Add("\n" + string.Join("\n", problems));
         if (setupWarnings.Count > 0) lines.Add("\n" + string.Join("\n", setupWarnings));

@@ -254,8 +254,11 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
     private static void WriteMaterialCsv(string path, IReadOnlyList<FinishCsvRow> rows)
     {
         var sb = new StringBuilder();
+        // The last two are the room's own totals for the row's surface, repeated on every row
+        // of that room - reference columns, and wrong if a pivot table sums them.
         sb.AppendLine(
-            "Lejlighed,Room Number,Room Name,Surface,Type,Host Id,Material,Material Code,Is Painted,Area (m2)");
+            "Lejlighed,Room Number,Room Name,Surface,Type,Host Id,Material,Material Code," +
+            "Is Painted,Area (m2),Room Surface Paint (m2),Room Surface Finish (m2)");
 
         foreach (var row in rows)
         {
@@ -277,7 +280,9 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
                 sb.Append(text.Contains(',') ? '"' + text + '"' : text).Append(',');
             }
 
-            sb.AppendLine(row.AreaSqM.ToString("0.000", CultureInfo.InvariantCulture));
+            sb.Append(row.AreaSqM.ToString("0.000", CultureInfo.InvariantCulture)).Append(',');
+            sb.Append(row.RoomSurfacePaintSqM.ToString("0.000", CultureInfo.InvariantCulture)).Append(',');
+            sb.AppendLine(row.RoomSurfaceFinishSqM.ToString("0.000", CultureInfo.InvariantCulture));
         }
 
         var folder = Path.GetDirectoryName(path);

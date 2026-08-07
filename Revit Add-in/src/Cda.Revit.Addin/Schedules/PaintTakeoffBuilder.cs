@@ -177,6 +177,11 @@ internal static class PaintTakeoffBuilder
 
             WriteArea(shape, settings.PaintAreaParameter, row.AreaSqM, unwritable);
 
+            // REFERENCE COLUMNS. Identical on every row of the same room and surface, so they
+            // are correct to read and wrong to total - see FinishSettings.RoomPaintTotalParameter.
+            WriteArea(shape, settings.RoomPaintTotalParameter, row.RoomSurfacePaintSqM, unwritable);
+            WriteArea(shape, settings.RoomFinishTotalParameter, row.RoomSurfaceFinishSqM, unwritable);
+
             ElementStamp.Write(shape, Stamp, row.Surface);
 
             return true;
@@ -262,7 +267,7 @@ internal static class PaintTakeoffBuilder
         // deliberate, while a MISSING area column is never deliberate.
         if (existing is not null)
         {
-            EnsureAreaField(existing, settings, problems);
+            EnsureFields(existing, settings, problems);
             return existing;
         }
 
@@ -287,82 +292,136 @@ internal static class PaintTakeoffBuilder
     }
 
     /// <summary>
-    /// Puts the area column back on a reused schedule that has lost it, and says so.
+    /// Adds any expected column a reused schedule is missing, and says which.
     ///
-    /// Matched on the field's own name rather than on the column heading, because a heading is
-    /// editable text: someone renaming a column must not make the tool add a duplicate, and
-    /// someone naming an unrelated column 'Paint Area' must not make it skip a real repair.
+    /// WHY THIS IS NOT JUST THE AREA COLUMN ANY MORE
+    ///   The first version checked only <see cref="FinishSettings.PaintAreaParameter"/>, which
+    ///   fixed the failure that prompted it and nothing else. The very next change added
+    ///   'Paint Host Id' - and it never appeared, because a schedule that already exists never
+    ///   runs <see cref="AddFields"/> and the repair was not looking for it. The user had to
+    ///   delete the view by hand to get a complete one, which is the thing reuse exists to
+    ///   avoid. Any column added from now on has the same problem unless the check is general.
+    ///
+    ///   So it now walks the same <see cref="WantedFields"/> list the builder uses. One list,
+    ///   both paths, and a new column reaches an existing schedule on the next run.
+    ///
+    /// NOTHING IS EVER REMOVED. An extra column might be deliberate; a missing one never is.
+    /// Appended in order at the end rather than inserted, because a schedule someone has
+    /// arranged is theirs, and moving their columns to satisfy a default order would be a
+    /// bigger surprise than a column arriving on the right.
+    ///
+    /// Matched on the field's own name rather than the column heading, because a heading is
+    /// editable text: renaming a column must not cause a duplicate, and naming an unrelated
+    /// column 'Paint Area' must not make it skip a real repair.
     /// </summary>
-    private static void EnsureAreaField(
+    private static void EnsureFields(
         ViewSchedule schedule, FinishSettings settings, List<string> problems)
     {
         var definition = schedule.Definition;
 
+        var present = new HashSet<string>(StringComparer.Ordinal);
+
         try
         {
             foreach (var fieldId in definition.GetFieldOrder())
-            {
-                var field = definition.GetField(fieldId);
-
-                if (string.Equals(field.GetName(), settings.PaintAreaParameter, StringComparison.Ordinal))
-                    return;
-            }
+                present.Add(definition.GetField(fieldId).GetName());
         }
         catch (Exception ex)
         {
-            // Unreadable field list. Say so rather than adding a second area column on a
-            // schedule that may already have one.
+            // Unreadable field list. Say so rather than adding duplicates of columns that may
+            // already be there.
             problems.Add(
-                $"Could not check whether '{ScheduleName}' still shows " +
-                $"'{settings.PaintAreaParameter}': {ex.Message}");
+                $"Could not check which columns '{ScheduleName}' still shows, so it was left " +
+                $"alone: {ex.Message}");
             return;
         }
 
-        SchedulableField? wanted = null;
+        var missing = WantedFields(settings).Where(name => !present.Contains(name)).ToList();
+        if (missing.Count == 0) return;
+
+        var available = new Dictionary<string, SchedulableField>(StringComparer.Ordinal);
 
         try
         {
             foreach (var candidate in definition.GetSchedulableFields())
             {
-                if (!string.Equals(candidate.GetName(schedule.Document), settings.PaintAreaParameter,
-                        StringComparison.Ordinal))
-                    continue;
-
-                wanted = candidate;
-                break;
+                try { available.TryAdd(candidate.GetName(schedule.Document), candidate); }
+                catch { /* a field that will not name itself cannot be matched */ }
             }
-        }
-        catch
-        {
-            // Handled by the null check below.
-        }
-
-        if (wanted is null)
-        {
-            problems.Add(
-                $"'{ScheduleName}' has no '{settings.PaintAreaParameter}' column and the field is " +
-                "not available to add, so the schedule cannot show any quantity. Run 'Set Up " +
-                "Finish Schedules' to bind it to Generic Models.");
-            return;
-        }
-
-        try
-        {
-            definition.AddField(wanted);
-
-            problems.Add(
-                $"'{ScheduleName}' had no '{settings.PaintAreaParameter}' column - every row's " +
-                "area was invisible - so it has been added as the last column. If a column " +
-                "beginning 'Room:' is also present, that one is a ROOM-relationship field: these " +
-                "rows are geometry-less and sit in no room, so it will always be blank. Delete it.");
         }
         catch (Exception ex)
         {
+            problems.Add($"Could not read the available fields for '{ScheduleName}': {ex.Message}");
+            return;
+        }
+
+        var added = new List<string>();
+        var unavailable = new List<string>();
+
+        foreach (var name in missing)
+        {
+            if (!available.TryGetValue(name, out var field))
+            {
+                unavailable.Add(name);
+                continue;
+            }
+
+            try
+            {
+                definition.AddField(field);
+                added.Add(name);
+            }
+            catch (Exception ex)
+            {
+                problems.Add($"Could not add '{name}' to '{ScheduleName}': {ex.Message}");
+            }
+        }
+
+        if (added.Count > 0)
+        {
+            // Named individually because the area column going missing is a different event
+            // from a new column arriving, and the reader needs to know which happened.
             problems.Add(
-                $"Could not add the missing '{settings.PaintAreaParameter}' column to " +
-                $"'{ScheduleName}': {ex.Message}");
+                $"'{ScheduleName}' was missing {added.Count} column(s) - {string.Join(", ", added)} " +
+                "- so they have been added at the end. " +
+                (added.Contains(settings.PaintAreaParameter)
+                    ? "That includes the AREA column, so until now every row's quantity was " +
+                      "invisible in this schedule. "
+                    : string.Empty) +
+                "Any column beginning 'Room:' is a ROOM-relationship field and will always be " +
+                "blank on these rows - they are geometry-less and sit in no room. Delete those.");
+        }
+
+        if (unavailable.Count > 0)
+        {
+            problems.Add(
+                $"{string.Join(", ", unavailable)} could not be added to '{ScheduleName}' because " +
+                "the field is not available on Generic Models. Run 'Set Up Finish Schedules' to " +
+                "bind it, then run this again.");
         }
     }
+
+    /// <summary>
+    /// The takeoff's columns, in the order they are added to a new schedule. Shared with
+    /// <see cref="EnsureFields"/> so a column added here reaches existing schedules too.
+    ///
+    /// The order mirrors the Wall Material Takeoff people already read, with the two reference
+    /// totals last - they are the least important thing on the row and must not sit where a
+    /// reader's eye lands on them as the quantity.
+    /// </summary>
+    private static string[] WantedFields(FinishSettings settings) =>
+    [
+        settings.ApartmentParameter,
+        settings.RoomNumberParameter,
+        settings.RoomNameParameter,
+        settings.PaintSurfaceParameter,
+        settings.PaintTypeParameter,
+        settings.PaintHostParameter,
+        settings.PaintMaterialParameter,
+        settings.PaintAreaParameter,
+        settings.RoomPaintTotalParameter,
+        settings.RoomFinishTotalParameter,
+    ];
 
     /// <summary>
     /// Fields are resolved by NAME from what the schedule says it can show, never by parameter
@@ -381,19 +440,9 @@ internal static class PaintTakeoffBuilder
             catch { /* a field that will not name itself cannot be matched */ }
         }
 
-        // Order matters: this is the column order of the finished schedule, and it mirrors the
-        // Wall Material Takeoff people already read.
-        var wanted = new[]
-        {
-            settings.ApartmentParameter,
-            settings.RoomNumberParameter,
-            settings.RoomNameParameter,
-            settings.PaintSurfaceParameter,
-            settings.PaintTypeParameter,
-            settings.PaintHostParameter,
-            settings.PaintMaterialParameter,
-            settings.PaintAreaParameter,
-        };
+        // One list, shared with EnsureFields, so a column added to the takeoff reaches both a
+        // new schedule and an existing one.
+        var wanted = WantedFields(settings);
 
         ScheduleFieldId? areaField = null;
         var added = new Dictionary<string, ScheduleFieldId>(StringComparer.OrdinalIgnoreCase);

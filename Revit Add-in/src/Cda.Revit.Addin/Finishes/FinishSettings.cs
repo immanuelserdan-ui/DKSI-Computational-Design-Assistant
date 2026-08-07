@@ -162,6 +162,37 @@ public sealed class FinishSettings
     public string PaintHostParameter { get; init; } = "Paint Host Id";
 
     /// <summary>
+    /// The OWNING ROOM's paint total for this row's surface, copied onto the takeoff row.
+    ///
+    /// WHY IT EXISTS: the room parameters are the authority, and until now the only way to see
+    /// them beside the rows was a second schedule. Revit's own 'Room: Wall Paint Area' field
+    /// cannot supply it - that is a room-RELATIONSHIP lookup resolved from an element's
+    /// location, and these rows are geometry-less by design, so they are in no room and the
+    /// column is blank in every model, forever. Copying the value is the only mechanism left.
+    ///
+    /// MATCHED TO THE ROW'S SURFACE, not fixed to walls: a Ceiling row carries the room's
+    /// ceiling paint total, a Floor row its floor total. A wall figure printed against a
+    /// ceiling row would be a number that has nothing to do with the row it sits on. Reveal
+    /// rows take the wall total, because that is the bucket their area is summed into.
+    ///
+    /// NEVER SUM THIS COLUMN. It is the room's total repeated identically on every row of that
+    /// room, so totalling it multiplies the room's area by its row count - Bad's six rows would
+    /// report 6 x 18.45 m2. It is a REFERENCE figure for comparing a row against its room, and
+    /// the schedule's own per-room footer is the safe way to get the same comparison. This is
+    /// the exact shape of the Wall Material Takeoff defect that the per-room takeoff was built
+    /// to escape, reintroduced deliberately and on request, in a column that is not the
+    /// quantity.
+    /// </summary>
+    public string RoomPaintTotalParameter { get; init; } = "Room Paint Total";
+
+    /// <summary>
+    /// The owning room's FINISH total for this row's surface - paint plus the unpainted
+    /// substrate. The companion to <see cref="RoomPaintTotalParameter"/>, and subject to every
+    /// caution on it, including that it must never be summed.
+    /// </summary>
+    public string RoomFinishTotalParameter { get; init; } = "Room Finish Total";
+
+    /// <summary>
     /// Text parameter on Rooms recording WHICH element the ceiling area came from -
     /// "ceiling", "slab above", "roof", or "none", suffixed "(fallback)" when nothing
     /// bounded the room and the priority chain had to look overhead itself.

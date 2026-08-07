@@ -206,6 +206,16 @@ public sealed class FinishParameterSetup
                 SpecTypeId.String.Text, TakeoffCategories,
                 "the element id of the wall the row was measured on - what makes a row traceable"),
 
+            // Reference columns, not quantities. Both repeat the owning room's total on every
+            // row of that room, so both are wrong if summed - see RoomPaintTotalParameter.
+            new(_settings.RoomPaintTotalParameter, "7c2ea940-8b16-4f73-a5d8-30e91c6b4f27",
+                SpecTypeId.Area, TakeoffCategories,
+                "the owning room's paint total for this row's surface - reference only, never sum"),
+
+            new(_settings.RoomFinishTotalParameter, "e58b1073-4da2-49c6-b70f-92a4d81e35bc",
+                SpecTypeId.Area, TakeoffCategories,
+                "the owning room's finish total for this row's surface - reference only, never sum"),
+
             // Not a finish area, but the reason the automation reports itself unavailable in
             // every model that has never been set up. Binding it here is what turns the
             // banner from a warning into a status.
