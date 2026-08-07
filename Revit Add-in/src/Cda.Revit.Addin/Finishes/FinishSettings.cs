@@ -19,9 +19,42 @@ public sealed class FinishSettings
     public string CeilingParameter { get; init; } = "Ceiling Finish Area";
 
     /// <summary>
-    /// Room-clipped PAINTED-only wall area, written to Rooms and Walls. Schedule this
-    /// (not "Wall Finish Area") in a Wall Material Takeoff filtered to
-    /// 'Material: As Paint = Yes' to match the painted CSV rows per material.
+    /// Room-clipped PAINTED-only wall area, written to Rooms and Walls.
+    ///
+    /// DO NOT SCHEDULE THIS IN A WALL MATERIAL TAKEOFF. This comment used to say the
+    /// opposite - "schedule this, filtered to 'Material: As Paint = Yes'" - and that advice
+    /// produces quantities that are wrong twice over.
+    ///
+    ///   ONE. It is an INSTANCE parameter on the wall, and a material takeoff has one row per
+    ///   (wall, material). Revit has nothing to split an element parameter by, so it prints
+    ///   the identical figure on every material row of the same wall. A wall painted VBP on
+    ///   one face and VBJ on the other shows the same number twice; summing the column
+    ///   double-counts it, and a third paint material would triple it. Two byte-identical
+    ///   areas against two different materials is the signature, and it reads as a plausible
+    ///   duplicate rather than as an error.
+    ///
+    ///   TWO. With <see cref="RoomConsistentPaint"/> on - the default - the repeated figure is
+    ///   not even the wall's total. <c>PaintShare</c> writes only the OWNING room's share, so
+    ///   the neighbouring room's face is not in that number at all. The row labelled with the
+    ///   neighbour's material is the owner's area wearing the neighbour's name.
+    ///
+    ///   The two errors partly cancel: on a symmetric partition, one room's share printed
+    ///   twice sums to roughly the wall's true total. The grand total can therefore look right
+    ///   while every row is misattributed, which is why this survived so long.
+    ///
+    /// FOR PAINT QUANTITIES, RUN 'Paint Takeoff' and read 'DKSI Paint Takeoff by Room'
+    /// (<see cref="Schedules.PaintTakeoffBuilder"/>). It places one row per (room, surface,
+    /// host, material), so both faces of a shared wall appear against the rooms they face and
+    /// the row count matches the painted face count. It is built from the engine's own
+    /// per-room results, so it cannot drift from the CSV.
+    ///
+    /// WHAT THIS PARAMETER IS STILL FOR: the value on the ROOM, which carries that room's own
+    /// full painted wall area and is unaffected by all of the above. Schedule Rooms, not
+    /// walls. The value on the WALL is the owner's share, useful for tinting or filtering a
+    /// view and not for summing.
+    ///
+    /// <see cref="WallParameter"/> has no such problem and belongs in a Wall Material Takeoff:
+    /// it is the element's own whole finish face, never apportioned.
     /// </summary>
     public string PaintParameter { get; init; } = "Wall Paint Area";
 

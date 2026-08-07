@@ -170,9 +170,28 @@ The engine writes five parameters. Bind them as **Area**-type project parameters
 
 Any that are missing are listed per room as `MISSING PARAMS` rather than failing the run.
 
-To make a Wall Material Takeoff reconcile with the CSV, schedule **`Wall Paint Area`** —
-not `Wall Finish Area` — and filter `Material: As Paint = Yes`. Summing `Wall Finish Area`
-per material over-reports paint by the unpainted layer area.
+**A Wall Material Takeoff cannot report paint, and `Wall Paint Area` must not be summed in
+one.** Earlier versions of this README said otherwise. The advice was wrong twice over:
+
+- A material takeoff has one row per (wall, material), and `Wall Paint Area` is an
+  *instance* parameter on the wall — Revit has nothing to split it by, so it prints the
+  identical figure on every material row of the same wall. A wall painted VBP on one face
+  and VBJ on the other shows the same number twice, and summing the column double-counts it.
+- With `RoomConsistentPaint` on (the default) that repeated figure is only the **owning
+  room's share**, so the neighbouring room's face is absent from it entirely. The row
+  carrying the neighbour's material name is the owner's area wearing the wrong label.
+
+The two errors partly cancel — one room's share printed twice roughly equals the wall's real
+total — so the grand total can look correct while every row is misattributed.
+
+**For paint, run `Paint Takeoff` and read the `DKSI Paint Takeoff by Room` schedule.** It
+places one row per (room, surface, host, material), so both faces of a shared wall appear
+against the rooms they actually face, and the row count matches the painted face count. It
+is generated from the engine's own per-room results, so it cannot drift from the CSV.
+
+The Wall Material Takeoff remains the right home for **`Wall Finish Area`**, which is the
+element's own whole finish face and is never apportioned. Just don't sum it against a paint
+rate — it includes the unpainted substrate.
 
 Two behaviours worth knowing: it **enables 'Areas and Volumes'** if off, and **raises room
 Upper Offsets** over sloped ceilings (raise-only). Both are model writes, both are inside

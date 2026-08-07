@@ -128,9 +128,26 @@ entirely, because those elements face one room each.
 so they are blank in a Floor takeoff and always will be. Schedule **Rooms** to see them. Only
 the element-side parameters appear on element rows.
 
-For paint costing, schedule **`Wall Paint Area`** and filter `Material: As Paint = Yes`.
-`Wall Finish Area` is the whole finish face including the unpainted substrate, so summing it
-against a paint rate over-reports.
+**For paint costing, do not use a Wall Material Takeoff at all.** This guide used to say to
+schedule `Wall Paint Area` there and filter `Material: As Paint = Yes`. That runs straight
+into the first two traps at once. The parameter is on the wall, so it repeats identically on
+every material row — a wall painted VBP on one face and VBJ on the other prints the same
+figure twice, and the column double-counts. And because paint is apportioned to the owning
+room, that repeated figure is only *that* room's share, so the neighbour's face is missing
+from it entirely. The row carrying the neighbour's material is the owner's area under the
+wrong name.
+
+Watch for it: two identical areas against two different materials on the same wall. It reads
+like a harmless duplicate and it is not.
+
+Run **`Paint Takeoff`** instead and read the **`DKSI Paint Takeoff by Room`** schedule it
+generates. One row per room, surface, wall and material — so both faces of a shared wall
+appear against the rooms they face, and the row count matches the number of painted faces.
+The figures come from the same measurement pass as the CSV, so the two always agree.
+
+`Wall Finish Area` still belongs in a Wall Material Takeoff: it is the element's own whole
+finish face and is never apportioned. Just don't price paint against it — it includes the
+unpainted substrate.
 
 ---
 
