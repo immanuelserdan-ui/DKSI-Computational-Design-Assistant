@@ -229,6 +229,63 @@ public sealed class FinishGeometry
         return (total, materials);
     }
 
+    /// <summary>
+    /// Does this element carry PAINT on a face that fronts the room, when
+    /// <see cref="ExactSubfaceArea"/> has already declined to measure it?
+    ///
+    /// WHY A SEPARATE, CHEAPER TEST
+    ///   The exact clip returns null for a whole family of reasons - curved or non-planar
+    ///   faces, edited profiles, a boolean that fails or comes back empty - and every one of
+    ///   them sends the face to the arithmetic fallback, where <see cref="MaterialKey.Fallback"/>
+    ///   is unpainted BY DEFINITION. That is the right call for a cost basis: fallback area was
+    ///   never measured off a face, so it has no material to name and inventing one would price
+    ///   a measurement failure.
+    ///
+    ///   But it makes the two possible causes indistinguishable in the output. "This face has
+    ///   no paint on it" and "this face is painted and we could not measure it" both leave the
+    ///   paint takeoff with no row, and only the second is a defect. This answers which.
+    ///
+    /// DELIBERATELY NOT AN AREA
+    ///   It returns a bool, not a quantity, because the only number available here is the
+    ///   room subface's gross planar area - openings not deducted, split regions not resolved.
+    ///   Reporting that as painted area would put an upper bound into a schedule that is read
+    ///   as a measurement. The caller flags the element and names it; the quantity stays out
+    ///   until the modelling is fixed and the exact path can measure it properly.
+    ///
+    /// Same coplanar test and tolerance as the exact clip, so it selects exactly the faces
+    /// that clip would have measured - minus the boolean, which is the expensive part and the
+    /// part that just failed.
+    /// </summary>
+    public bool HasPaintedCoplanarFace(
+        Face roomFace, IReadOnlyList<Face> hostFaces, Element? owner)
+    {
+        if (owner is null) return false;
+
+        var (roomOrigin, roomNormal) = PlanarData(roomFace);
+        if (roomOrigin is null || roomNormal is null) return false;
+
+        foreach (var hostFace in hostFaces)
+        {
+            var (hostOrigin, hostNormal) = PlanarData(hostFace);
+            if (hostOrigin is null || hostNormal is null) continue;
+
+            if (Math.Abs(Math.Abs(roomNormal.DotProduct(hostNormal)) - 1.0) > 0.01) continue;
+            if (Math.Abs((hostOrigin - roomOrigin).DotProduct(roomNormal)) > FinishSettings.CoplanarTolerance)
+                continue;
+
+            try
+            {
+                if (_doc.IsPainted(owner.Id, hostFace)) return true;
+            }
+            catch
+            {
+                // A face whose reference will not resolve cannot be proven painted.
+            }
+        }
+
+        return false;
+    }
+
     // ------------------------------------------------------------------ solids
 
     /// <summary>

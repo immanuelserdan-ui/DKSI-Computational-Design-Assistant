@@ -172,6 +172,57 @@ public sealed class RoomFinishCalculator
 
     private int _unattributedElements;
 
+    /// <summary>
+    /// Room boundary faces contributed by elements in a LINKED model, which this engine does
+    /// not measure.
+    ///
+    /// WHY THIS IS COUNTED SEPARATELY FROM SEPARATION-LINE AREA
+    ///   Both arrive here as a boundary whose element resolves to null, and until now both
+    ///   were added to the same bucket and reported as "excluded ... separation-line boundary".
+    ///   That sentence is true of one of them. For the other it names the wrong cause: the
+    ///   room IS bounded, by a real painted wall, that simply lives in another document.
+    ///
+    ///   The distinction matters most in exactly the arrangement where it was invisible - an
+    ///   architectural model linked into a coordination or twin model. There, EVERY bounding
+    ///   wall is linked, so every painted face is absent from the takeoff and the only
+    ///   diagnostic pointed at room separation lines that nobody had drawn.
+    ///
+    /// MEASURING THEM IS A SEPARATE PIECE OF WORK, deliberately not attempted here: the link's
+    /// geometry needs its instance transform applied, paint has to be read from the LINK's
+    /// document rather than this one, and no result can be written back onto a linked element.
+    /// Reporting the gap honestly is worth more than a half-measured number, and it is the
+    /// prerequisite for anyone deciding whether the full version is worth building.
+    /// </summary>
+    private double _linkedBoundaryArea;
+
+    private int _linkedBoundaryFaces;
+
+    /// <summary>Rooms with at least one linked bounding face. Not the face count.</summary>
+    private readonly HashSet<long> _linkedBoundaryRooms = [];
+
+    /// <summary>
+    /// Elements that ARE painted on their room-facing side but whose paint could not be
+    /// measured, so none of it reaches the paint takeoff.
+    ///
+    /// THE FAILURE THIS MAKES VISIBLE
+    ///   When the exact clip declines a wall, its area goes to the arithmetic fallback bucket,
+    ///   and that bucket is unpainted by definition - see <see cref="MaterialKey.Fallback"/>.
+    ///   So the wall's paint silently becomes zero: no takeoff row, no CSV row, no warning, and
+    ///   a room total that is confidently short. A wrong number announces itself eventually; a
+    ///   missing row does not.
+    ///
+    ///   <see cref="FinishGeometry.HasPaintedCoplanarFace"/> separates that from the innocent
+    ///   case of a fallback wall that genuinely carries no paint, which needs no attention at
+    ///   all. Only the elements listed here are modelling defects.
+    ///
+    /// NO AREA IS RECORDED ALONGSIDE, and that is not an oversight - see the remarks on
+    /// <see cref="FinishGeometry.HasPaintedCoplanarFace"/>. The gross planar area is an upper
+    /// bound with openings still in it; publishing it as painted area would put a number that
+    /// was never measured into a schedule read as a measurement. The element ids are the
+    /// deliverable: they say exactly what to fix.
+    /// </summary>
+    private readonly HashSet<long> _paintedUnmeasured = [];
+
     private readonly ElementId _sepLineCategory = new(BuiltInCategory.OST_RoomSeparationLines);
     private readonly ElementId _ceilingCategory = new(BuiltInCategory.OST_Ceilings);
     private readonly ElementId _roofCategory = new(BuiltInCategory.OST_Roofs);
@@ -287,6 +338,41 @@ public sealed class RoomFinishCalculator
                 "rooms' own parameters, which remain the authority. Modelling finishes as separate " +
                 "room-side layers - the office standard - removes the split entirely, because those " +
                 "elements face one room each.");
+        }
+
+        if (_linkedBoundaryFaces > 0)
+        {
+            _report.Add(
+                $"LINKED WALLS NOT MEASURED: {_linkedBoundaryFaces} bounding face(s) across " +
+                $"{_linkedBoundaryRooms.Count} room(s), totalling " +
+                $"{Measure.ToSquareMetres(_linkedBoundaryArea):0.00} m² of room-facing surface, come " +
+                "from elements in a LINKED model. This engine measures the host document only, so " +
+                "ANY PAINT ON THOSE FACES IS ABSENT from every room total, every element parameter " +
+                "and the takeoff - it is not zero paint, it is unmeasured paint, and the two look " +
+                "identical in a schedule. " +
+                "Earlier versions counted this area as room separation-line boundary, which named " +
+                "the wrong cause: the rooms ARE bounded, by real walls in another file. " +
+                "To get these quantities, run the tool in the model that OWNS the walls, or bind " +
+                "the link. A model whose walls are all linked will otherwise report almost no paint " +
+                "at all, entirely silently.");
+        }
+
+        if (_paintedUnmeasured.Count > 0)
+        {
+            _report.Add(
+                $"PAINTED BUT NOT MEASURED: {_paintedUnmeasured.Count} element(s) carry paint on a " +
+                "room-facing surface that the geometric pass could not measure, so that face fell " +
+                "to the arithmetic fallback - which is unpainted by definition. Their paint is " +
+                "therefore MISSING from the paint takeoff, reported as a confident zero rather " +
+                "than as a failure. " +
+                "Usual causes: a curved or non-planar face, an edited wall profile, a boolean that " +
+                "returns empty, or a room bounded by something that is not a Wall (an in-place " +
+                "family, a column). No area is quoted here on purpose - the only figure available " +
+                "is a gross planar upper bound with openings still in it, and publishing that as " +
+                "painted area would be inventing a measurement. " +
+                "Element ids: " + string.Join(", ", _paintedUnmeasured.Order().Take(50)) +
+                (_paintedUnmeasured.Count > 50 ? ", ..." : string.Empty) +
+                ". Fix the modelling and the exact path will measure them.");
         }
 
         if (_exteriorRooms > 0)
@@ -771,6 +857,8 @@ public sealed class RoomFinishCalculator
         var wallExact = 0.0;
         var grossWall = 0.0;
         var virtualSide = 0.0;
+        var linkedSide = 0.0;
+        var linkedFaces = 0;
         var exactWalls = new HashSet<long>();
         int exactFaces = 0, fallbackFaces = 0, floorFallback = 0, ceilingFallback = 0;
         var netFloorSlab = 0.0;
@@ -895,6 +983,17 @@ public sealed class RoomFinishCalculator
                             continue;
                     }
 
+                    // A LINKED wall bounds the room for real; it is simply in another document.
+                    // Checked BEFORE the null test, because a linked boundary is exactly the
+                    // case that resolves to null - lumping it in with separation lines is what
+                    // made an entire federated model's paint disappear without a diagnostic.
+                    if (element is null && IsLinkedBoundary(subface))
+                    {
+                        linkedSide += area;
+                        linkedFaces++;
+                        continue;
+                    }
+
                     if (element is null ||
                         (element.Category is not null && element.Category.Id == _sepLineCategory))
                     {
@@ -960,6 +1059,17 @@ public sealed class RoomFinishCalculator
                         Accumulate(_elemWallArea, element.Id, area);
                         Claim(element.Id, room, area);
                         fallbackFaces++;
+
+                        // ...which silently zeroes the paint on a face that HAS paint on it.
+                        // The area routing above is unchanged and stays unchanged: the room
+                        // deductions below are computed against the whole fallback bucket, so
+                        // pulling this face out of it would misapply them to the rest. What
+                        // changes is only that the loss is now named instead of invisible.
+                        if (_geometry.HasPaintedCoplanarFace(
+                                subfaceFace, _geometry.CachedFaces(element), element))
+                        {
+                            _paintedUnmeasured.Add(element.Id.Value);
+                        }
                     }
                 }
             }
@@ -1073,11 +1183,18 @@ public sealed class RoomFinishCalculator
         if (!SetText(room, _settings.CeilingSourceParameter, ceilingSourceLabel))
             missing.Add(_settings.CeilingSourceParameter);
 
+        if (linkedFaces > 0)
+        {
+            _linkedBoundaryArea += linkedSide;
+            _linkedBoundaryFaces += linkedFaces;
+            _linkedBoundaryRooms.Add(room.Id.Value);
+        }
+
         _report.Add(BuildRoomLine(room, netWall, wallExact, exactFaces, grossWall, fallbackFaces,
             openCount, openTotal, caseworkCount, caseworkTotal, floorArea, ceilingArea, paintWall,
             netFloorSlab, roomFootprint, openBelow, ceilingSource, mezzCount, mezzFloor, mezzCeiling,
-            hangingCount, hangingArea, revealCount, revealPaint, virtualSide, floorFallback,
-            ceilingFallback, fallback, missing));
+            hangingCount, hangingArea, revealCount, revealPaint, virtualSide, linkedSide, linkedFaces,
+            floorFallback, ceilingFallback, fallback, missing));
 
         AppendCsvRows(room, roomMaterials);
         return true;
@@ -2014,6 +2131,25 @@ public sealed class RoomFinishCalculator
     }
 
     /// <summary>
+    /// Did this boundary come from a LINKED document?
+    ///
+    /// <see cref="BoundaryElement"/> resolves through HostElementId, which a linked boundary
+    /// leaves invalid - so a linked wall and a room separation line both come back null and
+    /// were, until this existed, indistinguishable. LinkInstanceId is the one field that
+    /// separates them, and it is set on exactly the boundaries the host document cannot
+    /// resolve an element for.
+    ///
+    /// The same test the paint overlay has always applied before skipping a subface
+    /// (PaintSurfaceExtractor). The engine not applying it is why the two disagreed about
+    /// links, with the overlay right.
+    /// </summary>
+    private static bool IsLinkedBoundary(SpatialElementBoundarySubface subface)
+    {
+        try { return subface.SpatialBoundaryElement.LinkInstanceId != ElementId.InvalidElementId; }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// Which element served as the "ceiling" (Danish priority chain: Ceiling > slab above
     /// > roof). Revit's clipping picks the nearest bounding element; this records which one
     /// it was, so the source of every ceiling area is auditable per room.
@@ -2132,7 +2268,8 @@ public sealed class RoomFinishCalculator
         int mezzCount, double mezzFloor, double mezzCeiling,
         int hangingCount, double hangingArea,
         int revealCount, double revealPaint,
-        double virtualSide, int floorFallback, int ceilingFallback,
+        double virtualSide, double linkedSide, int linkedFaces,
+        int floorFallback, int ceilingFallback,
         CeilingFallbackResult? ceilingChain,
         IReadOnlyList<string> missing)
     {
@@ -2169,6 +2306,14 @@ public sealed class RoomFinishCalculator
                     $" {F(Measure.ToSquareMetres(revealPaint))} m2 painted return";
 
         if (virtualSide > 0) line += $" | excluded {F(virtualSide)} SF separation-line boundary";
+
+        // Stated as NOT MEASURED rather than "excluded", because excluded reads as a decision
+        // about area that did not belong here. This is area that does belong here and is
+        // missing anyway.
+        if (linkedFaces > 0)
+            line += $" | NOT MEASURED: {linkedFaces} LINKED face(s), {F(linkedSide)} SF /" +
+                    $" {F(Measure.ToSquareMetres(linkedSide))} m2 - any paint on them is absent" +
+                    " from this room's totals";
 
         if (ceilingChain is not null)
         {
