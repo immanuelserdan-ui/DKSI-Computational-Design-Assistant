@@ -94,21 +94,22 @@ internal static class RibbonBuilder
 
         // ---- reporting -----------------------------------------------------------
 
-        // THIS IS THE ROOM-BOUNDARY TOOL. It raises room Upper Offsets over sloped ceilings and
-        // runs the ceiling / slab-above / roof priority chain for rooms nothing bounds from
-        // above - the "situational ceiling, floor slab and roof" adjustment - as part of
-        // measuring. It also binds any missing finish parameter on the way through, which is
-        // what makes retiring the separate Set Up Finish Schedules button safe.
+        // BOUNDARIES ONLY. This used to point at FinishSurfaceAreaCommand, which did the
+        // boundary correction and then measured everything, bound seven shared parameters and
+        // wrote a CSV. The measurement half is gone from the ribbon at the user's request, so
+        // the entry now points at the command that does the boundary work and stops.
         AddPulldownItem(tools,
-            name: "CdaFinishSurfaceArea",
-            text: "Room Boundary & Finish Areas",
-            command: typeof(Commands.FinishSurfaceAreaCommand),
-            tooltip: "Adjusts room boundaries against ceilings, slabs and roofs, then measures finish areas.",
-            longDescription: "Raises room upper limits over sloped ceilings and resolves the ceiling " +
-                             "source from the ceiling / slab above / roof chain, then writes " +
-                             "Wall/Floor/Ceiling Finish Area, Wall Paint Area and Net Floor Area to " +
-                             "rooms and elements and exports a per-room per-material CSV. Binds any " +
-                             "missing parameter automatically.",
+            name: "CdaAdjustRoomBoundaries",
+            text: "Adjust Room Boundaries",
+            command: typeof(Commands.AdjustRoomBoundariesCommand),
+            tooltip: "Adjusts room boundaries against ceilings, slabs and roofs.",
+            longDescription: "Enables 'Areas and Volumes' if it is off, so rooms clip against " +
+                             "bounding ceilings at all, then raises each room's Upper Offset just " +
+                             "past the highest ceiling, slab or roof overlapping it - a sloped " +
+                             "ceiling above the limit otherwise leaves the room sliced flat. " +
+                             "Raise-only, so a room already bounded correctly is untouched. " +
+                             "Binds no parameters, measures no areas and writes no CSV; one " +
+                             "Ctrl+Z reverts the whole run.",
             icon: "finish",
             availability: typeof(ProjectDocumentAvailability));
 
@@ -149,25 +150,34 @@ internal static class RibbonBuilder
         //
         //   Sync Material Parameters  (SyncMaterialParamsCommand)
         //   Set Up Finish Schedules   (SetUpFinishSchedulesCommand)
+        //   Finish Surface Area       (FinishSurfaceAreaCommand)
         //   Paint Takeoff by Room     (PaintTakeoffCommand)
         //   Paint Highlight           (PaintHighlightCommand)
         //   Diagnose Parameters       (DiagnoseParamsCommand)
         //
-        // TWO OF THOSE ARE NOT REPLACED BY ANYTHING ABOVE, which is worth knowing before the
-        // first time someone looks for them:
+        // NO FINISH OR PAINT QUANTITY CAN NOW BE PRODUCED FROM THE RIBBON. That is the intended
+        // result and not an oversight, but it is worth stating plainly, because the three
+        // commands involved are the only route to each of these and nothing above replaces them:
         //
-        //   PAINT TAKEOFF is the only thing that builds 'DKSI Paint Takeoff by Room'. Finish
-        //   Surface Area measures the same numbers and writes the room parameters and the CSV,
-        //   but it does not place the takeoff rows, so the schedule cannot be regenerated after
-        //   the model changes without this command.
+        //   FINISH SURFACE AREA is the only thing that measures Wall/Floor/Ceiling Finish Area,
+        //   Wall Paint Area and Net Floor Area, writes them to rooms and elements, and exports
+        //   the per-room per-material CSV. Adjust Room Boundaries above does the boundary half
+        //   of what it used to do and deliberately none of the measuring.
+        //
+        //   PAINT TAKEOFF is the only thing that builds 'DKSI Paint Takeoff by Room', so that
+        //   schedule cannot be regenerated after the model changes.
         //
         //   PAINT HIGHLIGHT is the only way to see WHICH surface a takeoff row measured. The
         //   'Paint Host Id' column still names the element, so Select by ID remains as a manual
         //   substitute.
         //
-        // Set Up Finish Schedules, Sync Material Parameters and Diagnose Parameters lose less:
-        // the first runs automatically inside Finish Surface Area, and the other two are setup
-        // and diagnostic tools rather than production ones.
+        // The engines behind all three are untouched in Finishes/ and Schedules/, and
+        // FinishAutomation still drives the finish pass off DocumentChanged - so room and
+        // element parameters continue to update on their own. What is gone is the manual
+        // trigger, the CSV export and the ability to rebuild the takeoff schedule.
+        //
+        // Sync Material Parameters and Diagnose Parameters lose least: both are setup and
+        // diagnostic tools rather than production ones.
         //
         // Also still parked, unchanged by this revision: Stamp Review Date, About, and the SMB
         // Checklist under "Revit Add-in\parked\smb-checklist\".

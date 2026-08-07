@@ -260,9 +260,15 @@ public sealed class RoomFinishCalculator
 
     public FinishResult Run()
     {
-        PreflightVolumes();
+        // Boundary corrections first, in the same order as before: volumes on, then the upper
+        // limits raised, so the geometry every measurement below reads is already right. Lives
+        // in RoomBoundaryAdjuster now so the standalone command and this engine cannot drift
+        // into two ideas of where a room stops.
+        var boundary = new RoomBoundaryAdjuster(_doc, _settings);
+
+        boundary.EnsureVolumes(_report);
         CollectDeductibles();
-        AutoAdjustUpperLimits();
+        boundary.AdjustUpperLimits(_report);
 
         var options = new SpatialElementBoundaryOptions
         {
@@ -549,27 +555,6 @@ public sealed class RoomFinishCalculator
     /// Rooms only stop at bounding ceilings when volume computation is on. Without it the
     /// room runs to its upper limit and the ceiling area is wrong.
     /// </summary>
-    private void PreflightVolumes()
-    {
-        try
-        {
-            var settings = AreaVolumeSettings.GetAreaVolumeSettings(_doc);
-            if (settings.ComputeVolumes) return;
-
-            settings.ComputeVolumes = true;
-            _doc.Regenerate();
-
-            _report.Add("AUTO-FIX: 'Areas and Volumes' computation was OFF and has been enabled, so " +
-                        "rooms now stop at bounding ceilings (floor finish to ceiling finish). If a room " +
-                        "still reports 'no top boundary', its ceiling is not Room Bounding or the room's " +
-                        "upper limit stops below it.");
-        }
-        catch (Exception ex)
-        {
-            _report.Add($"WARNING: could not verify/enable volume computation: {ex.Message}");
-        }
-    }
-
     private List<Element> Collect(BuiltInCategory category) =>
         [.. new FilteredElementCollector(_doc)
             .OfCategory(category)
@@ -633,103 +618,6 @@ public sealed class RoomFinishCalculator
         catch
         {
             return false;
-        }
-    }
-
-    /// <summary>
-    /// Revit rule: a room's volume can NEVER rise above its Upper Limit + Offset - bounding
-    /// ceilings only clip WITHIN that allowance. A sloped ceiling climbing above the limit
-    /// leaves the room sliced flat, missing the wedge beneath the slope. Fix: raise each
-    /// room's Upper Offset just above the highest overlapping ceiling/roof. Raise-only and
-    /// minimal; the ceiling still clips the volume, so extra headroom is harmless.
-    /// </summary>
-    private void AutoAdjustUpperLimits()
-    {
-        if (!_settings.AutoAdjustLimits) return;
-
-        var topBoxes = new List<BoundingBoxXYZ>();
-        foreach (var element in Collect(BuiltInCategory.OST_Ceilings)
-                     .Concat(Collect(BuiltInCategory.OST_Floors))
-                     .Concat(Collect(BuiltInCategory.OST_Roofs)))
-        {
-            try
-            {
-                var box = element.get_BoundingBox(null);
-                if (box is not null) topBoxes.Add(box);
-            }
-            catch
-            {
-                // No bounding box; cannot participate.
-            }
-        }
-
-        var adjusted = 0;
-
-        foreach (var room in new FilteredElementCollector(_doc)
-                     .OfCategory(BuiltInCategory.OST_Rooms)
-                     .WhereElementIsNotElementType()
-                     .OfType<Room>())
-        {
-            try
-            {
-                if (room.Area <= 0) continue;
-
-                var roomBox = room.get_BoundingBox(null);
-                if (roomBox is null) continue;
-
-                var baseZ = roomBox.Min.Z;
-                double? neededTop = null;
-
-                foreach (var box in topBoxes)
-                {
-                    // Plan (XY) overlap with the room?
-                    if (box.Max.X < roomBox.Min.X || box.Min.X > roomBox.Max.X ||
-                        box.Max.Y < roomBox.Min.Y || box.Min.Y > roomBox.Max.Y) continue;
-
-                    // Only elements starting clearly ABOVE this room's base (excludes the
-                    // room's own floor slab) and within a sane band (avoids grabbing
-                    // storeys far above and ballooning the room upward).
-                    if (box.Min.Z < baseZ + 1.0 || box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
-
-                    var top = box.Max.Z + FinishSettings.LimitMargin;
-                    if (neededTop is null || top > neededTop) neededTop = top;
-                }
-
-                if (neededTop is null) continue;
-                if (roomBox.Max.Z >= neededTop - FinishSettings.LimitMargin * 0.5) continue;
-
-                var parameter = room.get_Parameter(BuiltInParameter.ROOM_UPPER_OFFSET);
-                if (parameter is null || parameter.IsReadOnly) continue;
-
-                var referenceZ = baseZ;
-                try
-                {
-                    if (room.UpperLimit is not null) referenceZ = room.UpperLimit.Elevation;
-                }
-                catch
-                {
-                    // No upper limit level; measure from the room base.
-                }
-
-                var offset = neededTop.Value - referenceZ;
-                if (offset > parameter.AsDouble())
-                {
-                    parameter.Set(offset);
-                    adjusted++;
-                }
-            }
-            catch
-            {
-                // One room failing must not stop the pass.
-            }
-        }
-
-        if (adjusted > 0)
-        {
-            _doc.Regenerate();   // rebuild room volumes BEFORE measuring
-            _report.Add($"AUTO-ADJUST: raised the upper limit of {adjusted} room(s) so sloped " +
-                        "ceilings/roofs now bound the full room volume (raise-only, highest " +
-                        "overlapping ceiling + margin).");
         }
     }
 
