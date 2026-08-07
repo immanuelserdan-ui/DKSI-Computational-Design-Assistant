@@ -49,6 +49,8 @@ public sealed class PaintTakeoffCommand : CommandBase
         // which read as Revit refusing the widening on its own merits.
         var setup = new FinishParameterSetup(doc, settings);
 
+        var setupWarnings = new List<string>();
+
         if (setup.AnythingMissing())
         {
             ParameterSetupResult? parameters = null;
@@ -57,11 +59,44 @@ public sealed class PaintTakeoffCommand : CommandBase
 
             if (parameters is { Problems.Count: > 0 })
             {
-                TaskDialog.Show(CommandName,
-                    "The takeoff parameters could not be bound, so the rows would carry no " +
-                    "data.\n\n" + string.Join("\n", parameters.Problems) +
-                    $"\n\nSee {Log.CurrentFile}");
-                return Result.Failed;
+                // NOT EVERY BINDING FAILURE IS FATAL, and treating them alike cost a user a
+                // whole cycle: 'Lejlighed' - an apartment GROUPING column - refused to widen,
+                // and the command abandoned the run, so a model with perfectly good paint
+                // areas produced no takeoff at all over a field nobody was going to price.
+                //
+                // These four are the takeoff. Without the area there is no quantity; without
+                // the room there is nothing to attribute it to, which is the entire reason
+                // this schedule exists instead of a Wall Material Takeoff. Anything else
+                // costs a column.
+                string[] essential =
+                [
+                    settings.PaintAreaParameter,
+                    settings.RoomNameParameter,
+                    settings.RoomNumberParameter,
+                    settings.PaintMaterialParameter,
+                ];
+
+                var fatal = parameters.FailedParameters
+                    .Where(name => essential.Contains(name, StringComparer.Ordinal))
+                    .ToList();
+
+                if (fatal.Count > 0)
+                {
+                    TaskDialog.Show(CommandName,
+                        $"{string.Join(", ", fatal)} could not be bound. That is the takeoff " +
+                        "itself - the quantity and the room it belongs to - so the rows would " +
+                        "carry nothing worth scheduling.\n\n" +
+                        string.Join("\n", parameters.Problems) +
+                        $"\n\nSee {Log.CurrentFile}");
+                    return Result.Failed;
+                }
+
+                // Reported at the END of a successful run rather than as a blocking dialog: the
+                // user asked for paint quantities, and they are about to get correct ones.
+                setupWarnings.Add(
+                    "SOME COLUMNS WILL BE BLANK. These parameters could not be bound, so the " +
+                    "takeoff carries no value for them. The areas and their room attribution " +
+                    "are unaffected:\n" + string.Join("\n", parameters.Problems));
             }
         }
 
@@ -113,14 +148,18 @@ public sealed class PaintTakeoffCommand : CommandBase
             ? $"Schedule: '{PaintTakeoffBuilder.ScheduleName}' in the project browser under Schedules."
             : "The schedule could not be created; the rows exist and can be scheduled by hand.");
 
+        // "on one wall", not "on one surface": since the row key gained the host, a room's four
+        // painted faces give four rows even when two share a material. The old wording described
+        // the version before that and undersold what the schedule now does.
         lines.Add(
-            "\nEvery row is one room's own measured area on one surface in one material, so a " +
+            "\nEvery row is one room's own measured area on one wall in one material, so a " +
             "wall painted on both faces appears once for each room it faces. This is the " +
             "takeoff to issue - a Wall Material Takeoff cannot carry a room column and drops " +
             "the face whose wall belongs to the neighbour.");
 
         if (takeoff.Notes.Count > 0) lines.Add("\n" + string.Join("\n", takeoff.Notes));
         if (problems.Count > 0) lines.Add("\n" + string.Join("\n", problems));
+        if (setupWarnings.Count > 0) lines.Add("\n" + string.Join("\n", setupWarnings));
 
         Log.Info($"{CommandName}: {takeoff.Placed} row(s), {takeoff.TotalSqm:0.00} m², " +
                  $"{finish.Processed} room(s).");

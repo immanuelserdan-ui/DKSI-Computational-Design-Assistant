@@ -19,6 +19,16 @@ public sealed class ParameterSetupResult
     public required int Extended { get; init; }
     public required int AlreadyCorrect { get; init; }
     public required IReadOnlyList<string> Problems { get; init; }
+
+    /// <summary>
+    /// The NAMES of the parameters that could not be bound, parallel to <see cref="Problems"/>.
+    ///
+    /// Problems carries prose for a human; this carries identity for a caller. A command that
+    /// wants to know "can I still do useful work?" has to distinguish a failure on the area
+    /// parameter, which makes every row worthless, from one on a grouping column, which makes
+    /// a column blank - and it cannot do that by parsing sentences.
+    /// </summary>
+    public required IReadOnlyList<string> FailedParameters { get; init; }
 }
 
 /// <summary>
@@ -50,6 +60,9 @@ public sealed class FinishParameterSetup
 
     private readonly List<string> _report = [];
     private readonly List<string> _problems = [];
+
+    /// <summary>Names behind <see cref="_problems"/>. See ParameterSetupResult.FailedParameters.</summary>
+    private readonly List<string> _failed = [];
 
     private int _created;
     private int _extended;
@@ -328,7 +341,7 @@ public sealed class FinishParameterSetup
                 }
                 catch (Exception ex)
                 {
-                    _problems.Add($"{spec.Name}: {ex.Message}");
+                    Fail(spec.Name, ex.Message);
                     _report.Add($"FAILED {spec.Name}: {ex.Message}");
                 }
             }
@@ -348,7 +361,19 @@ public sealed class FinishParameterSetup
             Extended = _extended,
             AlreadyCorrect = _alreadyCorrect,
             Problems = _problems,
+            FailedParameters = _failed,
         };
+    }
+
+    /// <summary>
+    /// One binding failure, recorded as both prose and identity. Every problem goes through
+    /// here so the two lists cannot drift - a problem with no matching name would make a
+    /// caller think the failure was harmless.
+    /// </summary>
+    private void Fail(string name, string detail)
+    {
+        _problems.Add($"{name}: {detail}");
+        _failed.Add(name);
     }
 
     // ------------------------------------------------------- the definition file
@@ -398,7 +423,7 @@ public sealed class FinishParameterSetup
 
         if (wanted.Count == 0)
         {
-            _problems.Add($"{spec.Name}: none of its categories exist in this model.");
+            Fail(spec.Name, "none of its categories exist in this model.");
             return;
         }
 
@@ -516,8 +541,8 @@ public sealed class FinishParameterSetup
         // wrong, but reversing it here would drop the data already under it.
         if (binding is TypeBinding)
         {
-            _problems.Add(
-                $"{spec.Name}: bound as a TYPE parameter. The finish engine writes per " +
+            Fail(spec.Name,
+                "bound as a TYPE parameter. The finish engine writes per " +
                 "instance, so it cannot write to it. Rebind it as an instance parameter.");
             return;
         }
@@ -583,7 +608,7 @@ public sealed class FinishParameterSetup
 
         if (!accepted)
         {
-            _problems.Add($"{spec.Name}: {ExplainRefusal(spec, definition, binding, added)}");
+            Fail(spec.Name, ExplainRefusal(spec, definition, binding, added));
             _report.Add($"FAILED {spec.Name}: Revit refused the widened binding. {Describe(added)} " +
                         "could not be added to it.");
             return;

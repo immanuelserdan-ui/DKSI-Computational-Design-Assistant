@@ -66,6 +66,7 @@ internal static class PaintTakeoffBuilder
 
         var placed = 0;
         var removed = 0;
+        var unwritable = new HashSet<string>(StringComparer.Ordinal);
 
         try
         {
@@ -75,7 +76,7 @@ internal static class PaintTakeoffBuilder
 
                 foreach (var row in painted)
                 {
-                    if (Place(doc, settings, row)) placed++;
+                    if (Place(doc, settings, row, unwritable)) placed++;
                 }
             });
         }
@@ -90,6 +91,32 @@ internal static class PaintTakeoffBuilder
             notes.Add(
                 $"{painted.Count - placed} row(s) could not be placed. The takeoff is short by " +
                 "that much; see the log.");
+        }
+
+        // A ROW THAT TOOK NO AREA IS NOT A ROW. Placing succeeds whenever the element is
+        // created, which it almost always is - the writes are what can fail, and until now
+        // they failed in silence. So a run could report "89 row(s) placed" over a schedule
+        // with an empty quantity column, which is the most expensive way this tool can be
+        // wrong: it looks finished.
+        if (unwritable.Contains(settings.PaintAreaParameter))
+        {
+            notes.Add(
+                $"THE AREA DID NOT WRITE. '{settings.PaintAreaParameter}' is not bound to Generic " +
+                "Models as a writable Area parameter, so every row placed above carries no " +
+                "quantity and the schedule's area column and grand total will be empty. The rows " +
+                "themselves are otherwise correct. Run 'Set Up Finish Schedules' to bind it, then " +
+                "run this again.");
+        }
+
+        var blankColumns = unwritable.Where(n => n != settings.PaintAreaParameter).Order().ToList();
+
+        if (blankColumns.Count > 0)
+        {
+            notes.Add(
+                $"BLANK COLUMN(S): {string.Join(", ", blankColumns)} could not be written to the " +
+                "takeoff rows, so those columns will be empty in the schedule. The areas and their " +
+                "room attribution are unaffected - this costs grouping, not quantities. " +
+                "'Set Up Finish Schedules' binds them.");
         }
 
         var total = painted.Sum(r => r.AreaSqM);
@@ -107,7 +134,8 @@ internal static class PaintTakeoffBuilder
 
     // ---------------------------------------------------------------------- place
 
-    private static bool Place(Document doc, FinishSettings settings, FinishCsvRow row)
+    private static bool Place(
+        Document doc, FinishSettings settings, FinishCsvRow row, HashSet<string> unwritable)
     {
         try
         {
@@ -129,14 +157,18 @@ internal static class PaintTakeoffBuilder
                 // Informational only; the storage stamp below is what regeneration relies on.
             }
 
-            Write(shape, settings.ApartmentParameter, row.Apartment);
-            Write(shape, settings.RoomNumberParameter, row.RoomNumber);
-            Write(shape, settings.RoomNameParameter, row.RoomName);
-            Write(shape, settings.PaintSurfaceParameter, row.Surface);
-            Write(shape, settings.PaintMaterialParameter, row.Material);
-            Write(shape, settings.PaintTypeParameter, row.HostType);
+            // A row that takes none of these is an empty element in the model pretending to
+            // be a quantity. Every failure is collected by NAME so the run can say which
+            // column will be blank, rather than reporting a placed row and leaving the blank
+            // to be found in the schedule.
+            Write(shape, settings.ApartmentParameter, row.Apartment, unwritable);
+            Write(shape, settings.RoomNumberParameter, row.RoomNumber, unwritable);
+            Write(shape, settings.RoomNameParameter, row.RoomName, unwritable);
+            Write(shape, settings.PaintSurfaceParameter, row.Surface, unwritable);
+            Write(shape, settings.PaintMaterialParameter, row.Material, unwritable);
+            Write(shape, settings.PaintTypeParameter, row.HostType, unwritable);
 
-            WriteArea(shape, settings.PaintAreaParameter, row.AreaSqM);
+            WriteArea(shape, settings.PaintAreaParameter, row.AreaSqM, unwritable);
 
             ElementStamp.Write(shape, Stamp, row.Surface);
 
@@ -149,32 +181,45 @@ internal static class PaintTakeoffBuilder
         }
     }
 
-    private static void Write(Element element, string name, string value)
+    private static void Write(
+        Element element, string name, string value, HashSet<string> unwritable)
     {
         try
         {
             var parameter = ParameterHelper.Find(element, name);
             if (parameter is { IsReadOnly: false, StorageType: StorageType.String })
+            {
                 parameter.Set(value ?? string.Empty);
+                return;
+            }
         }
         catch
         {
-            // Unbound or unwritable; the run report counts the shortfall.
+            // Falls through to the same record as an unbound parameter: from the schedule's
+            // point of view a throw and a missing binding are the same blank column.
         }
+
+        unwritable.Add(name);
     }
 
-    private static void WriteArea(Element element, string name, double squareMetres)
+    private static void WriteArea(
+        Element element, string name, double squareMetres, HashSet<string> unwritable)
     {
         try
         {
             var parameter = ParameterHelper.Find(element, name);
             if (parameter is { IsReadOnly: false, StorageType: StorageType.Double })
+            {
                 parameter.Set(Measure.FromSquareMetres(squareMetres));
+                return;
+            }
         }
         catch
         {
             // As above.
         }
+
+        unwritable.Add(name);
     }
 
     // ---------------------------------------------------------------------- schedule
@@ -197,7 +242,22 @@ internal static class PaintTakeoffBuilder
         // Reused rather than recreated. The schedule is a VIEW - someone may have placed it on
         // a sheet, changed its column widths or added a filter - and replacing it would throw
         // that away every run. The rows underneath are regenerated; the view is not.
-        if (existing is not null) return existing;
+        //
+        // BUT REUSED IS NOT THE SAME AS CORRECT, and that gap cost a full session to find. A
+        // view carried a column called 'Room: Wall Paint Area' - a ROOM-relationship field, not
+        // this tool's 'Paint Area'. The takeoff rows are geometry-less DirectShapes, so they
+        // are inside no room, so that field resolves to nothing on every row forever. The
+        // elements held their areas the whole time; the view simply never asked for them, and
+        // the tool reported success and pointed at a schedule with an empty quantity column.
+        //
+        // So verify the one field the schedule exists to show, and add it back if it is
+        // missing. Nothing is removed - an extra column is someone's business and might be
+        // deliberate, while a MISSING area column is never deliberate.
+        if (existing is not null)
+        {
+            EnsureAreaField(existing, settings, problems);
+            return existing;
+        }
 
         ViewSchedule schedule;
         try
@@ -217,6 +277,84 @@ internal static class PaintTakeoffBuilder
         AddFields(schedule, settings, problems);
 
         return schedule;
+    }
+
+    /// <summary>
+    /// Puts the area column back on a reused schedule that has lost it, and says so.
+    ///
+    /// Matched on the field's own name rather than on the column heading, because a heading is
+    /// editable text: someone renaming a column must not make the tool add a duplicate, and
+    /// someone naming an unrelated column 'Paint Area' must not make it skip a real repair.
+    /// </summary>
+    private static void EnsureAreaField(
+        ViewSchedule schedule, FinishSettings settings, List<string> problems)
+    {
+        var definition = schedule.Definition;
+
+        try
+        {
+            foreach (var fieldId in definition.GetFieldOrder())
+            {
+                var field = definition.GetField(fieldId);
+
+                if (string.Equals(field.GetName(), settings.PaintAreaParameter, StringComparison.Ordinal))
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unreadable field list. Say so rather than adding a second area column on a
+            // schedule that may already have one.
+            problems.Add(
+                $"Could not check whether '{ScheduleName}' still shows " +
+                $"'{settings.PaintAreaParameter}': {ex.Message}");
+            return;
+        }
+
+        SchedulableField? wanted = null;
+
+        try
+        {
+            foreach (var candidate in definition.GetSchedulableFields())
+            {
+                if (!string.Equals(candidate.GetName(schedule.Document), settings.PaintAreaParameter,
+                        StringComparison.Ordinal))
+                    continue;
+
+                wanted = candidate;
+                break;
+            }
+        }
+        catch
+        {
+            // Handled by the null check below.
+        }
+
+        if (wanted is null)
+        {
+            problems.Add(
+                $"'{ScheduleName}' has no '{settings.PaintAreaParameter}' column and the field is " +
+                "not available to add, so the schedule cannot show any quantity. Run 'Set Up " +
+                "Finish Schedules' to bind it to Generic Models.");
+            return;
+        }
+
+        try
+        {
+            definition.AddField(wanted);
+
+            problems.Add(
+                $"'{ScheduleName}' had no '{settings.PaintAreaParameter}' column - every row's " +
+                "area was invisible - so it has been added as the last column. If a column " +
+                "beginning 'Room:' is also present, that one is a ROOM-relationship field: these " +
+                "rows are geometry-less and sit in no room, so it will always be blank. Delete it.");
+        }
+        catch (Exception ex)
+        {
+            problems.Add(
+                $"Could not add the missing '{settings.PaintAreaParameter}' column to " +
+                $"'{ScheduleName}': {ex.Message}");
+        }
     }
 
     /// <summary>
