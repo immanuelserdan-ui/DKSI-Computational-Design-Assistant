@@ -4,8 +4,27 @@ using Cda.Revit.Addin.Infrastructure;
 namespace Cda.Revit.Addin;
 
 /// <summary>
-/// Builds the ribbon tab. Keeping this separate from <see cref="CdaApplication"/> means
-/// adding a tool is a two-line change here plus one command class.
+/// Builds the ribbon tab: ONE panel carrying ONE pull-down, with the six tools inside it.
+///
+/// WHY A PULL-DOWN RATHER THAN A ROW OF BUTTONS
+///   The tab had grown to nine buttons across four panels, which is a menu pretending to be a
+///   toolbar - nobody scans nine icons, they hunt for the one they came for. A pull-down puts
+///   the names in a list where they can be read, and costs one extra click for tools that are
+///   run once per model rather than once per minute.
+///
+/// THE ONE TRAP IN THIS API, and it is worth stating because it is silent
+///   A PulldownButton with an AvailabilityClassName greys out the PARENT, which makes every
+///   child unreachable regardless of the child's own availability. Time Tracking must work with
+///   no document open - logging a client meeting is exactly the thing you do from the Revit
+///   start screen - so the parent below deliberately has NO availability class, and each child
+///   carries its own. Setting one on the parent would remove that feature at the moment it is
+///   most needed, and nothing would report the loss.
+///
+/// STACKED vs PULL-DOWN: RibbonPanel.AddStackedItems takes two or three SMALL buttons and
+/// stacks them vertically. It is not a parent button and holds at most three items, so it
+/// cannot carry six. PulldownButtonData is the right shape here; SplitButtonData is the other
+/// option and was not used because it promotes one child to a default action, and none of
+/// these six is the obvious default.
 /// </summary>
 internal static class RibbonBuilder
 {
@@ -20,130 +39,82 @@ internal static class RibbonBuilder
     {
         CreateTab(app, CdaApplication.TabName);
 
-        var modelPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Model Data");
-        var reportPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Reports");
-        var timePanel = app.CreateRibbonPanel(CdaApplication.TabName, "Time");
-        var helpPanel = app.CreateRibbonPanel(CdaApplication.TabName, "Help");
+        var panel = app.CreateRibbonPanel(CdaApplication.TabName, "DKSI Tools");
 
-        // RETIRED FROM THE RIBBON — Stamp Review Date.
-        //
-        // It was the reference implementation for the write path: a code sample, not a
-        // business tool. A hand-stamped issue date is also precisely the metadata that goes
-        // stale the first time someone forgets, which is the opposite of what a Digital Twin
-        // needs. StampReviewDateCommand stays in Commands/ as the worked example of how a
-        // write command is structured; it is simply no longer reachable from the ribbon.
+        // NO AVAILABILITY ON THE PARENT. See the class remarks - it would strand Time Tracking.
+        var tools = AddPulldown(
+            panel,
+            name: "CdaTools",
+            text: "DKSI\nTools",
+            icon: "dksi",
+            tooltip: "Door linings, exterior rooms, finish areas, skirting, schedule export and time tracking.",
+            longDescription: "Every DKSI tool, grouped. Model tools first, then reporting, then " +
+                             "time. Each entry says what it writes before it writes anything.");
 
-        // RETIRED FROM THE RIBBON — Resolve Lining Clashes and Resolve Udvendig.
-        //
-        // Both are now driven by OpeningAutomation off the same DocumentChanged pipeline as
-        // the finish areas: they run when a door or window changes, when a schedule is
-        // opened, and on save. Both engines were always whole-model full recomputes, which
-        // is what made them safe to run unattended — there is no accumulated state to get
-        // out of step, and a pass over an unchanged model writes nothing.
-        //
-        // Retiring the buttons is the point rather than a side effect. A correction you have
-        // to remember to run is a correction that is wrong between runs, and a Digital Twin
-        // that is only true just after someone clicked something is not one.
-        //
-        // The commands themselves stay in Commands/ and can be put back with one AddButton
-        // call each — worth keeping, because they are the only way to get a dry run.
+        // ---- model ---------------------------------------------------------------
 
-        AddButton(modelPanel,
-            name: "CdaSyncMaterialParams",
-            text: "Sync Material\nParameters",
-            command: typeof(Commands.SyncMaterialParamsCommand),
-            tooltip: "Copies material Manufacturer/Comments to FK Kode and FM Bygningsdel, type and instance.",
-            longDescription: "Runs across every model category. Offers a preview before writing; " +
-                             "the write is a single undo step.",
-            icon: "material",
+        // BACK ON THE RIBBON, having been retired when OpeningAutomation started running it off
+        // the DocumentChanged pipeline. The automation is unchanged and still runs: this is the
+        // manual entry point, which is the only way to get a DRY RUN and the only way to run it
+        // on demand rather than on a trigger.
+        AddPulldownItem(tools,
+            name: "CdaResolveLiningClashes",
+            text: "Door Lining & Door Material",
+            command: typeof(Commands.ResolveLiningClashesCommand),
+            tooltip: "Resolves door and window lining clashes and writes Door/Window Material.",
+            longDescription: "Whole model by default, or the current selection. Offers a dry run " +
+                             "before writing; the write is a single undo step.",
+            icon: "lining",
             availability: typeof(ProjectDocumentAvailability));
 
-        // Sits BEFORE Finish Surface Area on the panel because that is the order they are
-        // used in: a model whose parameters are not bound produces a schedule full of
-        // blanks, which reads as a broken tool rather than an unconfigured model.
-        AddButton(modelPanel,
+        // Also back for the same reason as the lining resolver.
+        AddPulldownItem(tools,
+            name: "CdaResolveUdvendig",
+            text: "Door Udvendig",
+            command: typeof(Commands.ResolveUdvendigRoomsCommand),
+            tooltip: "Replaces 'Udvendig' placeholder rooms with the room on the door's other side.",
+            longDescription: "Writes the SCRP from/to parameters so a door schedule can name a real " +
+                             "room on both sides instead of an exterior placeholder.",
+            icon: "door",
+            availability: typeof(ProjectDocumentAvailability));
+
+        AddPulldownItem(tools,
             name: "CdaPlaceSkirting",
-            text: "Place\nSkirting",
+            text: "Place Skirting (Wall Sweep)",
             command: typeof(Commands.PlaceSkirtingCommand),
             tooltip: "Places skirting boards as native wall sweeps in every room that is not a wet room.",
             longDescription: "Rooms whose Name or Department contains 'Bad' or 'Toilet' are skipped. " +
                              "Boards break at doors, windows and openings through Revit's own wall " +
                              "sweep behaviour, and are cut where casework stands against them. Safe " +
                              "to re-run: faces that already have a board are left alone.",
-            icon: "lining",
+            icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 
-        AddButton(reportPanel,
-            name: "CdaSetUpFinishSchedules",
-            text: "Set Up Finish\nSchedules",
-            command: typeof(Commands.SetUpFinishSchedulesCommand),
-            tooltip: "Binds the finish parameters and builds the multi-category ceiling takeoff.",
-            longDescription: "Run once per model. Binds Wall/Floor/Ceiling Finish Area, Wall Paint " +
-                             "Area, Net Floor Area, Ceiling Area Source and Finish Area Stale as " +
-                             "shared parameters on fixed GUIDs, with Ceiling Finish Area reaching " +
-                             "Floors and Roofs so a ceiling measured off a slab or roof has " +
-                             "somewhere to land. Existing parameters are widened, never replaced.",
-            icon: "diagnose",
-            availability: typeof(ProjectDocumentAvailability));
+        tools.AddSeparator();
 
-        AddButton(reportPanel,
+        // ---- reporting -----------------------------------------------------------
+
+        // THIS IS THE ROOM-BOUNDARY TOOL. It raises room Upper Offsets over sloped ceilings and
+        // runs the ceiling / slab-above / roof priority chain for rooms nothing bounds from
+        // above - the "situational ceiling, floor slab and roof" adjustment - as part of
+        // measuring. It also binds any missing finish parameter on the way through, which is
+        // what makes retiring the separate Set Up Finish Schedules button safe.
+        AddPulldownItem(tools,
             name: "CdaFinishSurfaceArea",
-            text: "Finish\nSurface Area",
+            text: "Room Boundary & Finish Areas",
             command: typeof(Commands.FinishSurfaceAreaCommand),
-            tooltip: "Measures room wall/floor/ceiling finish areas from real finish-layer geometry.",
-            longDescription: "Writes Wall/Floor/Ceiling Finish Area, Wall Paint Area and Net Floor Area " +
-                             "to rooms and elements, and exports a per-room per-material CSV.",
+            tooltip: "Adjusts room boundaries against ceilings, slabs and roofs, then measures finish areas.",
+            longDescription: "Raises room upper limits over sloped ceilings and resolves the ceiling " +
+                             "source from the ceiling / slab above / roof chain, then writes " +
+                             "Wall/Floor/Ceiling Finish Area, Wall Paint Area and Net Floor Area to " +
+                             "rooms and elements and exports a per-room per-material CSV. Binds any " +
+                             "missing parameter automatically.",
             icon: "finish",
             availability: typeof(ProjectDocumentAvailability));
 
-        // THE TAKEOFF TO ISSUE, so it sits with the other reporting commands rather than with
-        // the diagnostics. A Wall Material Takeoff cannot carry a room column - 'Rum' lives on
-        // the wall, one wall holds one value, so a room shows the walls it OWNS rather than
-        // every face that touches it. This builds the schedule that can.
-        AddButton(reportPanel,
-            name: "CdaPaintTakeoff",
-            text: "Paint Takeoff\nby Room",
-            command: typeof(Commands.PaintTakeoffCommand),
-            tooltip: "Builds a paint schedule with one row per room, surface and material.",
-            longDescription: "Runs the finish engine and places one lightweight row element per " +
-                             "(room, surface, material), then finds or creates the schedule over " +
-                             "them. A wall painted on both faces appears once for EACH room it " +
-                             "faces, so a bathroom with four painted faces gives four rows - " +
-                             "where a Wall Material Takeoff gives two and silently drops the " +
-                             "paint on faces whose wall belongs to the neighbouring room. The " +
-                             "rows carry no geometry and are regenerated on every run.",
-            icon: "takeoff",
-            availability: typeof(ProjectDocumentAvailability));
-
-        // Sits directly after Finish Surface Area because it exists to explain that command's
-        // numbers: same engine, same measurement, drawn instead of written.
-        AddButton(reportPanel,
-            name: "CdaPaintHighlight",
-            text: "Paint\nHighlight",
-            command: typeof(Commands.PaintHighlightCommand),
-            tooltip: "Draws the net painted area of the selected element, instead of highlighting the whole wall.",
-            longDescription: "A toggle. While it is on, selecting a row in a Material Takeoff " +
-                             "schedule draws that element's measured paint area on the surfaces it " +
-                             "was measured from - openings and unpainted substrate excluded. " +
-                             "Revit has no per-face selection or override, so the only way to show " +
-                             "exactly the area behind a row is to draw it: the overlay is temporary " +
-                             "Generic Model geometry, removed when you turn the toggle off, clear " +
-                             "the selection, or close the model. Each shape is named with its room, " +
-                             "so clicking one tells you which row it belongs to. Off by default " +
-                             "because every highlight costs a room-geometry pass.",
-            icon: "highlight",
-            availability: typeof(ProjectDocumentAvailability));
-
-        // RETIRED FROM THE RIBBON — Auto-Update Finish Areas.
-        //
-        // It drove the same engine as Finish Surface Area, so once it gained a "run now"
-        // action the two buttons did the same thing. Its genuinely useful parts — the
-        // automation status and the on/off switch — are now folded into Finish Surface Area,
-        // which is the button people already know and the only one that also writes the CSV.
-
-        AddButton(reportPanel,
+        AddPulldownItem(tools,
             name: "CdaExportSchedules",
-            text: "Export\nSchedules",
+            text: "Export Schedules",
             command: typeof(Commands.ExportSchedulesCommand),
             tooltip: "Exports every schedule in the model to one Excel workbook, one worksheet each.",
             longDescription: "Read-only. Writes the .xlsx directly - no Excel install and no " +
@@ -151,71 +122,55 @@ internal static class RibbonBuilder
             icon: "excel",
             availability: typeof(ProjectDocumentAvailability));
 
-        // REMOVED — QA Tools, and its whole QA panel.
-        //
-        // Built 2026-08-06/07: a modeless checklist with two checks — highlight the walls,
-        // floor and ceiling a room's finish areas were measured from, and scan for interior
-        // wall faces missing their skirting. It grew a section box, an exact paint-area
-        // overlay drawn as temporary DirectShapes, and a red flag for surfaces measuring
-        // zero. Removed at the user's request; the source is on the 'qa-tools' branch and
-        // nothing else in the add-in ever referenced it.
-        //
-        // WHAT IT WAS WORTH KEEPING FOR. It found four real defects in the finish engine,
-        // and those fixes STAY — they are in Finishes/, not here:
-        //   * 'Udvendig' exterior placeholder rooms were measured like interior ones, putting
-        //     the outside face of the building into the interior paint takeoff.
-        //   * The largest room won an element's identity, so an interior wall's paint was
-        //     filed under the terrace next to it.
-        //   * Element paint totals were cross-room sums under a single room label, so a
-        //     takeoff grouped by room billed one room for its neighbour's paint.
-        //   * MeasureInteriorWalls counted EVERY painted face of a non-room-bounding wall,
-        //     so paint on the far face registered to the near room.
-        //
-        // If it comes back, note that its transactions were named "DKSI QA: ..." and were
-        // NOT recognised by FinishAutomation.OnDocumentChanged — so drawing an overlay
-        // queued a room recalculation, and clearing one queued a full-model sweep. That fix
-        // was reverted with the removal and would need reinstating.
+        tools.AddSeparator();
 
-        // NO AVAILABILITY CLASS, unlike every other button here. Logging a client meeting or
-        // an hour of coordination is something you do with no model open — often the Revit
-        // start screen is exactly where you are when you remember to do it. Greying this out
-        // without a document would remove the feature at the moment it is most needed.
-        AddButton(timePanel,
+        // ---- time ----------------------------------------------------------------
+
+        // NO AVAILABILITY CLASS, unlike every other item here, and the reason the PARENT has
+        // none either. Logging a client meeting or an hour of coordination is something you do
+        // with no model open - often the Revit start screen is exactly where you are when you
+        // remember to do it.
+        AddPulldownItem(tools,
             name: "CdaTimeTracking",
-            text: "Time\nTracking",
+            text: "Time Tracking",
             command: typeof(Commands.TimeTrackingCommand),
             tooltip: "Session time per project and view, manual entries, and the CSV export.",
             longDescription: "Time is recorded automatically from the active document and view; the " +
                              "clock pauses by itself after five minutes without input, or when Revit " +
                              "stops being the front window, and asks what to do with the gap when you " +
                              "come back. Off-model work is added by hand into the same log. Read-only " +
-                             "as far as the model is concerned — nothing is written to the .rvt.",
+                             "as far as the model is concerned - nothing is written to the .rvt.",
             icon: "timer",
             availability: null);
 
-        // PARKED — SMB Checklist. Built 2026-08-05, removed the same day at the user's
-        // request: not the right time to take it on. The source is intact under
-        // "Revit Add-in\parked\smb-checklist\"; restoring it is moving four files back into
-        // src, re-adding the EmbeddedResource entry to the csproj, and one AddButton call
-        // here. Nothing about it was wrong — it was the wrong week for it.
-
-        AddButton(helpPanel,
-            name: "CdaDiagnoseParams",
-            text: "Diagnose\nParameters",
-            command: typeof(Commands.DiagnoseParamsCommand),
-            tooltip: "Dumps every parameter Revit exposes on a material, a type, and an instance.",
-            longDescription: "Read-only. Run this first when a sync tool reports 'missing', " +
-                             "'read-only', or writes nothing. Select an element first to pre-fill the search.",
-            // The DKSI mark, freed up by retiring Stamp Review Date. It suits the Help panel
-            // in a way it never suited a single command: this is the button someone reaches
-            // for when they need to know who to ask, which is what a company mark says.
-            icon: "dksi",
-            availability: typeof(ProjectDocumentAvailability));
-
-        // AboutCommand is deliberately NOT on the ribbon. What it reported that mattered
-        // — the log file location — is already in the footer of every failure dialog,
-        // which is when anyone goes looking for it. The class is kept so restoring the
-        // button is one AddButton call.
+        // ------------------------------------------------------------------------------
+        // REMOVED FROM THE RIBBON in this revision, at the user's request. Every command class
+        // is untouched in Commands/ - restoring any of them is one AddPulldownItem call.
+        //
+        //   Sync Material Parameters  (SyncMaterialParamsCommand)
+        //   Set Up Finish Schedules   (SetUpFinishSchedulesCommand)
+        //   Paint Takeoff by Room     (PaintTakeoffCommand)
+        //   Paint Highlight           (PaintHighlightCommand)
+        //   Diagnose Parameters       (DiagnoseParamsCommand)
+        //
+        // TWO OF THOSE ARE NOT REPLACED BY ANYTHING ABOVE, which is worth knowing before the
+        // first time someone looks for them:
+        //
+        //   PAINT TAKEOFF is the only thing that builds 'DKSI Paint Takeoff by Room'. Finish
+        //   Surface Area measures the same numbers and writes the room parameters and the CSV,
+        //   but it does not place the takeoff rows, so the schedule cannot be regenerated after
+        //   the model changes without this command.
+        //
+        //   PAINT HIGHLIGHT is the only way to see WHICH surface a takeoff row measured. The
+        //   'Paint Host Id' column still names the element, so Select by ID remains as a manual
+        //   substitute.
+        //
+        // Set Up Finish Schedules, Sync Material Parameters and Diagnose Parameters lose less:
+        // the first runs automatically inside Finish Surface Area, and the other two are setup
+        // and diagnostic tools rather than production ones.
+        //
+        // Also still parked, unchanged by this revision: Stamp Review Date, About, and the SMB
+        // Checklist under "Revit Add-in\parked\smb-checklist\".
     }
 
     private static void CreateTab(UIControlledApplication app, string name)
@@ -232,8 +187,39 @@ internal static class RibbonBuilder
         }
     }
 
-    private static void AddButton(
+    /// <summary>
+    /// The parent button. Carries the icon the panel shows; the children supply the names.
+    /// </summary>
+    private static PulldownButton AddPulldown(
         RibbonPanel panel,
+        string name,
+        string text,
+        string icon,
+        string tooltip,
+        string longDescription)
+    {
+        var data = new PulldownButtonData(name, text)
+        {
+            ToolTip = tooltip,
+            LongDescription = longDescription,
+            LargeImage = Icons.Load(icon + "32"),
+            Image = Icons.Load(icon + "16"),
+        };
+
+        return (PulldownButton)panel.AddItem(data);
+    }
+
+    /// <summary>
+    /// One entry in the pull-down.
+    ///
+    /// Text is single-line here, unlike a panel button: a pull-down renders its children as a
+    /// list, so an embedded newline splits the label across two rows of the menu rather than
+    /// balancing it under an icon.
+    ///
+    /// Availability is set on the CHILD, never on the parent - see the class remarks.
+    /// </summary>
+    private static void AddPulldownItem(
+        PulldownButton parent,
         string name,
         string text,
         Type command,
@@ -250,7 +236,7 @@ internal static class RibbonBuilder
             Image = Icons.Load(icon + "16"),
         };
 
-        var button = (PushButton)panel.AddItem(data);
+        var button = parent.AddPushButton(data);
 
         // null means "always enabled", including on the Revit start screen.
         if (availability is not null)
