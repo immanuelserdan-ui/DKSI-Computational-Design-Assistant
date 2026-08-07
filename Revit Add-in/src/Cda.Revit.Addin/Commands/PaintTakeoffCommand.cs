@@ -158,11 +158,14 @@ public sealed class PaintTakeoffCommand : CommandBase
             "the face whose wall belongs to the neighbour.");
 
         lines.Add(
-            $"\n'{settings.RoomPaintTotalParameter}' and '{settings.RoomFinishTotalParameter}' are " +
-            "the OWNING ROOM's totals for that row's surface, shown for comparison. They repeat " +
-            "on every row of the same room, so NEVER total those two columns - it multiplies each " +
-            $"room by its row count. '{settings.PaintAreaParameter}' is the quantity; group by " +
-            $"'{settings.RoomNameParameter}' with a footer to get correct per-room subtotals.");
+            $"\n'{settings.PaintParameter}' and '{settings.WallParameter}' on a takeoff row are " +
+            "the OWNING ROOM's own totals - the same values you see on the Room - written there " +
+            "for comparison against the row beside them. Floor and ceiling rows carry their own " +
+            "equivalents instead, so a column heading always matches what is under it. " +
+            "They repeat on every row of the same room, so NEVER total those columns: it " +
+            $"multiplies each room by its row count. '{settings.PaintAreaParameter}' is the " +
+            $"quantity. For correct per-room subtotals, group by '{settings.RoomNameParameter}' " +
+            "with a footer - Revit then computes them from the rows themselves.");
 
         if (takeoff.Notes.Count > 0) lines.Add("\n" + string.Join("\n", takeoff.Notes));
         if (problems.Count > 0) lines.Add("\n" + string.Join("\n", problems));

@@ -84,7 +84,18 @@ public sealed class FinishParameterSetup
     {
         // Rooms carry the per-room total; the element categories carry the same name so a
         // takeoff can be scheduled against the element that owns the surface.
-        BuiltInCategory[] roomsAndWalls = [BuiltInCategory.OST_Rooms, BuiltInCategory.OST_Walls];
+        //
+        // GENERIC MODELS ARE IN ALL SIX because the per-room takeoff rows live there, and the
+        // room's own figure is what someone reading a row wants beside it. The row gets the
+        // total for ITS surface only - a Walls row fills the wall pair and leaves the floor and
+        // ceiling ones alone - so the column heading always matches what is under it.
+        //
+        // This replaces a pair of separate 'Room Paint Total' / 'Room Finish Total' parameters
+        // added for the same purpose. They were the wrong answer: these six already exist, are
+        // already named for exactly this, and a reader who knows 'Wall Paint Area' from the Room
+        // properties should meet the same name on the takeoff rather than a synonym.
+        BuiltInCategory[] roomsAndWalls =
+            [BuiltInCategory.OST_Rooms, BuiltInCategory.OST_Walls, BuiltInCategory.OST_GenericModel];
 
         return
         [
@@ -104,7 +115,7 @@ public sealed class FinishParameterSetup
                 SpecTypeId.Area,
                 [
                     BuiltInCategory.OST_Rooms, BuiltInCategory.OST_Floors,
-                    BuiltInCategory.OST_StructuralFoundation,
+                    BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_GenericModel,
                 ],
                 "floor finish area"),
 
@@ -116,7 +127,7 @@ public sealed class FinishParameterSetup
                 SpecTypeId.Area,
                 [
                     BuiltInCategory.OST_Rooms, BuiltInCategory.OST_Floors,
-                    BuiltInCategory.OST_StructuralFoundation,
+                    BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_GenericModel,
                 ],
                 "identified floor finish area - excludes bare substrate"),
 
@@ -129,6 +140,7 @@ public sealed class FinishParameterSetup
                 [
                     BuiltInCategory.OST_Rooms, BuiltInCategory.OST_Ceilings,
                     BuiltInCategory.OST_Floors, BuiltInCategory.OST_Roofs,
+                    BuiltInCategory.OST_GenericModel,
                 ],
                 "ceiling finish area, from the ceiling / slab above / roof priority chain"),
 
@@ -139,6 +151,7 @@ public sealed class FinishParameterSetup
                 [
                     BuiltInCategory.OST_Rooms, BuiltInCategory.OST_Ceilings,
                     BuiltInCategory.OST_Floors, BuiltInCategory.OST_Roofs,
+                    BuiltInCategory.OST_GenericModel,
                 ],
                 "painted-only ceiling area - the PT cost basis"),
 
@@ -206,15 +219,6 @@ public sealed class FinishParameterSetup
                 SpecTypeId.String.Text, TakeoffCategories,
                 "the element id of the wall the row was measured on - what makes a row traceable"),
 
-            // Reference columns, not quantities. Both repeat the owning room's total on every
-            // row of that room, so both are wrong if summed - see RoomPaintTotalParameter.
-            new(_settings.RoomPaintTotalParameter, "7c2ea940-8b16-4f73-a5d8-30e91c6b4f27",
-                SpecTypeId.Area, TakeoffCategories,
-                "the owning room's paint total for this row's surface - reference only, never sum"),
-
-            new(_settings.RoomFinishTotalParameter, "e58b1073-4da2-49c6-b70f-92a4d81e35bc",
-                SpecTypeId.Area, TakeoffCategories,
-                "the owning room's finish total for this row's surface - reference only, never sum"),
 
             // Not a finish area, but the reason the automation reports itself unavailable in
             // every model that has never been set up. Binding it here is what turns the

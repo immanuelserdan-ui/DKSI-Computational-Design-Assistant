@@ -161,36 +161,25 @@ public sealed class FinishSettings
     /// </summary>
     public string PaintHostParameter { get; init; } = "Paint Host Id";
 
-    /// <summary>
-    /// The OWNING ROOM's paint total for this row's surface, copied onto the takeoff row.
-    ///
-    /// WHY IT EXISTS: the room parameters are the authority, and until now the only way to see
-    /// them beside the rows was a second schedule. Revit's own 'Room: Wall Paint Area' field
-    /// cannot supply it - that is a room-RELATIONSHIP lookup resolved from an element's
-    /// location, and these rows are geometry-less by design, so they are in no room and the
-    /// column is blank in every model, forever. Copying the value is the only mechanism left.
-    ///
-    /// MATCHED TO THE ROW'S SURFACE, not fixed to walls: a Ceiling row carries the room's
-    /// ceiling paint total, a Floor row its floor total. A wall figure printed against a
-    /// ceiling row would be a number that has nothing to do with the row it sits on. Reveal
-    /// rows take the wall total, because that is the bucket their area is summed into.
-    ///
-    /// NEVER SUM THIS COLUMN. It is the room's total repeated identically on every row of that
-    /// room, so totalling it multiplies the room's area by its row count - Bad's six rows would
-    /// report 6 x 18.45 m2. It is a REFERENCE figure for comparing a row against its room, and
-    /// the schedule's own per-room footer is the safe way to get the same comparison. This is
-    /// the exact shape of the Wall Material Takeoff defect that the per-room takeoff was built
-    /// to escape, reintroduced deliberately and on request, in a column that is not the
-    /// quantity.
-    /// </summary>
-    public string RoomPaintTotalParameter { get; init; } = "Room Paint Total";
-
-    /// <summary>
-    /// The owning room's FINISH total for this row's surface - paint plus the unpainted
-    /// substrate. The companion to <see cref="RoomPaintTotalParameter"/>, and subject to every
-    /// caution on it, including that it must never be summed.
-    /// </summary>
-    public string RoomFinishTotalParameter { get; init; } = "Room Finish Total";
+    // THE OWNING ROOM'S TOTALS ON A TAKEOFF ROW use the SIX EXISTING parameters above -
+    // WallParameter / PaintParameter and their floor and ceiling equivalents - which are now
+    // bound to Generic Models as well as to Rooms and the element categories.
+    //
+    // An earlier revision invented 'Room Paint Total' and 'Room Finish Total' for this and was
+    // wrong to: those six already exist and are already named for exactly this quantity, so a
+    // synonym only creates two fields that can disagree. Someone who knows 'Wall Paint Area'
+    // from a room's Properties should meet the same name on the takeoff row.
+    //
+    // Revit's own 'Room: Wall Paint Area' field cannot supply this. That is a room-RELATIONSHIP
+    // lookup resolved from an element's location, and the takeoff rows are geometry-less by
+    // design, so they sit in no room and the column is blank in every model forever. Writing
+    // the value onto the row is the only mechanism available.
+    //
+    // NEVER SUM THOSE COLUMNS ON THE TAKEOFF. The value is the room's total repeated on every
+    // row of that room, so totalling it multiplies the room by its row count - Bad's six rows
+    // would report 6 x 18.45 m2. It is a REFERENCE figure for comparing a row against its room;
+    // grouping by room with a footer is the safe way to get per-room subtotals, because those
+    // are computed from the rows themselves.
 
     /// <summary>
     /// Text parameter on Rooms recording WHICH element the ceiling area came from -

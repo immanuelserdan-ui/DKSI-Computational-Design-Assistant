@@ -177,10 +177,26 @@ internal static class PaintTakeoffBuilder
 
             WriteArea(shape, settings.PaintAreaParameter, row.AreaSqM, unwritable);
 
-            // REFERENCE COLUMNS. Identical on every row of the same room and surface, so they
-            // are correct to read and wrong to total - see FinishSettings.RoomPaintTotalParameter.
-            WriteArea(shape, settings.RoomPaintTotalParameter, row.RoomSurfacePaintSqM, unwritable);
-            WriteArea(shape, settings.RoomFinishTotalParameter, row.RoomSurfaceFinishSqM, unwritable);
+            // THE OWNING ROOM'S OWN FIGURES, under the names they already carry on the Room.
+            //
+            // Written only into the pair matching THIS row's surface, so the heading always
+            // matches what is under it: a Walls row fills 'Wall Paint Area' / 'Wall Finish Area'
+            // and leaves the floor and ceiling pairs empty. A ceiling total sitting under a
+            // column headed 'Wall Paint Area' would be worse than a blank one.
+            //
+            // Reference figures, not quantities - identical on every row of the same room, so
+            // summing them multiplies the room by its row count. See the note in FinishSettings.
+            var (paintName, finishName) = row.Surface switch
+            {
+                FinishSettings.SurfaceFloor =>
+                    (settings.FloorPaintParameter, settings.FloorParameter),
+                FinishSettings.SurfaceCeiling =>
+                    (settings.CeilingPaintParameter, settings.CeilingParameter),
+                _ => (settings.PaintParameter, settings.WallParameter),
+            };
+
+            WriteArea(shape, paintName, row.RoomSurfacePaintSqM, unwritable);
+            WriteArea(shape, finishName, row.RoomSurfaceFinishSqM, unwritable);
 
             ElementStamp.Write(shape, Stamp, row.Surface);
 
@@ -419,8 +435,13 @@ internal static class PaintTakeoffBuilder
         settings.PaintHostParameter,
         settings.PaintMaterialParameter,
         settings.PaintAreaParameter,
-        settings.RoomPaintTotalParameter,
-        settings.RoomFinishTotalParameter,
+
+        // The room's own wall figures, for comparison against the row. Only the WALL pair is a
+        // default column: wall rows are the bulk of any takeoff, and adding all six would put
+        // four mostly-empty columns on an already wide schedule. The floor and ceiling
+        // equivalents are bound and written - add them by hand if you schedule those surfaces.
+        settings.PaintParameter,
+        settings.WallParameter,
     ];
 
     /// <summary>
