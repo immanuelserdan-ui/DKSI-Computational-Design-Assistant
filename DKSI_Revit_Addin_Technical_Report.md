@@ -1,5 +1,4 @@
-# DKSI Tools — Revit 2027 Add-in Suite
-## Technical Project Report
+# DKSI Tools — Revit 2027 Add-in Technical Report
 
 | Field | Detail |
 |-------|--------|
@@ -36,20 +35,20 @@ Two items require leadership attention rather than engineering:
 
 ## 2. Finalised Toolset
 
-Ten commands are present in build `1.0.26224`, grouped into four ribbon panels on the **DKSI** tab.
+Ten commands are present in build `1.0.26224`, grouped into four ribbon panels on the **DKSI** tab — *Model* (items 1–3), *Finishes & Paint* (items 4–8), *Reporting* (item 9) and *Time* (item 10).
 
-| # | Capability | Panel | Status | Disposition |
-|---|-----------|-------|--------|-------------|
-| 1 | Door Lining & Door Material — lining clash resolution and material write | Model | Complete | Ready for Senior Project Engineer testing |
-| 2 | Door Udvendig — exterior placeholder room substitution | Model | Complete | Ready for Senior Project Engineer testing |
-| 3 | Place Skirting (Wall Sweep) — native wall-sweep placement | Model | 80% | Cleared for production release |
-| 4 | Adjust Room Boundaries — automated spatial adjustment | Finishes & Paint | Complete | Ready for Senior Project Engineer testing |
-| 5 | Painted Surface Area — room-bounded paint takeoff | Finishes & Paint | Complete | Ready for Senior Project Engineer testing |
-| 6 | Painted Area (project wide) — element-centric paint area | Finishes & Paint | Complete | Ready for Senior Project Engineer testing |
-| 7 | Show / Hide Paint Areas — calculation geometry visibility | Finishes & Paint | Complete | Ready for Senior Project Engineer testing |
-| 8 | Surface Schedules — build/repair the three takeoff views | Finishes & Paint | Complete | Ready for Senior Project Engineer testing |
-| 9 | Export Schedules — built-in Excel exporter | Reporting | Complete | Ready for Senior Project Engineer testing |
-| 10 | Time Management & Monitoring | Time | 30% production | In progressive rollout |
+| # | Capability | Status | Disposition |
+|---|-----------|--------|-------------|
+| 1 | Door Lining & Door Material — lining clash resolution and material write | Complete | Ready for Senior Project Engineer testing |
+| 2 | Door Udvendig — exterior placeholder room substitution | Complete | Ready for Senior Project Engineer testing |
+| 3 | Place Skirting (Wall Sweep) — native wall-sweep placement | 80% | Cleared for production release |
+| 4 | Adjust Room Boundaries — automated spatial adjustment | Complete | Ready for Senior Project Engineer testing |
+| 5 | Painted Surface Area — room-bounded paint takeoff | Complete | Ready for Senior Project Engineer testing |
+| 6 | Painted Area (project wide) — element-centric paint area | Complete | Ready for Senior Project Engineer testing |
+| 7 | Show / Hide Paint Areas — calculation geometry visibility | Complete | Ready for Senior Project Engineer testing |
+| 8 | Surface Schedules — build/repair the three takeoff views | Complete | Ready for Senior Project Engineer testing |
+| 9 | Export Schedules — built-in Excel exporter | Complete | Ready for Senior Project Engineer testing |
+| 10 | Time Management & Monitoring | 30% production | In progressive rollout |
 
 ### 2.1 Ribbon architecture — flattened from a pull-down
 
