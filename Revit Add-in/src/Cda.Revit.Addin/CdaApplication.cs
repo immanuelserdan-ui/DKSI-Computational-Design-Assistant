@@ -22,6 +22,13 @@ public sealed class CdaApplication : IExternalApplication
             Log.Info($"Startup: Revit {application.ControlledApplication.VersionNumber} " +
                      $"build {application.ControlledApplication.VersionBuild}");
 
+            // Before the ribbon, because the answer explains everything the user is about to
+            // see. A duplicate install means Revit may be running a copy of this add-in that
+            // is not the one anyone updated, and every symptom of that reads as "the fix did
+            // not work" rather than as an install problem.
+            var duplicate = DuplicateInstallCheck.Check(
+                application.ControlledApplication.VersionNumber);
+
             RibbonBuilder.Build(application);
 
             // Registered after the ribbon: if automation fails to register, the tools are
@@ -36,6 +43,12 @@ public sealed class CdaApplication : IExternalApplication
             // subscribes to Idling, so a fault in it would otherwise be felt on every tick.
             // It swallows its own failures for the same reason.
             TimeTracking.TimeTrackingService.Register(application);
+
+            // LAST, and only if there is something to say. Shown after registration so a
+            // duplicate install never costs the user the tools themselves - the ribbon is
+            // already built and working by the time this dialog appears.
+            if (duplicate is not null)
+                TaskDialog.Show("DKSI Revit Tools - installed twice", duplicate);
 
             return Result.Succeeded;
         }
