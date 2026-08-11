@@ -1,0 +1,124 @@
+Painted Material Takeoff for Revit 2027
+=======================================
+
+Installation - about two minutes, once per workstation.
+
+
+STEP 1  Trust the publisher   (needs an administrator PowerShell)
+-----------------------------------------------------------------
+
+    Right-click Start > "Terminal (Admin)" or "Windows PowerShell (Admin)", then:
+
+        cd <this folder>
+        powershell -ExecutionPolicy Bypass -File .\Trust-Certificate.ps1
+
+    Do not skip this. Without it Revit shows "The publisher of this add-in could not be
+    verified" on first launch, and the DEFAULT BUTTON on that dialog is "Do Not Load" -
+    so pressing Enter leaves you with an empty ribbon and no error message to explain it.
+
+    Read the notes at the top of Trust-Certificate.ps1 before running it. It adds a root
+    certificate to this machine, which is a real change to its security posture. If your
+    IT policy does not allow that, tell whoever maintains this tool - the fix is an
+    organisational code-signing certificate, after which this step disappears entirely.
+
+
+STEP 2  Close Revit
+-------------------
+
+    Revit locks the add-in files while running, and only reads add-in manifests at
+    startup. Installing with it open either fails or appears to do nothing.
+
+
+STEP 3  Run the installer
+-------------------------
+
+        PaintTakeoff-1.0.3.msi
+
+    Needs administrator rights - it writes under Program Files. Accept the UAC prompt.
+
+    Installs for all users of the machine, to:
+        C:\Program Files\Autodesk\Revit\Addins\2027\
+
+    If an older version is on this machine, leave it alone. Installing this one removes it
+    first, which is the point - see "Upgrading" below.
+
+
+STEP 4  Start Revit and check
+-----------------------------
+
+    THE THREE TOOLS NOW LIVE IN THE DKSI RIBBON. This package no longer builds a tab of its
+    own - up to 1.0.2 it made a "Revit Automation" tab with a "Paint Takeoff" panel, and
+    that is deliberately gone. Look instead in:
+
+        DKSI tab > DKSI Tools pull-down
+
+        Painted Surface Area        room-bounded takeoff, one click
+        Painted Area (project wide) element-centric, independent of rooms
+        Show / Hide Paint Areas     hides the calculation geometry in a view
+
+    WHICH MEANS THIS PACKAGE ON ITS OWN HAS NO RIBBON AT ALL. If DKSI Revit Tools is not
+    installed, the only way in is:
+
+        Add-Ins tab > External Tools > "Paint Takeoff" / "Painted Area"
+
+    and Show / Hide Paint Areas is not reachable there, because it never had an External
+    Tools entry. Install DKSI Revit Tools alongside this, or stay on 1.0.2, which still
+    builds its own tab.
+
+
+If the three tools are missing
+------------------------------
+
+    0. Is DKSI Revit Tools installed? From 1.0.3 this package has no ribbon of its own and
+       relies on the DKSI pull-down to show its tools. Look for the DKSI tab first. If it
+       is not there, that is the thing to fix - see STEP 4.
+
+    1. Did a trust dialog appear and get dismissed? Step 1 was skipped or did not take.
+       Uninstall, run Step 1 as administrator, reinstall.
+
+    2. Is there a stray copy anywhere else? Look in
+           %AppData%\Autodesk\Revit\Addins\2027\
+           C:\ProgramData\Autodesk\Revit\Addins\2027\
+       If PaintedMaterialTakeoff.addin is in either, delete it and the folder beside it.
+       Revit reading the same add-in from two manifests is not supported. The ProgramData
+       one is where 1.0.1 installed; 1.0.2 removes it for you, so it should only turn up
+       if someone copied files there by hand.
+
+    3. Revit > Add-Ins tab > External Tools. If "Paint Takeoff" is listed there but the
+       ribbon tab is missing, the assembly loaded but ribbon setup failed - send a
+       screenshot of any error to whoever maintains this tool.
+
+    4. Still nothing, and no dialog ever appeared? Read the journal. Revit records a
+       rejected manifest there and NOWHERE ELSE - no dialog, no error, just an empty
+       ribbon. Open the newest file in
+           %LocalAppData%\Autodesk\Revit\Autodesk Revit 2027\Journals\
+       and search for PaintedMaterialTakeoff. A line saying the manifest "won't be loaded"
+       names the folder Revit does want, and is the whole diagnosis.
+
+
+Upgrading
+---------
+
+    Just run the installer. Do not uninstall the old version first.
+
+    1.0.3 drops the product's own ribbon tab, because DKSI Revit Tools now carries the same
+    three tools in its pull-down and having both would put each of them on the ribbon twice.
+    The add-in itself is unchanged - same commands, same results, one place to find them.
+
+    1.0.2 fixed where the files go:
+
+    1.0.1 installed to C:\ProgramData\Autodesk\Revit\Addins\2027\, which was the all-users
+    add-in folder up to Revit 2026. Revit 2027 moved it and does not fall back: it read
+    the old folder, refused the manifest, logged one line to the journal and carried on.
+    Every file was on disk exactly where the installer said it put them, the install
+    reported success, and the ribbon was empty. That is the bug 1.0.2 fixes, and the fix
+    is the destination folder - the add-in itself is byte-for-byte unchanged.
+
+    1.0.2 keeps 1.0.1's upgrade identity, so Windows removes the old ProgramData install
+    before laying down the new one. That is why uninstalling by hand first is unnecessary.
+
+
+Uninstalling
+------------
+
+    Settings > Apps > Installed apps > "Painted Material Takeoff for Revit" > Uninstall.

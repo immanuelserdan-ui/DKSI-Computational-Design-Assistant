@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Painted Material Takeoff for Revit 2027 - Windows Installer package.
+
+  WHY THIS FILE EXISTS: 1.0.1 INSTALLED PERFECTLY AND NEVER LOADED.
+
+  The 1.0.1 MSI put its manifest in C:\ProgramData\Autodesk\Revit\Addins\2027. That was
+  the all-users add-in folder up to Revit 2026. Revit 2027 moved it, and does not fall
+  back - it reads the old folder, refuses what it finds, and writes one line to the
+  journal:
+
+      Add-in manifest file from: C:\ProgramData\Autodesk\Revit\Addins\2027\
+      PaintedMaterialTakeoff.addin, won't be loaded. All-users Add-in manifest files
+      must be installed to: C:\Program Files\Autodesk\Revit\Addins\2027
+
+  No dialog, no error, no entry under Add-Ins > External Tools. Windows Installer reports
+  success, every file is on disk where the MSI promised to put it, and the ribbon is
+  empty. The only evidence is that journal line, which is why this went unexplained for a
+  while. Autodesk's own shipped add-ins are the confirmation: Autodesk.RevitMcpServer.addin
+  sits in the Program Files location on any 2027 machine.
+
+  This package therefore differs from 1.0.1 in exactly one way that matters - the
+  destination directory - and the payload it carries is byte-for-byte the 1.0.1 payload,
+  extracted from that MSI rather than rebuilt. There is no PaintTakeoff source tree in
+  this repository, so a rebuild is not on the table; and a repackage that changed the
+  binaries as well would make it impossible to say afterwards whether the path fix was
+  the whole story.
+
+  UpgradeCode IS DELIBERATELY UNCHANGED from 1.0.1. It is the identity Windows uses to
+  recognise a later MSI as "the same product, newer", and keeping it is what makes this
+  package REMOVE the broken ProgramData install before laying down the working one. Change
+  it and both versions sit on the machine at once - two manifests for one add-in, which
+  Revit does not support - and neither can cleanly uninstall the other.
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package
+      Name="Painted Material Takeoff for Revit"
+      Manufacturer="Revit Automation Project"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="8E1D4C7A-3B62-4F09-9D57-2A6C8B0E41F3"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <SummaryInformation
+        Description="Painted Material Takeoff for Revit 2027 - room-bounded painted surface areas"
+        Manufacturer="Revit Automation Project" />
+
+    <!--
+      AllowSameVersionUpgrades matters more than usual here. The payload's FileVersion is
+      a constant 1.0.0.0 - it comes out of a build that predates version stamping, and this
+      package cannot change it without rebuilding a source tree we do not have. Windows
+      Installer treats "same file version" as "leave the existing file alone", so without a
+      major upgrade removing the old product wholesale, a reinstall would report success and
+      keep whatever was already there.
+    -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      NO "IS REVIT 2027 INSTALLED?" LAUNCH CONDITION, for the reason set out at length in
+      DKSI-Revit-Tools.wxs: a guard that blocks a correct machine is worse than no guard.
+      This package is per-machine, so the ProgramFiles redirection that broke the check
+      there does not apply - but Revit's registry layout still varies by product, language
+      and deployment, and the failure this would prevent is a missing ribbon tab while the
+      failure it can cause is an installer that refuses to run at all.
+
+      The requirement is stated in INSTALL.txt instead. Documentation cannot misfire.
+    -->
+
+    <!--
+      C:\Program Files\Autodesk\Revit\Addins\2027 - and note it is "Revit\Addins", NOT
+      "Revit 2027\AddIns". Those are two different folders on a 2027 machine and only this
+      one is the all-users location; the other belongs to Revit's own installation.
+
+      The manifest sits directly in 2027\ and the payload in the PaintedMaterialTakeoff
+      subfolder beside it, because the <Assembly> path inside the manifest is relative to
+      the manifest's own folder. That relative layout is unchanged from 1.0.1, which is why
+      the manifest itself needs no edit.
+    -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="AutodeskFolder" Name="Autodesk">
+        <Directory Id="RevitFolder" Name="Revit">
+          <Directory Id="AddinsFolder" Name="Addins">
+            <Directory Id="Addins2027Folder" Name="2027">
+              <Directory Id="INSTALLFOLDER" Name="PaintedMaterialTakeoff" />
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Painted Material Takeoff" Level="1">
+      <ComponentGroupRef Id="AddinFiles" />
+    </Feature>
+
+  </Package>
+
+  <Fragment>
+
+    <ComponentGroup Id="AddinFiles">
+
+      <!--
+        ONE COMPONENT FOR THE WHOLE ASSEMBLY AND ITS COMPANION FILES.
+
+        Windows Installer decides per file whether to overwrite. A file with no version
+        resource - .pdb, .deps.json, .runtimeconfig.json, the shared parameters .txt, the
+        .addin manifest - is protected by the "unversioned but modified" rule: if it differs
+        from what the installer remembers, it is left alone on the assumption it holds user
+        edits. CompanionFile makes each of these inherit the DLL's version for that decision,
+        so the payload is replaced as one unit or not at all. A mixed set is never valid.
+      -->
+      <Component Id="AddinPayload" Directory="INSTALLFOLDER" Guid="10ca8e9d-6176-4c75-a625-ecdc9c909f02">
+        <File Id="AddinDll" Source="$(var.PayloadDir)\PaintedMaterialTakeoff.dll" KeyPath="yes" />
+
+        <File Id="DepsJson" Source="$(var.PayloadDir)\PaintedMaterialTakeoff.deps.json" CompanionFile="AddinDll" />
+        <File Id="RuntimeConfigJson" Source="$(var.PayloadDir)\PaintedMaterialTakeoff.runtimeconfig.json" CompanionFile="AddinDll" />
+
+        <!-- The shared parameter definitions the add-in binds its output parameters against.
+             Not optional: without this file the takeoff has nowhere to write its results. -->
+        <File Id="SharedParams" Source="$(var.PayloadDir)\PaintedMaterialTakeoff-SharedParameters.txt" CompanionFile="AddinDll" />
+
+        <File Id="AddinPdb" Source="$(var.PayloadDir)\PaintedMaterialTakeoff.pdb" CompanionFile="AddinDll" />
+
+        <!-- Leaves no empty PaintedMaterialTakeoff folder behind. The 2027, Addins, Revit
+             and Autodesk folders above it are deliberately NOT removed - other add-ins live
+             there, Autodesk's own among them. -->
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+
+      <!--
+        The manifest lives one folder up, so it cannot share the component above - a
+        component's files must all sit in one directory. It follows the DLL's version too,
+        so a changed manifest is not skipped on a machine that already had a hand-copied one.
+
+        The key path is a registry value rather than the manifest itself, because a file
+        cannot be both a component's key path and a companion of another file - and the
+        companion behaviour is the point. The manifest carries no version resource, so on
+        its own it would fall under the "unversioned but modified" rule and be left in place
+        exactly when it most needs replacing.
+      -->
+      <Component Id="AddinManifest" Directory="Addins2027Folder" Guid="b0097ac2-fd9f-400e-bc7f-b7bd9d8e626a">
+        <File Id="ManifestFile" Source="$(var.PayloadDir)\..\PaintedMaterialTakeoff.addin"
+              CompanionFile="AddinDll" KeyPath="no" />
+        <RegistryValue Root="HKLM" Key="Software\Revit Automation Project\PaintedMaterialTakeoff"
+                       Name="ManifestInstalled" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+
+  </Fragment>
+
+</Wix>
