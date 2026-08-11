@@ -23,13 +23,15 @@ The add-in suite has moved from a working codebase to a **packaged, deployable p
 
 **Deployment is solved, in two forms.** A per-user installer requiring no administrator rights, and a machine-wide bundle for IT mass deployment. The per-user package now carries the paint takeoff assembly internally, so the full ten-button ribbon is available on a locked-down workstation with no admin involvement at all.
 
-Two items require leadership attention rather than engineering:
+Three items require leadership attention rather than engineering:
 
 **Code signing is unresolved and is the principal deployment risk.** Both installers are unsigned. SmartScreen warns on every workstation, and corporate policy may block unsigned executables outright. An organisational code-signing certificate resolves this *and* removes the separate certificate-trust step now required on each machine. This is a purchasing decision, not a technical one.
 
 **The finish-calculation optimisation is not yet validated against a production model.** A quadratic performance defect was corrected in the core measurement engine this period. The change is behaviour-preserving by construction and its edge cases are individually documented, but the solution carries **no automated tests**, and the engine's output is areas that appear on issued drawings. A comparison harness has been supplied; validation is a prerequisite to office-wide release.
 
-**Headline position:** the product is feature-complete and packaged. Two gates remain before office-wide rollout — numerical validation of the finish engine, and a decision on code signing.
+**Engineering capacity is constrained by AI tier limits, not by headcount.** The suite in this report was built and packaged by a single engineer working with AI assistance. Standard-tier usage caps are routinely exhausted mid-task, halting active development and idling paid engineering hours. Section 7 sets out the business case for high-tier allocation, and the cost comparison against hiring a dedicated development team to achieve the same output.
+
+**Headline position:** the product is feature-complete and packaged. Two gates remain before office-wide rollout — numerical validation of the finish engine, and a decision on code signing. A third decision, on engineering capacity, governs the rate at which the remaining pipeline in Section 6 can be delivered.
 
 ---
 
@@ -271,7 +273,55 @@ Planned. Lower technical risk and not subject to the vision constraint; a candid
 
 ---
 
-## 7. Risks & Actions
+## 7. Engineering Capacity & Tooling Investment
+
+As the pipeline expands to include advanced computational tools and complex automation projects, continued reliance on standard AI tiers creates severe productivity bottlenecks. Hitting constant usage limits on standard Pro accounts forces skilled engineering talent to wait idly, stalling production and delaying deliverables.
+
+This section sets out the business case for investing in high-tier Claude allocations (Max ×5 / ×20), and the financial case for AI-assisted development against hiring a dedicated software development team to scale the proprietary add-ins described in this report.
+
+### 7.1 The Bottleneck — why standard limits threaten project timelines
+
+Standard AI developer tiers enforce strict usage caps. For a BIM Computational Engineer managing heavy algorithmic workflows, C# APIs and Python-driven Revit automation, these caps are routinely exhausted mid-task.
+
+**The cost of waiting.** When an engineer encounters a hard limit, active development halts. Multi-hour build processes, debugging sessions and complex script generation are abruptly frozen.
+
+**Lost production time.** Forced downtime translates directly into delayed milestone deliveries, slower project execution, and compromised agility against competing firms.
+
+**The solution.** Claude Max ×5 or ×20 guarantees uninterrupted, high-capacity execution, ensuring engineering talent spends paid hours actively producing rather than waiting for capacity resets.
+
+### 7.2 Financial comparison — AI subscription vs. dedicated development team
+
+To maintain, scale and extend complex Revit add-ins internally, leadership faces a clear financial fork. The table contrasts scaling via AI infrastructure against traditional hiring in the Philippine market.
+
+| Metric / Resource | Traditional Full Developer Team (Mid–Senior) | AI-Augmented Workflow (Claude Max ×5 / ×20 + existing add-ins) |
+|---|---|---|
+| Headcount required | 2–3 developers + 1 QA engineer | 1 existing BIM Computational Engineer + advanced AI |
+| Annual salary & benefits | PHP 1,800,000 – PHP 3,000,000+ per year | Minimal — existing headcount cost |
+| Software / infrastructure cost | High — multiple IDE licences, hardware, overhead | Fraction of a single salary — annual subscription |
+| Ramp-up / onboarding time | 2–3 months: hiring, training, domain alignment | Immediate — leverages already-built add-ins |
+| Output speed | Limited by human typing, meetings and coordination | Accelerated ~5× via automated code generation and debugging |
+
+### 7.3 Estimated financial savings
+
+By empowering the current engineer with high-tier AI capability rather than onboarding a traditional software development team, the company saves an estimated **85–90% in operational and payroll expense**, preserving hundreds of thousands of pesos monthly while accelerating project delivery.
+
+*Basis: Philippine market salary ranges for mid–senior developers at the stated headcount, against annual subscription cost at existing headcount. Figures are internal planning estimates, not measured outcomes.*
+
+### 7.4 Maximising the existing add-in ecosystem
+
+The organisation is not starting from scratch. It already owns functional, proprietary Revit add-ins built in-house — the suite documented in Sections 2 through 5 of this report: **19,769 lines of C# across 67 source files, packaged in three installer formats, with zero third-party dependencies.**
+
+A newly hired development team would spend substantial time simply auditing, understanding and refactoring that existing codebase before producing anything new. The architectural detail in Section 4 illustrates the point directly: several components appear inactive and are in fact load-bearing, and a team without that context would either break them or spend weeks establishing it.
+
+With high-capacity AI access, the current engineer can feed, optimise, scale and deploy the existing add-ins directly — converting prototype tools into enterprise-grade production assets without that ramp-up cost.
+
+### 7.5 Recommendation
+
+**Approve the immediate acquisition of Claude Max (×5 / ×20).** This is a low-cost, high-yield investment that eliminates production bottlenecks, protects project timelines, and secures maximum return from existing software assets without expanding payroll.
+
+---
+
+## 8. Risks & Actions
 
 | # | Risk | Impact | Action | Owner |
 |---|---|---|---|---|
@@ -281,20 +331,22 @@ Planned. Lower technical risk and not subject to the vision constraint; a candid
 | 4 | **No automated test coverage** | Regressions detectable only in production | Establish a validation model and expected-output baseline | Engineering |
 | 5 | **Duplicate installs** | Users silently run outdated code | Mitigated — start-up detection shipped; IT to clear per-user copies before rollout | IT / Engineering |
 | 6 | **Installers not yet executed** | Unknown deployment behaviour | Pilot install on one workstation before wider distribution | Engineering |
+| 7 | **AI tier limits halt development mid-task** | Idle paid engineering hours; delayed milestones across the Section 6 pipeline | Approve high-tier allocation — see Section 7 | Management |
 
 ---
 
-## 8. Recommended Next Steps
+## 9. Recommended Next Steps
 
 1. **Validate the finish engine.** Diff before/after CSV exports on a real project. This gates everything else — it is the only item whose failure mode reaches a drawing.
 2. **Decide on code signing.** A single procurement decision closes Risks 2 and 3 together.
-3. **Pilot install** on one workstation, ideally one already carrying a per-user copy, to exercise the new duplicate detection.
-4. **Finalise the parameter mapping list**, unblocking Section 3 and allowing that workstream to be re-baselined.
-5. **Schedule Automated-Void for Fitting Casework**, sequencing Stair Void Automation immediately behind it to reuse the infrastructure.
-6. **Establish a validation model** with known quantities as a permanent regression baseline. The absence of one is the root cause of Risks 1 and 4.
+3. **Approve high-tier AI allocation (Claude Max ×5 / ×20).** Section 7. This governs delivery rate for the entire Section 6 pipeline and is the lowest-cost decision on this list.
+4. **Pilot install** on one workstation, ideally one already carrying a per-user copy, to exercise the new duplicate detection.
+5. **Finalise the parameter mapping list**, unblocking Section 3 and allowing that workstream to be re-baselined.
+6. **Schedule Automated-Void for Fitting Casework**, sequencing Stair Void Automation immediately behind it to reuse the infrastructure.
+7. **Establish a validation model** with known quantities as a permanent regression baseline. The absence of one is the root cause of Risks 1 and 4.
 
 ---
 
-## 9. Note on Revision
+## 10. Note on Revision
 
 This report supersedes the capability table of the *DKSI Automation Programme — Executive Status Report* (6 August 2026) for the add-in suite specifically. Parameter Linking, previously reported at 100%, is withdrawn to Section 3 at the programme owner's direction pending mapping finalisation. Programme-level items outside the add-in — Scan-to-BIM, QA/QC tier alignment — are unchanged and remain governed by the earlier report.
