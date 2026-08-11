@@ -168,6 +168,19 @@ public sealed class FinishStaleUpdater : IUpdater
     /// The categories worth watching: anything whose geometry changes a room's finish
     /// surfaces. Furniture and annotation are excluded — they move constantly and
     /// change nothing this tool measures.
+    ///
+    /// PAINT CHANGES NEED NO CATEGORY OF THEIR OWN. Painting a face, unpainting it, or
+    /// swapping the material on it are all modifications of the HOST element — the wall,
+    /// floor or ceiling — so they arrive through the categories already listed, on the
+    /// <c>GetChangeTypeAny</c> trigger registered in FinishAutomation. There is no
+    /// "paint changed" change type in the API to subscribe to separately.
+    ///
+    /// THE VOID CUTTERS BELOW ARE BELT AND BRACES, not the primary path. When a void cuts
+    /// a wall, Revit normally reports the WALL as modified and the wall is already watched.
+    /// They are here for the case where the cutting family moves and the host is not
+    /// flagged — a missed cut leaves a painted area measured over a hole that is no longer
+    /// there, and a wrong area in a schedule is the failure that reaches a drawing. The
+    /// cost of being wrong the other way is one extra room in the next recalculation.
     /// </summary>
     public static ElementMulticategoryFilter TriggerFilter() =>
         new(
@@ -186,5 +199,7 @@ public sealed class FinishStaleUpdater : IUpdater
             BuiltInCategory.OST_CeilingOpening,
             BuiltInCategory.OST_RoofOpening,
             BuiltInCategory.OST_Casework,           // affects the arithmetic fallback path
+            BuiltInCategory.OST_GenericModel,       // in-place and loaded void cutters
+            BuiltInCategory.OST_Mass,               // masses used as cutting geometry
         ]);
 }
