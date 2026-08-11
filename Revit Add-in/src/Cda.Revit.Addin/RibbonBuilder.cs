@@ -290,15 +290,26 @@ internal static class RibbonBuilder
     /// <summary>
     /// Locates the Painted Material Takeoff assembly, or returns null if it is not installed.
     ///
-    /// BOTH FOLDERS ARE PROBED, and the order matters. Revit 2027 moved the all-users add-in
-    /// folder to Program Files and refuses manifests found in the pre-2027 ProgramData one -
-    /// which is what PaintTakeoff 1.0.1 shipped against, and why its ribbon never appeared.
-    /// See "installer/PaintTakeoff/README.md".
+    /// THREE FOLDERS ARE PROBED, and the order matters.
     ///
-    /// The ProgramData path stays in the list anyway because THESE buttons are not affected by
-    /// that rule. Revit rejects the stale MANIFEST; the DLL beside it is still perfectly
-    /// loadable by path, and this tab addresses it by path. So on a machine still running
-    /// 1.0.1 these three buttons work here even though the product's own tab is missing.
+    ///   1. Program Files - where the machine-wide MSI puts it, and what Revit 2027 treats as
+    ///      the all-users add-in location. First because an IT-managed install should win over
+    ///      anything a single user has lying around.
+    ///
+    ///   2. The user's own add-ins folder, BESIDE THIS ASSEMBLY. The per-user installer ships
+    ///      PaintedMaterialTakeoff.dll here so the three paint buttons work on a workstation
+    ///      where nobody had administrator rights to install the separate product. Nothing
+    ///      about that copy needs a manifest: these buttons name the assembly by path, and
+    ///      Revit only needs a manifest to build a product's OWN ribbon.
+    ///
+    ///   3. ProgramData, last. Revit 2027 moved the all-users folder away from there and
+    ///      refuses manifests found in it - which is what PaintTakeoff 1.0.1 shipped against,
+    ///      and why its ribbon never appeared. The path stays in the list anyway because THESE
+    ///      buttons are not affected by that rule: Revit rejects the stale MANIFEST, while the
+    ///      DLL beside it is still perfectly loadable by path. So on a machine still running
+    ///      1.0.1 these three buttons work here even though the product's own tab is missing.
+    ///
+    /// See "installer/PaintTakeoff/README.md" for the whole account of the folder move.
     /// </summary>
     private static string? FindPaintTakeoff()
     {
@@ -307,6 +318,7 @@ internal static class RibbonBuilder
         string[] candidates =
         [
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), relative),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), relative),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), relative),
         ];
 

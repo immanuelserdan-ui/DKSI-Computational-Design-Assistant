@@ -39,6 +39,13 @@
   #define PayloadDir "..\src\Cda.Revit.Addin\bin\Release"
 #endif
 
+; Unpacked from PaintTakeoff-1.0.3.msi by build-inno.ps1. Empty or absent is a
+; supported state: the paint files are marked skipifsourcedoesntexist and the
+; three buttons omit themselves at runtime.
+#ifndef PaintTakeoffDir
+  #define PaintTakeoffDir "..\dist\inno-painttakeoff"
+#endif
+
 #define AppName        "DKSI Revit Tools"
 #define AppPublisher   "DKSI"
 #define RevitVersion   "2027"
@@ -121,9 +128,42 @@ Source: "time-tracking.on.json";  DestDir: "{app}"; DestName: "time-tracking.def
 ; read and the ribbon simply never appears.
 Source: "..\src\Cda.Revit.Addin\Cda.Revit.Addin.addin"; DestDir: "{#AddinFolder}"; Flags: ignoreversion
 
+; ---------------------------------------------------------------------------
+;  PAINTED MATERIAL TAKEOFF - the assembly behind three of the ten buttons.
+;
+;  Painted Surface Area, Painted Area (project wide) and Show / Hide Paint
+;  Areas are commands in this separate product, not in DKSI. Without it on the
+;  machine they omit themselves and the ribbon shows seven buttons - correct
+;  behaviour, and the wrong outcome for anyone whose main job is paint takeoff.
+;
+;  So it ships here, into the user's own add-ins folder, where the ribbon's
+;  probe now looks. That makes all ten buttons work with NO ADMINISTRATOR
+;  RIGHTS, which the separate machine-wide MSI cannot offer.
+;
+;  NO MANIFEST IS SHIPPED WITH IT, deliberately. The buttons name the assembly
+;  by path and class name; a manifest is only needed for a product to build its
+;  OWN ribbon, and shipping one would put a second "Revit Automation" tab on
+;  every workstation - the exact duplication 1.0.3 removed.
+;
+;  The shared parameter file travels with it because the takeoff binds its
+;  output parameters from that file, resolved next to the assembly.
+;
+;  Skipped silently when the build had no takeoff MSI to unpack, so the
+;  installer still builds and the buttons still omit themselves cleanly.
+; ---------------------------------------------------------------------------
+Source: "{#PaintTakeoffDir}\PaintedMaterialTakeoff.dll"; \
+    DestDir: "{#AddinFolder}\PaintedMaterialTakeoff"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#PaintTakeoffDir}\PaintedMaterialTakeoff.deps.json"; \
+    DestDir: "{#AddinFolder}\PaintedMaterialTakeoff"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#PaintTakeoffDir}\PaintedMaterialTakeoff.runtimeconfig.json"; \
+    DestDir: "{#AddinFolder}\PaintedMaterialTakeoff"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#PaintTakeoffDir}\PaintedMaterialTakeoff-SharedParameters.txt"; \
+    DestDir: "{#AddinFolder}\PaintedMaterialTakeoff"; Flags: ignoreversion skipifsourcedoesntexist
+
 [UninstallDelete]
 ; Inno removes the files it installed; these clean up what is left behind.
 Type: files;      Name: "{#AddinFolder}\Cda.Revit.Addin.addin"
+Type: dirifempty; Name: "{#AddinFolder}\PaintedMaterialTakeoff"
 Type: dirifempty; Name: "{app}"
 
 ; NOT removed on uninstall: %LocalAppData%\Cda\RevitAddin. It holds user

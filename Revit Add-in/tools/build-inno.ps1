@@ -82,6 +82,69 @@ foreach ($f in $required) {
     }
 }
 
+# ---------------------------------------------------------------- paint takeoff payload
+#
+# THE THREE PAINT BUTTONS ARE THE POINT OF THE TOOL FOR MOST PEOPLE, so the per-user installer
+# carries PaintedMaterialTakeoff.dll rather than leaving them to disappear on any workstation
+# where nobody had admin rights to install the separate product.
+#
+# It ships UNPACKED FROM THAT PRODUCT'S OWN MSI, not copied from whatever happens to be
+# installed on the build machine - the same discipline the file-by-file [Files] list exists for.
+# No manifest is shipped with it and none is needed: the ribbon addresses the assembly by path,
+# and a manifest only matters when a product builds its own ribbon. Shipping one here would put
+# a second "Revit Automation" tab on every workstation.
+
+$ptStage = Join-Path $Dist 'inno-painttakeoff'
+$ptMsi   = Join-Path $Dist 'PaintTakeoff-1.0.3.msi'
+
+if (Test-Path $ptStage) { Remove-Item $ptStage -Recurse -Force }
+
+if (Test-Path $ptMsi) {
+    New-Item -ItemType Directory -Force -Path $ptStage | Out-Null
+
+    Say ""
+    Say "Unpacking Painted Material Takeoff..."
+
+    # Short staging path on purpose: unpacked, the longest file is over 100 characters of
+    # relative path on its own, and extracting under a deep folder blows MAX_PATH. msiexec then
+    # fails with "Error 1304 ... Verify that you have access to that directory", which reads
+    # like a permissions problem and is not one.
+    $tmp = Join-Path $env:TEMP 'pt-inno'
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+    $p = Start-Process msiexec.exe -Wait -PassThru -NoNewWindow `
+            -ArgumentList "/a `"$ptMsi`" /qn TARGETDIR=`"$tmp`""
+
+    if ($p.ExitCode -ne 0) {
+        Say "Could not unpack $ptMsi (exit $($p.ExitCode))." 'Red'
+        exit 1
+    }
+
+    $src = Join-Path $tmp 'PFiles64\Autodesk\Revit\Addins\2027\PaintedMaterialTakeoff'
+    if (-not (Test-Path $src)) {
+        $src = Join-Path $tmp 'CommApp\Autodesk\Revit\Addins\2027\PaintedMaterialTakeoff'
+    }
+    if (-not (Test-Path $src)) { Say "Unpacked, but the payload folder was not where expected." 'Red'; exit 1 }
+
+    foreach ($f in 'PaintedMaterialTakeoff.dll',
+                   'PaintedMaterialTakeoff.deps.json',
+                   'PaintedMaterialTakeoff.runtimeconfig.json',
+                   'PaintedMaterialTakeoff-SharedParameters.txt') {
+        $from = Join-Path $src $f
+        if (-not (Test-Path $from)) { Say "Missing from the takeoff MSI: $f" 'Red'; exit 1 }
+        Copy-Item $from -Destination $ptStage -Force
+    }
+
+    Remove-Item $tmp -Recurse -Force
+    Say "  4 file(s) staged - the three paint buttons will be present."
+} else {
+    Say ""
+    Say "PaintTakeoff-1.0.3.msi not in dist\ - building WITHOUT the three paint buttons." 'Yellow'
+    Say "They omit themselves at runtime, so the ribbon will show seven." 'Yellow'
+    New-Item -ItemType Directory -Force -Path $ptStage | Out-Null
+}
+
 # ---------------------------------------------------------------- compile
 
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
@@ -89,7 +152,7 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 Say ""
 Say "Compiling installer..."
 
-& $iscc "/DAppVersion=$Version" "/DPayloadDir=$Output" $Iss | Out-String | Write-Host
+& $iscc "/DAppVersion=$Version" "/DPayloadDir=$Output" "/DPaintTakeoffDir=$ptStage" $Iss | Out-String | Write-Host
 if ($LASTEXITCODE -ne 0) { Say "ISCC failed." 'Red'; exit 1 }
 
 $exe = Join-Path $Dist "DKSI-Revit-Tools-Setup-$Version.exe"
