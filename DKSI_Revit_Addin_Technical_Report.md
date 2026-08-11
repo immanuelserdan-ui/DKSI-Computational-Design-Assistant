@@ -297,7 +297,7 @@ To maintain, scale and extend complex Revit add-ins internally, leadership faces
 |---|---|---|
 | Headcount required | 2–3 developers + 1 QA engineer | 1 existing BIM Computational Engineer + advanced AI |
 | Annual salary & benefits | PHP 1,800,000 – PHP 3,000,000+ per year | Minimal — existing headcount cost |
-| Software / infrastructure cost | High — multiple IDE licences, hardware, overhead | Fraction of a single salary — annual subscription |
+| Software / infrastructure cost | High — multiple IDE licences, hardware, overhead | **Claude Max ×5: USD 100/month. Max ×20: USD 200/month.** ≈ PHP 69,600 / PHP 139,200 per year |
 | Ramp-up / onboarding time | 2–3 months: hiring, training, domain alignment | Immediate — leverages already-built add-ins |
 | Output speed | Limited by human typing, meetings and coordination | Accelerated ~5× via automated code generation and debugging |
 
@@ -305,7 +305,17 @@ To maintain, scale and extend complex Revit add-ins internally, leadership faces
 
 By empowering the current engineer with high-tier AI capability rather than onboarding a traditional software development team, the company saves an estimated **85–90% in operational and payroll expense**, preserving hundreds of thousands of pesos monthly while accelerating project delivery.
 
-*Basis: Philippine market salary ranges for mid–senior developers at the stated headcount, against annual subscription cost at existing headcount. Figures are internal planning estimates, not measured outcomes.*
+The published subscription pricing puts a firm figure on one side of that comparison:
+
+| | Annual cost | As a share of the developer-team cost |
+|---|---|---|
+| Claude Max ×5 | USD 1,200 ≈ **PHP 69,600** | 2.3% – 3.9% |
+| Claude Max ×20 | USD 2,400 ≈ **PHP 139,200** | 4.6% – 7.7% |
+| Traditional developer team | **PHP 1,800,000 – 3,000,000+** | 100% |
+
+On these figures the incremental cost of the AI-augmented path is **roughly 5–8% of the traditional path at the ×20 tier** — a reduction of about 92–95%. The 85–90% estimate above is therefore **conservative**, and is retained as the headline figure on that basis.
+
+*Basis and caveats: subscription pricing is Anthropic's published rate for Claude Max ×5 (USD 100/month) and ×20 (USD 200/month); prices exclude applicable tax and are subject to change. Peso figures are converted at approximately PHP 58 per USD — **confirm the prevailing rate at submission**. The developer-team range is a Philippine market estimate for mid–senior developers at the stated headcount, not a quotation. Existing engineer headcount cost is excluded from both columns, since it is unchanged either way.*
 
 ### 7.4 Maximising the existing add-in ecosystem
 
@@ -318,6 +328,8 @@ With high-capacity AI access, the current engineer can feed, optimise, scale and
 ### 7.5 Recommendation
 
 **Approve the immediate acquisition of Claude Max (×5 / ×20).** This is a low-cost, high-yield investment that eliminates production bottlenecks, protects project timelines, and secures maximum return from existing software assets without expanding payroll.
+
+At **USD 200 per month** for the ×20 tier — approximately **PHP 139,200 per year**, against a developer-team cost of PHP 1.8–3.0 million — this is among the lowest-value decisions in this report by expenditure and among the highest by effect on delivery rate. It requires no headcount change, no procurement cycle, and no onboarding period.
 
 ---
 
