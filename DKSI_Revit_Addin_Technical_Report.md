@@ -289,7 +289,21 @@ Standard AI developer tiers enforce strict usage caps. For a BIM Computational E
 
 **The solution.** Claude Max ×5 or ×20 guarantees uninterrupted, high-capacity execution, ensuring engineering talent spends paid hours actively producing rather than waiting for capacity resets.
 
-### 7.2 Financial comparison — AI subscription vs. dedicated development team
+### 7.2 What is being requested — the plans and their cost
+
+| Plan | Price | Usage vs Pro | Status |
+|---|---|---|---|
+| **Pro** | USD 20/month, or USD 17/month billed annually (USD 200 up front) | Baseline | **Current tier — the source of the bottleneck** |
+| **Max ×5** | **USD 100/month** ≈ PHP 5,800/month, PHP 69,600/year | **5× more usage per session** | Proposed minimum |
+| **Max ×20** | **USD 200/month** ≈ PHP 11,600/month, PHP 139,200/year | **20× more usage per session** | **Recommended** |
+
+**The request is one Max ×20 seat for the BIM Computational Engineer: USD 200 per month, approximately PHP 139,200 per year.**
+
+Because the engineer already holds a Pro subscription, the **incremental** cost is **USD 180 per month** — approximately PHP 10,440 per month, or **PHP 125,280 per year**.
+
+**Why ×20 rather than ×5.** The bottleneck in Section 7.1 is *session* capacity, and the ×5 tier raises it fivefold where ×20 raises it twentyfold, for one additional USD 100 per month. Against a developer-team alternative starting at PHP 1.8 million, the difference between the two tiers — PHP 69,600 per year — is not a material saving, while the difference in headroom is the entire point of the request. If a lower commitment is preferred for a first term, ×5 is a valid starting point and can be upgraded without re-procurement.
+
+### 7.3 Financial comparison — AI subscription vs. dedicated development team
 
 To maintain, scale and extend complex Revit add-ins internally, leadership faces a clear financial fork. The table contrasts scaling via AI infrastructure against traditional hiring in the Philippine market.
 
@@ -301,7 +315,7 @@ To maintain, scale and extend complex Revit add-ins internally, leadership faces
 | Ramp-up / onboarding time | 2–3 months: hiring, training, domain alignment | Immediate — leverages already-built add-ins |
 | Output speed | Limited by human typing, meetings and coordination | Accelerated ~5× via automated code generation and debugging |
 
-### 7.3 Estimated financial savings
+### 7.4 Estimated financial savings
 
 By empowering the current engineer with high-tier AI capability rather than onboarding a traditional software development team, the company saves an estimated **85–90% in operational and payroll expense**, preserving hundreds of thousands of pesos monthly while accelerating project delivery.
 
@@ -317,7 +331,7 @@ On these figures the incremental cost of the AI-augmented path is **roughly 5–
 
 *Basis and caveats: subscription pricing is Anthropic's published rate for Claude Max ×5 (USD 100/month) and ×20 (USD 200/month); prices exclude applicable tax and are subject to change. Peso figures are converted at approximately PHP 58 per USD — **confirm the prevailing rate at submission**. The developer-team range is a Philippine market estimate for mid–senior developers at the stated headcount, not a quotation. Existing engineer headcount cost is excluded from both columns, since it is unchanged either way.*
 
-### 7.4 Maximising the existing add-in ecosystem
+### 7.5 Maximising the existing add-in ecosystem
 
 The organisation is not starting from scratch. It already owns functional, proprietary Revit add-ins built in-house — the suite documented in Sections 2 through 5 of this report: **19,769 lines of C# across 67 source files, packaged in three installer formats, with zero third-party dependencies.**
 
@@ -325,11 +339,23 @@ A newly hired development team would spend substantial time simply auditing, und
 
 With high-capacity AI access, the current engineer can feed, optimise, scale and deploy the existing add-ins directly — converting prototype tools into enterprise-grade production assets without that ramp-up cost.
 
-### 7.5 Recommendation
+### 7.6 Recommendation
 
-**Approve the immediate acquisition of Claude Max (×5 / ×20).** This is a low-cost, high-yield investment that eliminates production bottlenecks, protects project timelines, and secures maximum return from existing software assets without expanding payroll.
+**Approve one Claude Max ×20 subscription for the BIM Computational Engineer.**
 
-At **USD 200 per month** for the ×20 tier — approximately **PHP 139,200 per year**, against a developer-team cost of PHP 1.8–3.0 million — this is among the lowest-value decisions in this report by expenditure and among the highest by effect on delivery rate. It requires no headcount change, no procurement cycle, and no onboarding period.
+| The ask | |
+|---|---|
+| Plan | Claude Max ×20 (20× Pro session capacity) |
+| Seats | 1 |
+| List price | **USD 200 per month** — approximately **PHP 11,600 per month** |
+| Annual | **USD 2,400** — approximately **PHP 139,200** |
+| Incremental over the current Pro seat | **USD 180 per month** — approximately **PHP 125,280 per year** |
+| Alternative being displaced | 2–3 developers + 1 QA engineer, PHP 1,800,000 – 3,000,000+ per year |
+| Procurement | Card or invoice, self-serve. No tender, no onboarding, no headcount change |
+
+This is a low-cost, high-yield investment that eliminates production bottlenecks, protects project timelines, and secures maximum return from existing software assets without expanding payroll. It is the lowest-expenditure decision in this report and among the highest by effect on delivery rate.
+
+If a smaller first commitment is preferred, **Max ×5 at USD 100 per month (≈ PHP 69,600 per year)** delivers five times current capacity and can be upgraded to ×20 at any point without re-procurement.
 
 ---
 
