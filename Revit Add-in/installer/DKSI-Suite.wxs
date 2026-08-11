@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  DKSI Revit Suite - one installer chaining both products, for office-wide deployment.
+
+  WHAT IT CHAINS, AND WHY IT HAS TO BE A BUNDLE RATHER THAN ONE MSI
+    A single MSI has ONE install scope. These two products do not share one:
+
+      DKSI Revit Tools (all users)   per-machine, C:\Program Files\Autodesk\Revit\Addins\2027\Cda
+      Painted Material Takeoff       per-machine, C:\Program Files\Autodesk\Revit\Addins\2027\PaintedMaterialTakeoff
+
+    They happen to agree today because the all-users variant exists. They are still two
+    products with two UpgradeCodes, two uninstall entries and two release cadences, and merging
+    them into one MSI would mean neither could ever ship on its own again. Burn chains them and
+    leaves both independently serviceable, which is what "suite" should mean.
+
+  ADMINISTRATIVE PRIVILEGES ARE CHECKED HERE, BY CONSTRUCTION, NOT BY A TEST WE WROTE.
+    Both chained packages are per-machine, so Burn elevates once at the start and runs both
+    inside that elevation. There is no need for - and no value in - a hand-rolled "are you an
+    admin?" condition: Windows already refuses, and a custom check can only duplicate that
+    answer or contradict it. A non-admin double-clicking this gets the standard UAC prompt.
+
+  SILENT INSTALL FOR IT
+        DKSI-Revit-Suite.exe /quiet /norestart /log C:\Temp\dksi.log
+
+    /VERYSILENT IS AN INNO SETUP SWITCH AND DOES NOT EXIST HERE. Burn accepts /quiet (no UI at
+    all) and /passive (progress bar, no prompts); the chained MSIs accept msiexec's /qn if run
+    directly. This project has been on WiX since the first installer, and moving to Inno Setup
+    to gain that one switch would trade an MSI - which GPO Software Installation, SCCM and
+    Intune all consume natively - for an EXE that none of them do. The switch is not worth the
+    deployment channel.
+
+  WHAT IS NOT BUNDLED, DELIBERATELY
+    THE .NET RUNTIME. Revit 2027 runs on .NET 10 and ships it as its own prerequisite, so any
+    machine that can run Revit 2027 already has the runtime this add-in needs. Chaining a
+    redistributable would add ~55 MB to every deployment to install something that is provably
+    already present, and would fail the "clean corporate workstation" test in the other
+    direction by trying to install a runtime IT may manage centrally.
+
+    THE REVIT API ASSEMBLIES. RevitAPI.dll and RevitAPIUI.dll are referenced with Private=false
+    and must NEVER be shipped - a private copy causes type-identity mismatches at runtime, the
+    ones that read as "cannot cast Element to Element". They come from the Revit install.
+
+    THE SIGNING CERTIFICATE for Painted Material Takeoff. Trusting a self-signed root is a real
+    change to a workstation's security posture and is not a decision an installer should make
+    silently on anyone's behalf. It stays a separate, documented, deliberate step - see
+    "installer/PaintTakeoff/Trust-Certificate.ps1". If this suite is going past a handful of
+    machines, the right fix is an organisational code-signing certificate, after which the step
+    disappears entirely.
+
+  SO WHAT IS BUNDLED IS EVERYTHING THIS SUITE ACTUALLY OWNS: both add-in assemblies, both
+  manifests, the shared parameter file, the time-tracking defaults, and the embedded icons that
+  are compiled into the DLL itself. There are no NuGet dependencies in either project - the
+  DKSI assembly has zero PackageReference entries - so there is nothing else to carry.
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+
+  <Bundle
+      Name="DKSI Revit Suite"
+      Manufacturer="DKSI"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="9a5f27e3-6c81-4d40-bb92-3e074f1c8a56"
+      Compressed="yes"
+      DisableModify="yes">
+
+    <!--
+      NOT Theme="none". THAT WAS A BUG AND IT COST A FAILED ROLLOUT.
+
+      "none" does not mean "a minimal UI". It means NO WINDOW AT ALL: wixstdba renders nothing,
+      so double-clicking the bundle raises a UAC prompt and then, from the user's side, does
+      nothing whatsoever. It installs correctly and silently and looks exactly like an installer
+      that failed to start. The first person who ran it reported it "didn't run"; it had almost
+      certainly installed.
+
+      "none" is for bundles that are ONLY ever launched with /quiet by a deployment system. This
+      one is also handed to people, so it needs a window.
+
+      rtfLicense shows the same Notice.rtf the per-user MSI already shows, so both installers
+      say the same thing to the same audience. The interactive click-through it adds costs
+      nothing in deployment: /quiet suppresses the UI entirely, whatever the theme.
+    -->
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="rtfLicense"
+          LicenseFile="$(var.NoticeRtf)"
+          SuppressOptionsUI="yes" />
+    </BootstrapperApplication>
+
+    <!--
+      ORDER MATTERS. DKSI Revit Tools installs first because Painted Material Takeoff 1.0.3 no
+      longer builds a ribbon of its own - it relies on the DKSI ribbon to surface its three
+      tools. Installing them the other way round works, but leaves a window in which the takeoff
+      is installed and unreachable, which is exactly the state that generated a support question
+      once already.
+
+      Both are per-machine, so the bundle elevates once and neither prompts again.
+    -->
+    <Chain>
+      <!-- Neither shows its own MSI UI: suppressed is the default from WiX v4 on, and a
+           chained package that opened its own wizard would break the bundle's silent mode. -->
+      <MsiPackage
+          Id="DksiRevitTools"
+          SourceFile="$(var.DksiMsi)"
+          Vital="yes" />
+
+      <MsiPackage
+          Id="PaintedMaterialTakeoff"
+          SourceFile="$(var.PaintTakeoffMsi)"
+          Vital="no" />
+    </Chain>
+
+    <!--
+      Vital="no" on the takeoff is deliberate. DKSI Revit Tools is useful on its own and is the
+      thing most of the office needs; the takeoff is a separate product with its own signing
+      story. If it fails - and the most likely reason is a machine whose policy blocks the
+      unsigned MSI - the suite should still leave a working DKSI ribbon behind rather than roll
+      the whole deployment back. The three takeoff buttons are omitted from that ribbon
+      automatically when the assembly is not on disk, so a partial install degrades cleanly
+      instead of leaving dead buttons.
+    -->
+
+  </Bundle>
+
+</Wix>
