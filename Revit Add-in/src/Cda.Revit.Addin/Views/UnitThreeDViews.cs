@@ -188,7 +188,15 @@ public sealed class Unit3dViewBuilder
             var box = room.get_BoundingBox(null);
             if (box is null) continue;
 
-            foreach (var corner in new[] { box.Min, box.Max })
+            // All eight corners, not just Min and Max: under a rotated transform those two are
+            // not the extremes of anything, and Min.Z can exceed Max.Z once transformed.
+            foreach (var corner in new[]
+                     {
+                         new XYZ(box.Min.X, box.Min.Y, box.Min.Z), new XYZ(box.Max.X, box.Min.Y, box.Min.Z),
+                         new XYZ(box.Min.X, box.Max.Y, box.Min.Z), new XYZ(box.Max.X, box.Max.Y, box.Min.Z),
+                         new XYZ(box.Min.X, box.Min.Y, box.Max.Z), new XYZ(box.Max.X, box.Min.Y, box.Max.Z),
+                         new XYZ(box.Min.X, box.Max.Y, box.Max.Z), new XYZ(box.Max.X, box.Max.Y, box.Max.Z),
+                     })
             {
                 var p = box.Transform.OfPoint(corner);
                 minZ = Math.Min(minZ, p.Z);
@@ -199,11 +207,18 @@ public sealed class Unit3dViewBuilder
 
         if (!foundZ)
         {
-            // No room volumes - fall back to the level with a nominal storey height, which is
-            // wrong by a little rather than empty.
-            var level = _doc.GetElement(group.LevelId) as Level;
-            minZ = level?.ProjectElevation ?? 0;
-            maxZ = minZ + UnitUtils.ConvertToInternalUnits(3000, UnitTypeId.Millimeters);
+            // A merged maisonette group carries NO level - MergeAcrossLevels sets it invalid,
+            // because the unit does not belong to one - so this must not be looked up blindly.
+            // Falling back to the rooms' own levels keeps a multi-storey unit honest.
+            var elevations = group.Rooms
+                .Select(r => _doc.GetElement(r.LevelId) as Level)
+                .OfType<Level>()
+                .Select(l => l.ProjectElevation)
+                .ToList();
+
+            minZ = elevations.Count > 0 ? elevations.Min() : 0;
+            maxZ = (elevations.Count > 0 ? elevations.Max() : 0)
+                   + UnitUtils.ConvertToInternalUnits(3000, UnitTypeId.Millimeters);
         }
 
         var margin = _settings.MarginFeet;
@@ -318,13 +333,17 @@ public sealed class Unit3dViewBuilder
 
         if (unitLevels.Count == 0) return 0;
 
+        // The section box was set moments ago in this transaction; the collector reports what
+        // Revit has computed, not what was assigned, so it must recompute first.
+        _doc.Regenerate();
+
         var foreign = new List<ElementId>();
 
         foreach (var element in new FilteredElementCollector(_doc, view.Id).WhereElementIsNotElementType())
         {
             if (element.Category is not { CategoryType: CategoryType.Model }) continue;
 
-            var levelId = element.LevelId;
+            var levelId = LevelOf(element);
             if (levelId == ElementId.InvalidElementId) continue;   // unknown -> keep
 
             if (!unitLevels.Contains(levelId.Value)) foreign.Add(element.Id);
@@ -346,6 +365,45 @@ public sealed class Unit3dViewBuilder
             warnings.Add($"Unit {group.Unit}: could not hide {hideable.Count} element(s) from other levels - {ex.Message}");
             return 0;
         }
+    }
+
+    /// <summary>
+    /// The level an element belongs to.
+    ///
+    /// Element.LevelId ALONE IS NOT ENOUGH, and relying on it is the quiet way this rule
+    /// fails: it returns InvalidElementId for whole categories that plainly do carry a level -
+    /// hosted families report through FAMILY_LEVEL_PARAM, generic components through
+    /// SCHEDULE_LEVEL_PARAM, walls through their base constraint. Every one of those would be
+    /// read as "level unknown" and kept, which is precisely a basement element surviving into
+    /// a ground-floor unit's view.
+    ///
+    /// The order matters: LevelId first because it is authoritative when present, then the
+    /// parameters from most to least specific.
+    /// </summary>
+    private static ElementId LevelOf(Element element)
+    {
+        if (element.LevelId != ElementId.InvalidElementId) return element.LevelId;
+
+        foreach (var candidate in new[]
+                 {
+                     BuiltInParameter.FAMILY_LEVEL_PARAM,
+                     BuiltInParameter.SCHEDULE_LEVEL_PARAM,
+                     BuiltInParameter.LEVEL_PARAM,
+                     BuiltInParameter.WALL_BASE_CONSTRAINT,
+                     BuiltInParameter.ROOF_BASE_LEVEL_PARAM,
+                 })
+        {
+            Parameter? parameter;
+            try { parameter = element.get_Parameter(candidate); }
+            catch { continue; }
+
+            if (parameter is not { StorageType: StorageType.ElementId }) continue;
+
+            var id = parameter.AsElementId();
+            if (id != ElementId.InvalidElementId) return id;
+        }
+
+        return ElementId.InvalidElementId;
     }
 
     /// <summary>Applies the configured camera. Section box must already be set - it frames the shot.</summary>

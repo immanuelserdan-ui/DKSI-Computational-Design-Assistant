@@ -91,8 +91,14 @@ public sealed class PlaceSkirtingCommand : CommandBase
                 $"{result.CaseworkBreaks} at casework.\n" +
                 $"{result.RevealPieces} reveal board(s) wrapping into openings, " +
                 $"{Measure.ToMetres(result.RevealLength):0.00} m." +
+                // NOT "expected on a second run" any more. That message survived from the
+                // removed Top-up mode, which skipped faces it had already visited. Regenerate
+                // deletes its own work first, so a second run places exactly what the first
+                // did - and zero means the rules excluded everything, which is a real result
+                // worth investigating rather than a reassurance.
                 (result.Placed == 0
-                    ? "\n\nIf every segment was already done, this is expected on a second run."
+                    ? "\n\nNothing qualified. Regenerate rebuilds from scratch every time, so this " +
+                      "is not a 'already done' result - check the exclusions above and the report."
                     : string.Empty) +
                 (result.Problems.Count == 0
                     ? string.Empty

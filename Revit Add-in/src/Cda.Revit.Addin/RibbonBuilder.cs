@@ -228,12 +228,17 @@ internal static class RibbonBuilder
             availability: null);
 
         // ------------------------------------------------------------------------------
-        // STILL OFF THE RIBBON. Every command class is untouched in Commands/ - restoring any
-        // of them is one AddButton call.
+        // STILL OFF THE RIBBON. Three command classes exist in Commands/ and are reachable
+        // again with one AddButton call each:
         //
-        //   Sync Material Parameters  (SyncMaterialParamsCommand)
-        //   Set Up Finish Schedules   (SetUpFinishSchedulesCommand)
-        //   Diagnose Parameters       (DiagnoseParamsCommand)
+        //   Finish Surface Area  (FinishSurfaceAreaCommand)
+        //   Paint Takeoff        (PaintTakeoffCommand)
+        //   Paint Highlight      (PaintHighlightCommand)
+        //
+        // Sync Material Parameters, Set Up Finish Schedules and Diagnose Parameters were listed
+        // here too until this audit. THOSE CLASSES NO LONGER EXIST - the note promised a
+        // one-line restore for three files that had already been deleted, which is worse than
+        // no note at all. If you want them back they have to be written again, not re-wired.
         //
         // THIS ADD-IN'S OWN FINISH AND PAINT COMMANDS STAY OFF, and that is still deliberate.
         // The tab carries the STANDALONE product's three paint tools instead - see

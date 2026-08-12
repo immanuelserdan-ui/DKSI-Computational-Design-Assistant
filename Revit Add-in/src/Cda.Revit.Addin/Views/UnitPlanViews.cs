@@ -551,10 +551,22 @@ public sealed class UnitPlanViewBuilder
     /// Name composition with an explicit format, so the 3D pass produces names in the same
     /// convention from the same tokens rather than reimplementing it.
     /// </summary>
+    /// <summary>
+    /// Short code for a storey, taken from the digits in its name: "(03) 1. sal" -> "03".
+    /// Used to tell one storey's copy of a unit from another's when the name format itself
+    /// carries no level.
+    /// </summary>
+    public static string FloorCode(string levelName)
+    {
+        var digits = Regex.Match(levelName ?? string.Empty, @"\d+");
+        return digits.Success ? digits.Value : (levelName ?? string.Empty).Trim();
+    }
+
     public string BuildName(UnitGroup group, IReadOnlyDictionary<string, string> tokens, string format, ISet<string> unresolved)
     {
         var name = format
             .Replace("{UNIT}", group.Unit, StringComparison.OrdinalIgnoreCase)
+            .Replace("{FLOOR}", FloorCode(group.LevelName), StringComparison.OrdinalIgnoreCase)
             .Replace("{LEVEL}", group.LevelName, StringComparison.OrdinalIgnoreCase);
 
         foreach (var (token, value) in tokens)
@@ -642,6 +654,7 @@ public sealed class UnitPlanViewBuilder
         var failed = 0;
         var createdIds = new List<ElementId>();
         var unresolved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var claimedThisRun = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var tokens = ResolveTokens(warnings);
         var templateId = ResolveViewTemplate(source, warnings);
 
@@ -664,12 +677,30 @@ public sealed class UnitPlanViewBuilder
             {
                 var wanted = BuildName(group, tokens, unresolved);
 
+                // A NAME CLAIMED BY AN EARLIER GROUP IN THIS RUN IS NOT AN EXISTING VIEW.
+                // The name format carries no level, so a unit occupying two storeys produces
+                // the same name twice - and treating the second as "already exists" is how the
+                // upper floor of a maisonette silently never got a plan. Disambiguate by
+                // storey instead of skipping, and say so.
+                if (claimedThisRun.Contains(wanted))
+                {
+                    var byFloor = $"{wanted}-{FloorCode(group.LevelName)}";
+
+                    warnings.Add(
+                        $"Unit {group.Unit} occupies more than one storey, and NameFormat has no level token, so both storeys wanted the name '{wanted}'. " +
+                        $"The {group.LevelName} plan was named '{byFloor}' instead. Put {{FLOOR}} or {{LEVEL}} in NameFormat to control this properly.");
+
+                    wanted = byFloor;
+                }
+
                 if (_settings.SkipExisting && taken.Contains(wanted))
                 {
                     rows.Add(new UnitViewRow(group.Unit, group.LevelName, group.Rooms.Count, wanted, "skipped - view exists"));
                     skipped++;
                     continue;
                 }
+
+                claimedThisRun.Add(wanted);
 
                 if (box is null)
                 {
@@ -914,14 +945,20 @@ public sealed class UnitPlanViewBuilder
         if (levelId == ElementId.InvalidElementId) return fallback;
         if (_mastersByLevel.TryGetValue(levelId.Value, out var cached)) return cached;
 
+        // UNCROPPED FIRST, then annotation count. On a re-run this level already holds the
+        // unit views from last time - they are floor plans on this level too, so they are
+        // candidates to become their own master. A storey plan is not cropped; a unit view
+        // always is. Ranking on annotation alone would usually pick correctly and would be
+        // relying on luck to do it.
         var best = new FilteredElementCollector(_doc)
             .OfClass(typeof(ViewPlan))
             .Cast<ViewPlan>()
             .Where(v => !v.IsTemplate
                         && v.ViewType == ViewType.FloorPlan
                         && v.GenLevel?.Id == levelId)
-            .Select(v => (View: v, Annotations: AnnotationCount(v)))
-            .OrderByDescending(x => x.Annotations)
+            .Select(v => (View: v, Cropped: v.CropBoxActive, Annotations: AnnotationCount(v)))
+            .OrderBy(x => x.Cropped)
+            .ThenByDescending(x => x.Annotations)
             .FirstOrDefault();
 
         var chosen = best.View;
@@ -977,6 +1014,13 @@ public sealed class UnitPlanViewBuilder
     /// </summary>
     public int HideForeignElements(View view, UnitGroup group, BoundingBoxXYZ tight, List<string> warnings)
     {
+        // REGENERATE FIRST. The crop was set moments ago in this same transaction, and a
+        // view-based collector reports what Revit has computed, not what has been assigned.
+        // Without this the collector walks the whole storey - every element the uncropped view
+        // showed - which is both far slower and a different set from what the finished view
+        // will draw.
+        _doc.Regenerate();
+
         var ownRoomIds = group.Rooms.Select(r => r.Id.Value).ToHashSet();
         var tolerance = _settings.ForeignToleranceFeet;
         var foreign = new List<ElementId>();
