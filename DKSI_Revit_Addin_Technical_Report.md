@@ -3,10 +3,10 @@
 | Field | Detail |
 |-------|--------|
 | **Product** | DKSI Tools — Revit 2027 Add-in Suite |
-| **Report Date** | 12 August 2026 |
-| **Reporting Period** | 6 August 2026 – 12 August 2026 |
+| **Report Date** | 13 August 2026 |
+| **Reporting Period** | 6 August 2026 – 13 August 2026 |
 | **Target Platform** | Autodesk Revit 2027 (.NET 10, `net10.0-windows`, x64) |
-| **Build** | `1.0.26224` |
+| **Build** | `1.0.26225` |
 | **Prepared for** | Senior Management, Engineering Leads, and Programme Stakeholders |
 | **Prepared by** | John Immanuel Serdan |
 | **Classification** | Internal — Technical Status |
@@ -15,13 +15,15 @@
 
 ## 1. Executive Summary
 
-The add-in suite has moved from a working codebase to a **packaged, deployable product**. Three things changed materially in this period.
+The add-in suite has moved from a working codebase to a **packaged, deployable product**, and has since gained two capabilities that were pipeline items in the previous revision. Four things changed materially in this period.
 
-**The toolset is finalised and surfaced.** All active commands now appear as individual ribbon buttons across four labelled panels, replacing the single pull-down of the previous revision. Ten commands are on the ribbon.
+**The toolset is finalised and surfaced.** All active commands now appear as individual ribbon buttons across five labelled panels, replacing the single pull-down of the previous revision. Twelve buttons are on the ribbon — nine DKSI commands and three surfaced from the paint takeoff assembly.
+
+**Two pipeline items were delivered, not merely specified.** *Automated-Void for Fitting Casework* (Section 6.1 of the previous revision) shipped as **Cut Walls with Casework Voids**. A second capability not previously scoped — **Unit Views**, generating a cropped floor plan and a section-boxed 3D view per apartment unit — was specified and delivered inside this period. Both are described in Section 2.
 
 **The repository has been cleaned.** 185 tracked files reduced to 153, removing a superseded installer system, stray test-run artefacts, and five commands that were neither on the ribbon nor in the brief — together with the engines and icons they exclusively owned. Nothing load-bearing was removed, and the build remains clean at zero warnings.
 
-**Deployment is solved, in two forms.** A per-user installer requiring no administrator rights, and a machine-wide bundle for IT mass deployment. The per-user package now carries the paint takeoff assembly internally, so the full ten-button ribbon is available on a locked-down workstation with no admin involvement at all.
+**Deployment is solved, in two forms.** A per-user installer requiring no administrator rights, and a machine-wide bundle for IT mass deployment. The per-user package carries the paint takeoff assembly internally, so the full ribbon is available on a locked-down workstation with no admin involvement at all.
 
 Three items require leadership attention rather than engineering:
 
@@ -37,20 +39,22 @@ Three items require leadership attention rather than engineering:
 
 ## 2. Finalised Toolset
 
-Ten commands are present in build `1.0.26224`, grouped into four ribbon panels on the **DKSI** tab — *Model* (items 1–3), *Finishes & Paint* (items 4–8), *Reporting* (item 9) and *Time* (item 10).
+Twelve buttons are present in build `1.0.26225`, grouped into five ribbon panels on the **DKSI** tab — *Model* (items 1–4), *Finishes & Paint* (items 5–9), *Views* (item 10), *Reporting* (item 11) and *Time* (item 12).
 
 | # | Capability | Status | Disposition |
 |---|-----------|--------|-------------|
 | 1 | Door Lining & Door Material — lining clash resolution and material write | Complete | Ready for Senior Project Engineer testing |
 | 2 | Door Udvendig — exterior placeholder room substitution | Complete | Ready for Senior Project Engineer testing |
 | 3 | Place Skirting (Wall Sweep) — native wall-sweep placement | 80% | Cleared for production release |
-| 4 | Adjust Room Boundaries — automated spatial adjustment | Complete | Ready for Senior Project Engineer testing |
-| 5 | Painted Surface Area — room-bounded paint takeoff | Complete | Ready for Senior Project Engineer testing |
-| 6 | Painted Area (project wide) — element-centric paint area | Complete | Ready for Senior Project Engineer testing |
-| 7 | Show / Hide Paint Areas — calculation geometry visibility | Complete | Ready for Senior Project Engineer testing |
-| 8 | Surface Schedules — build/repair the three takeoff views | Complete | Ready for Senior Project Engineer testing |
-| 9 | Export Schedules — built-in Excel exporter | Complete | Ready for Senior Project Engineer testing |
-| 10 | Time Management & Monitoring | 30% production | In progressive rollout |
+| 4 | Cut Walls with Casework Voids — automated side-void cutting | Complete | Ready for Senior Project Engineer testing |
+| 5 | Adjust Room Boundaries — automated spatial adjustment | Complete | Ready for Senior Project Engineer testing |
+| 6 | Painted Surface Area — room-bounded paint takeoff | Complete | Ready for Senior Project Engineer testing |
+| 7 | Painted Area (project wide) — element-centric paint area | Complete | Ready for Senior Project Engineer testing |
+| 8 | Show / Hide Paint Areas — calculation geometry visibility | Complete | Ready for Senior Project Engineer testing |
+| 9 | Surface Schedules — build/repair the three takeoff views | Complete | Ready for Senior Project Engineer testing |
+| 10 | Unit Views — per-apartment cropped plans and section-boxed 3D views | Functional; naming convention unconfirmed | Pilot on one project before wider use |
+| 11 | Export Schedules — built-in Excel exporter | Complete | Ready for Senior Project Engineer testing |
+| 12 | Time Management & Monitoring | 30% production | In progressive rollout |
 
 ### 2.1 Ribbon architecture — flattened from a pull-down
 
@@ -69,7 +73,21 @@ Two engineering notes carry forward:
 - A `PushButton` may name any assembly on disk, so these commands need not be copied into this codebase — which matters, as no source tree exists for that product.
 - **An availability class must resolve from the button's own assembly.** Revit looks for `AvailabilityClassName` inside the assembly the button names, not inside the add-in that built the ribbon. Supplying a DKSI availability type produced a load failure at every start-up which named DKSI as the culprit. The three buttons now use that product's own `DocumentAvailability`.
 
-If the paint takeoff assembly is absent, these three buttons omit themselves and the ribbon shows seven. That is deliberate: a button that throws "file not found" on click is worse than a shorter panel.
+If the paint takeoff assembly is absent, these three buttons omit themselves and the ribbon shows nine. That is deliberate: a button that throws "file not found" on click is worse than a shorter panel.
+
+### 2.4 Unit Views — per-apartment drawing production
+
+**What it does.** Groups every placed room in the model by the 4-digit unit number on its `Department` parameter, then for each unit produces a floor plan cropped to that unit and a section-boxed 3D view. One command, one undo step; plans-only and 3D-only runs are offered alongside both.
+
+**Why it is listed as pilot rather than complete.** The mechanism is working and verified against a live project. Two things are not settled, and neither is an engineering defect:
+
+- **The naming convention is unconfirmed.** View names are built from the document-ID pattern, with the project, case and building segments read from the model — Project Number, then Project Information `Selskab` and `Afdeling`. The *type* segment for 3D views is a placeholder pending the office's real code, and a unit occupying two storeys currently receives an appended storey code because the convention carries no level field.
+- **Output quality depends on room data.** The tool crops to the rooms it is given. Where a unit's rooms are mis-tagged, the crop is correct for the data and wrong as a drawing. A footprint outlier check flags units whose extents are unlike their neighbours' so this is caught before a view reaches a sheet, but it flags — it cannot correct.
+
+**Engineering notes worth recording**, both discovered against a production model rather than in review:
+
+- A crop box's `Min`/`Max` are expressed in the coordinate system of its own `Transform`, not in model coordinates. Writing model coordinates directly works on an unrotated view at the origin and lands elsewhere on every other model.
+- A view template that controls *Crop View* makes `CropBoxActive` a silent no-op — the assignment is accepted and ignored. An applied template and an active crop cannot both hold unless the template releases the crop parameters. The same applies to the section box in 3D. The tool writes the value and reads it back rather than assuming.
 
 ### 2.3 Commands retained but not surfaced
 
@@ -200,9 +218,14 @@ Ten commits. Two are worth flagging technically.
 
 | Package | Scope | Rights | Contents | Use |
 |---|---|---|---|---|
-| `DKSI-Revit-Tools-Setup-1.0.26224.exe` | Per-user, `%AppData%` | **None** | All 10 commands, paint assembly included | Individual workstations |
-| `DKSI-Revit-Suite-1.0.26224.exe` | Machine-wide, Program Files | Administrator | Chains both products | IT mass deployment |
-| `DKSI-Revit-Tools-AllUsers-…msi` | Machine-wide | Administrator | Embedded in the bundle | Not distributed separately |
+| `DKSI-Revit-Suite-1.0.26225.exe` | Machine-wide, Program Files | Administrator | Chains both products | **The distribution artefact** — IT mass deployment |
+| `DKSI-Revit-Tools-1.0.26225.msi` | Per-user, `%AppData%` | **None** | DKSI commands only | Locked-down workstations |
+| `DKSI-Revit-Tools-AllUsers-1.0.26225.msi` | Machine-wide | Administrator | Embedded in the bundle | Not distributed separately |
+| `DKSI-Revit-Tools-Setup-1.0.26224.exe` | Per-user, `%AppData%` | **None** | Paint assembly included | **Stale — one build behind** |
+
+**The Inno Setup variant was not rebuilt** and remains at `1.0.26224`. Inno Setup is not installed on the build machine. It is the largest file in the output folder and the only one named "Setup", so it is the one most likely to be picked up by mistake; it should be rebuilt or removed before distribution.
+
+**Packaging was verified as portable.** All three current artefacts were scanned for build-machine paths and are clean; install targets are correct for both scopes; the bundle embeds both MSIs and is a single file to hand over. Two caveats carry to the receiving workstation: every artefact is unsigned, so SmartScreen intervenes, and the paint takeoff certificate-trust step is still required per machine.
 
 **Per-user and mass deployment are mutually exclusive.** `%AppData%` resolves against the account running setup. A silent push from SCCM or Intune runs as SYSTEM and writes the add-in into SYSTEM's profile — setup reports success, every file is written, and no user's Revit ever sees it. The per-user package must be deployed in user context; machine-wide deployment requires the Program Files package.
 
@@ -223,13 +246,20 @@ Ten commits. Two are worth flagging technically.
 
 | Item | Status | Constraint |
 |------|--------|-----------|
-| Automated-Void for Fitting Casework | **Specified — not started** | Awaiting capacity; specification below |
+| Automated-Void for Fitting Casework | **Delivered** — shipped as *Cut Walls with Casework Voids* | Closed; see 6.1 |
+| Unit Views (per-apartment plans and 3D) | **Delivered** — pilot pending | Naming convention to confirm; see 2.4 |
 | Stair Void Automation | Not started | Capacity / sequencing |
 | Auto-Generated Walls from Images | 20% built — **on hold** | External vision API token limits and cost |
 | Computer Vision Identification | Not started — deferred | Token / vision overhead |
 | Danish-to-English Document Translator | Planned | Scope definition pending |
 
-### 6.1 Automated-Void for Fitting Casework — *New*
+### 6.1 Automated-Void for Fitting Casework — *Delivered*
+
+**Status: shipped in build `1.0.26225` as "Cut Walls with Casework Voids", on the Model panel.** The specification below was written in the previous revision and is retained for the record. It was implemented substantially as written — whole-model or selection scope, dry run, single undo, idempotent re-runs, and a report naming families that lack a void form.
+
+One design point departed from the specification, and improved on it. Rather than predicting which walls a void would reach, the command offers each nearby wall to Revit and keeps the cuts Revit accepts. Whether a void reaches a wall is a question only Revit's geometry engine can settle, and it settles it by being asked to make the cut. The dry run is therefore the same code path as the apply, inside a transaction that is discarded — which is what makes the two incapable of disagreeing. Host walls, which Revit cuts on placement, are left alone.
+
+The original specification follows.
 
 **Objective.** Automatically create and maintain void cuts in host walls where fitting casework is placed, removing the manual per-instance void work currently required to make casework read correctly in both geometry and finish quantities.
 
@@ -370,6 +400,9 @@ If a smaller first commitment is preferred, **Max ×5 at USD 100 per month (≈ 
 | 5 | **Duplicate installs** | Users silently run outdated code | Mitigated — start-up detection shipped; IT to clear per-user copies before rollout | IT / Engineering |
 | 6 | **Installers not yet executed** | Unknown deployment behaviour | Pilot install on one workstation before wider distribution | Engineering |
 | 7 | **AI tier limits halt development mid-task** | Idle paid engineering hours; delayed milestones across the Section 6 pipeline | Approve high-tier allocation — see Section 7 | Management |
+| 8 | **Unit Views naming convention unconfirmed** | View names reaching a sheet with a placeholder type code, or an appended storey suffix that is not house style | Confirm the 3D type code and the level field; one-line change each | Programme owner |
+| 9 | **Room data quality governs Unit Views output** | A mis-tagged unit produces a crop that is correct for the data and wrong as a drawing | Outlier check ships and flags; review flagged units before issue | Engineering / Modelling |
+| 10 | **Inno Setup package one build behind** | The most prominent file in the output folder installs yesterday's add-in | Rebuild or remove `DKSI-Revit-Tools-Setup-1.0.26224.exe` | Engineering |
 
 ---
 
@@ -380,11 +413,14 @@ If a smaller first commitment is preferred, **Max ×5 at USD 100 per month (≈ 
 3. **Approve high-tier AI allocation (Claude Max ×5 / ×20).** Section 7. This governs delivery rate for the entire Section 6 pipeline and is the lowest-cost decision on this list.
 4. **Pilot install** on one workstation, ideally one already carrying a per-user copy, to exercise the new duplicate detection.
 5. **Finalise the parameter mapping list**, unblocking Section 3 and allowing that workstream to be re-baselined.
-6. **Schedule Automated-Void for Fitting Casework**, sequencing Stair Void Automation immediately behind it to reuse the infrastructure.
+6. **Confirm the Unit Views naming convention** — the 3D type code and how a two-storey unit is distinguished. Both are one-line changes, and both are blocking pilot output reaching a sheet.
+7. **Schedule Stair Void Automation**, which can now reuse the void-cutting infrastructure delivered in 6.1 rather than waiting on it.
 7. **Establish a validation model** with known quantities as a permanent regression baseline. The absence of one is the root cause of Risks 1 and 4.
 
 ---
 
 ## 10. Note on Revision
+
+This revision (13 August 2026, build `1.0.26225`) supersedes the 12 August issue at build `1.0.26224`. Two Section 6 pipeline items moved to delivered — Automated-Void for Fitting Casework, and Unit Views, the latter specified and built within this period. The capability table grows from ten entries to twelve and the ribbon from four panels to five.
 
 This report supersedes the capability table of the *DKSI Automation Programme — Executive Status Report* (6 August 2026) for the add-in suite specifically. Parameter Linking, previously reported at 100%, is withdrawn to Section 3 at the programme owner's direction pending mapping finalisation. Programme-level items outside the add-in — Scan-to-BIM, QA/QC tier alignment — are unchanged and remain governed by the earlier report.
