@@ -103,6 +103,24 @@ internal static class RibbonBuilder
             icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 
+        // Same shape as the two resolvers above: the automation runs this engine off
+        // DocumentChanged, and the button is the manual entry point - the only way to get a
+        // dry run, and the only way to sweep a model that was drawn before the tool existed.
+        AddButton(model,
+            name: "CdaCutCaseworkVoids",
+            text: "Cut Walls with\nCasework Voids",
+            command: typeof(Commands.CutCaseworkVoidsCommand),
+            tooltip: "Cuts every wall a casework fitting's side voids reach into, replacing the manual " +
+                     "Cut Geometry step.",
+            longDescription: "Revit cuts a fitting's HOST wall by itself; the side voids that reach " +
+                             "into adjacent and intersecting walls are the ones nobody gets for free. " +
+                             "Each nearby wall is offered to Revit and only the ones the voids " +
+                             "genuinely reach are cut, so a dry run and the real run can never " +
+                             "disagree. Never removes a cut. Safe to re-run: walls already cut by " +
+                             "that fitting are left alone, and the whole run is one Ctrl+Z.",
+            icon: "material",
+            availability: typeof(ProjectDocumentAvailability));
+
         // ---- finishes and paint --------------------------------------------------
 
         var finishes = app.CreateRibbonPanel(CdaApplication.TabName, "Finishes & Paint");
@@ -144,6 +162,30 @@ internal static class RibbonBuilder
                              "that has never run gets three correctly-shaped empty schedules. " +
                              "Existing columns are never removed. One Ctrl+Z reverts all three.",
             icon: "excel",
+            availability: typeof(ProjectDocumentAvailability));
+
+        // ---- views ---------------------------------------------------------------
+
+        var views = app.CreateRibbonPanel(CdaApplication.TabName, "Views");
+
+        // Its own panel rather than a fifth button on Model: this is the only tool here that
+        // produces DRAWINGS rather than editing the model, and grouping it with the geometry
+        // tools would misfile it for anyone scanning the tab.
+        //
+        // The icon is 'highlight' because no view icon is embedded. A missing name renders a
+        // text-only button, which looks broken next to iconned neighbours - reuse beats blank.
+        AddButton(views,
+            name: "CdaUnitPlanViews",
+            text: "Unit Plan\nViews",
+            command: typeof(Commands.CreateUnitPlanViewsCommand),
+            tooltip: "One cropped floor plan per apartment unit, grouped by a room parameter.",
+            longDescription: "Groups placed rooms by the unit number on 'Department', duplicates the " +
+                             "ACTIVE plan for each unit, crops it to that unit's rooms plus a 500 mm " +
+                             "margin and names it to the document-ID convention. Open the storey plan " +
+                             "you want copied first - its filters, overrides and detailing come with " +
+                             "it. Offers a dry run that lists every view name before anything is " +
+                             "created; the whole batch is one Ctrl+Z.",
+            icon: "highlight",
             availability: typeof(ProjectDocumentAvailability));
 
         // ---- reporting -----------------------------------------------------------

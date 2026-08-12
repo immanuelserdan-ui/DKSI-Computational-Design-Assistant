@@ -143,46 +143,10 @@ public sealed class RoomBoundaryAdjuster
                 var roomBox = room.get_BoundingBox(null);
                 if (roomBox is null) continue;
 
-                var baseZ = roomBox.Min.Z;
-                double? neededTop = null;
-
-                foreach (var box in topBoxes)
-                {
-                    // Plan (XY) overlap with the room?
-                    if (box.Max.X < roomBox.Min.X || box.Min.X > roomBox.Max.X ||
-                        box.Max.Y < roomBox.Min.Y || box.Min.Y > roomBox.Max.Y) continue;
-
-                    // Only elements starting clearly ABOVE this room's base (excludes the
-                    // room's own floor slab) and within a sane band (avoids grabbing
-                    // storeys far above and ballooning the room upward).
-                    if (box.Min.Z < baseZ + 1.0 || box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
-
-                    var top = box.Max.Z + FinishSettings.LimitMargin;
-                    if (neededTop is null || top > neededTop) neededTop = top;
-                }
-
+                var neededTop = HighestCapTop(topBoxes, roomBox);
                 if (neededTop is null) continue;
-                if (roomBox.Max.Z >= neededTop - FinishSettings.LimitMargin * 0.5) continue;
 
-                var parameter = room.get_Parameter(BuiltInParameter.ROOM_UPPER_OFFSET);
-                if (parameter is null || parameter.IsReadOnly) continue;
-
-                var referenceZ = baseZ;
-                try
-                {
-                    if (room.UpperLimit is not null) referenceZ = room.UpperLimit.Elevation;
-                }
-                catch
-                {
-                    // No upper limit level; measure from the room base.
-                }
-
-                var offset = neededTop.Value - referenceZ;
-                if (offset > parameter.AsDouble())
-                {
-                    parameter.Set(offset);
-                    adjusted++;
-                }
+                if (RaiseUpperOffset(room, roomBox, neededTop.Value)) adjusted++;
             }
             catch
             {
@@ -205,4 +169,87 @@ public sealed class RoomBoundaryAdjuster
         [.. new FilteredElementCollector(_doc)
             .OfCategory(category)
             .WhereElementIsNotElementType()];
+
+    // ------------------------------------------------------------------- the rule
+    //
+    // THE SINGLE DEFINITION of where a room's top is, shared with
+    // <see cref="RoomLimitAdjuster"/>. That class runs the same correction against a
+    // handful of rooms while the user works, rather than the whole model; only its
+    // SCOPE differs, so only the collection of candidates belongs to it. The rule
+    // itself lives here once.
+    //
+    // It was written out twice, and the two copies had already diverged: this one
+    // refused to write an offset lower than the room's current one, the other did not,
+    // so the incremental path could LOWER a limit that the full pass would have left
+    // alone - against the raise-only rule both of them documented.
+
+    /// <summary>
+    /// The top of the highest ceiling, floor or roof overlapping this room in plan, plus
+    /// the margin - or null when nothing qualifies.
+    /// </summary>
+    /// <param name="capBoxes">
+    /// Candidate bounding boxes. The caller chooses how wide to cast: the whole model for
+    /// a full pass, a bounding-box query per room for the incremental one.
+    /// </param>
+    internal static double? HighestCapTop(
+        IEnumerable<BoundingBoxXYZ> capBoxes, BoundingBoxXYZ roomBox)
+    {
+        var baseZ = roomBox.Min.Z;
+        double? neededTop = null;
+
+        foreach (var box in capBoxes)
+        {
+            // Plan (XY) overlap with the room?
+            if (box.Max.X < roomBox.Min.X || box.Min.X > roomBox.Max.X ||
+                box.Max.Y < roomBox.Min.Y || box.Min.Y > roomBox.Max.Y) continue;
+
+            // Only elements starting clearly ABOVE this room's base (excludes the room's
+            // own floor slab) and within a sane band (avoids grabbing storeys far above
+            // and ballooning the room upward).
+            if (box.Min.Z < baseZ + 1.0 || box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
+
+            var top = box.Max.Z + FinishSettings.LimitMargin;
+            if (neededTop is null || top > neededTop) neededTop = top;
+        }
+
+        return neededTop;
+    }
+
+    /// <summary>
+    /// Raises one room's Upper Offset to clear <paramref name="neededTop"/>. Returns true
+    /// only when it actually wrote.
+    ///
+    /// RAISE-ONLY, enforced here rather than trusted to each caller. The room's envelope
+    /// top is not its limit: a room already clipped low by a ceiling can sit far below a
+    /// limit deliberately set high, so deriving the offset from the cap alone and writing
+    /// it unconditionally is how a correct limit gets quietly reduced.
+    /// </summary>
+    internal static bool RaiseUpperOffset(Room room, BoundingBoxXYZ roomBox, double neededTop)
+    {
+        // Already high enough. The half-margin slack stops the tool nudging the same room
+        // by a millimetre on every pass, which would mark the model changed forever.
+        if (roomBox.Max.Z >= neededTop - FinishSettings.LimitMargin * 0.5) return false;
+
+        var parameter = room.get_Parameter(BuiltInParameter.ROOM_UPPER_OFFSET);
+        if (parameter is null || parameter.IsReadOnly) return false;
+
+        // The offset is measured from the Upper Limit level, which is not necessarily the
+        // room's own level. Measuring from the wrong datum is how a room ends up a storey
+        // too tall.
+        var referenceZ = roomBox.Min.Z;
+        try
+        {
+            if (room.UpperLimit is not null) referenceZ = room.UpperLimit.Elevation;
+        }
+        catch
+        {
+            // Upper Limit unreadable on some room states; the base level is the safe datum.
+        }
+
+        var offset = neededTop - referenceZ;
+        if (offset <= parameter.AsDouble()) return false;
+
+        parameter.Set(offset);
+        return true;
+    }
 }

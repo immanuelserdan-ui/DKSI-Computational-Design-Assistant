@@ -507,6 +507,11 @@ internal static class FinishAutomation
             // resolved, and the room sweep would have discarded that change entirely.
             OpeningAutomation.MarkDirtyIfOpenings(doc, touched, deleted.Count);
 
+            // Same reasoning, and for the same reason it cannot wait for the room sweep: a
+            // fitting placed in a room that has not been drawn yet still needs the wall
+            // beside it cut, and RoomsFor would have discarded that change entirely.
+            CaseworkCutAutomation.MarkDirty(doc, touched, deleted.Count);
+
             var rooms = RoomsFor(doc, touched);
 
             // A deleted door still changes the wall's painted area, but a deleted id can no
@@ -525,9 +530,10 @@ internal static class FinishAutomation
                 Log.Debug($"DocumentChanged #{_documentChangedCount}: " +
                           $"{touched.Count} change(s) touched no room.");
 
-                // No room work, but there may still be opening work — and that path has its
-                // own flag. Returning without raising here is what would strand it.
-                if (OpeningAutomation.IsDirty) _syncEvent?.Raise();
+                // No room work, but there may still be opening or casework work — and those
+                // paths have their own flags. Returning without raising here is what would
+                // strand them.
+                if (OpeningAutomation.IsDirty || CaseworkCutAutomation.IsDirty) _syncEvent?.Raise();
                 return;
             }
 
@@ -600,6 +606,10 @@ internal static class FinishAutomation
     {
         AdjustQueuedRoomLimits(doc);
 
+        // FIRST OF THE THREE. Cutting a wall changes its geometry, so anything measured
+        // before the cut is measured against a wall that no longer exists in that shape.
+        RunCaseworkPass(doc, "the model changed");
+
         // BEFORE the finish pass, not after. Lining resolution changes "Lining YN" and the
         // window material, both of which feed what the finish engine counts as painted. Run
         // it second and every pass would publish areas computed from the previous state.
@@ -607,6 +617,27 @@ internal static class FinishAutomation
 
         if (_dirtySinceRecalculation)
             RunFullPass(doc, "the model changed");
+    }
+
+    /// <summary>
+    /// Drives <see cref="CaseworkCutAutomation"/> with the change updater muted, exactly as
+    /// the other two passes are driven. Its writes land on walls, which are in the updater's
+    /// trigger filter, so without this the pass re-queues itself indefinitely.
+    ///
+    /// A cut that lands makes the finish areas stale, and says so. Without that line a pass
+    /// triggered purely by a casework placement would cut the wall and then publish the areas
+    /// it measured before the bite was taken out of it — the schedule would be wrong until
+    /// something unrelated happened to dirty a room.
+    /// </summary>
+    private static void RunCaseworkPass(Document doc, string reason, bool force = false)
+    {
+        if (!force && !CaseworkCutAutomation.IsDirty) return;
+
+        var cuts = 0;
+        WithoutSelfTriggering(() =>
+            cuts = CaseworkCutAutomation.Run(doc, TransactionPrefix, reason, force));
+
+        if (cuts > 0) _dirtySinceRecalculation = true;
     }
 
     /// <summary>
@@ -672,6 +703,7 @@ internal static class FinishAutomation
     /// <summary>Forces a pass now. Exposed for the ribbon button.</summary>
     public static void RunNow(Document doc)
     {
+        RunCaseworkPass(doc, "requested from the ribbon", force: true);
         RunOpeningPass(doc, "requested from the ribbon", force: true);
         RunFullPass(doc, "requested from the ribbon", force: true);
     }
@@ -716,7 +748,14 @@ internal static class FinishAutomation
         if (!_options.Enabled || !_options.RecalculateOnSave) return;
 
         // Save is the guarantee point: the file on disk is what gets synced, issued and
-        // scheduled from, so both passes run here even if every earlier trigger was missed.
+        // scheduled from, so all three passes run here even if every earlier trigger was
+        // missed.
+        //
+        // The casework pass is FORCED here and nowhere else. It is the only trigger that
+        // catches the case where a WALL moved into or out of a fitting's void rather than
+        // the fitting moving — wall edits are too frequent to react to one at a time, so
+        // they are banked and settled at the one moment a pause is already expected.
+        RunCaseworkPass(doc, "the model was saved", force: true);
         RunOpeningPass(doc, "the model was saved");
         RunFullPass(doc, "the model was saved");
     }
