@@ -53,6 +53,62 @@ public sealed record UnitViewSettings
     public TemplateCropConflict OnTemplateBlocksCrop { get; init; } = TemplateCropConflict.ReleaseCropOnTemplate;
 
     /// <summary>
+    /// Hide tags, dimensions and casework belonging to the units either side of this one.
+    ///
+    /// The crop cuts geometry at a rectangle; it does not know which unit an annotation
+    /// belongs to. A neighbour's room tag sitting inside that rectangle is drawn, which is
+    /// how the 0377 plan ended up labelled with 0376 and 0378 rooms.
+    /// </summary>
+    public bool HideForeignElements { get; init; } = true;
+
+    /// <summary>
+    /// Slack around a unit's true extents before an element counts as foreign. Casework sits
+    /// against walls and a dimension witness line reaches past the room it measures, so a
+    /// zero-tolerance test would hide things that plainly belong.
+    /// </summary>
+    public double ForeignToleranceMm { get; init; } = 150;
+
+    /// <summary>Activate the first created view and zoom it to fit when the run finishes.</summary>
+    public bool OpenAndZoomCreatedViews { get; init; } = true;
+
+    /// <summary>
+    /// Categories tested for foreign ownership. Walls and doors are deliberately ABSENT: a
+    /// party wall is shared, and hiding the neighbour's half of it would leave the unit drawn
+    /// without its own boundary.
+    /// </summary>
+    public IReadOnlyList<BuiltInCategory> ForeignCategories { get; init; } =
+    [
+        BuiltInCategory.OST_Casework,
+        BuiltInCategory.OST_Furniture,
+        BuiltInCategory.OST_FurnitureSystems,
+        BuiltInCategory.OST_PlumbingFixtures,
+        BuiltInCategory.OST_ElectricalEquipment,
+        BuiltInCategory.OST_ElectricalFixtures,
+        BuiltInCategory.OST_SpecialityEquipment,
+    ];
+
+    internal double ForeignToleranceFeet =>
+        UnitUtils.ConvertToInternalUnits(ForeignToleranceMm, UnitTypeId.Millimeters);
+
+    /// <summary>
+    /// Master view to duplicate, by name. Null uses whatever plan is active.
+    ///
+    /// Naming it beats trusting the active view, and this model shows why twice over: TWO
+    /// views are called "(02) Stueplan, terraen" - a Ceiling Plan with no annotation and a
+    /// Floor Plan carrying 48 room tags and 70 dimensions - and running the command from a
+    /// schedule or a 3D view leaves no source at all, which is how six empty plans happened.
+    /// </summary>
+    public string? MasterViewName { get; init; } = "(02) Stueplan, terræn";
+
+    /// <summary>
+    /// Refuse to create views at all rather than create them without detailing.
+    ///
+    /// A blank plan named exactly like a real deliverable is worse than no plan: it looks
+    /// finished in the browser and only fails review once someone opens it.
+    /// </summary>
+    public bool RequireMasterView { get; init; } = true;
+
+    /// <summary>
     /// View template applied to every unit view, by name. Resolved whitespace-tolerantly, so
     /// a template saved as "SMB_Export-2d " still matches. Set null to leave whatever the
     /// duplicated master already carries.
@@ -183,7 +239,8 @@ public sealed record UnitViewRow(string Unit, string Level, int Rooms, string Vi
 public sealed record UnitViewResult(
     IReadOnlyList<UnitViewRow> Rows,
     IReadOnlyList<string> Summary,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<ElementId> CreatedViewIds);
 
 /// <summary>
 /// Creates one cropped floor plan per apartment unit, driven by a room parameter.
@@ -198,6 +255,7 @@ public sealed class UnitPlanViewBuilder
     private readonly UnitViewSettings _settings;
     private readonly Regex? _unitRegex;
     private readonly HashSet<long> _releasedTemplates = [];
+    private readonly Dictionary<long, ViewPlan?> _mastersByLevel = [];
 
     public UnitPlanViewBuilder(Document doc, UnitViewSettings settings)
     {
@@ -486,9 +544,16 @@ public sealed class UnitPlanViewBuilder
         return head.Length > 0 && head.All(char.IsDigit) ? head : null;
     }
 
-    private string BuildName(UnitGroup group, IReadOnlyDictionary<string, string> tokens, ISet<string> unresolved)
+    private string BuildName(UnitGroup group, IReadOnlyDictionary<string, string> tokens, ISet<string> unresolved) =>
+        BuildName(group, tokens, _settings.NameFormat, unresolved);
+
+    /// <summary>
+    /// Name composition with an explicit format, so the 3D pass produces names in the same
+    /// convention from the same tokens rather than reimplementing it.
+    /// </summary>
+    public string BuildName(UnitGroup group, IReadOnlyDictionary<string, string> tokens, string format, ISet<string> unresolved)
     {
-        var name = _settings.NameFormat
+        var name = format
             .Replace("{UNIT}", group.Unit, StringComparison.OrdinalIgnoreCase)
             .Replace("{LEVEL}", group.LevelName, StringComparison.OrdinalIgnoreCase);
 
@@ -507,7 +572,7 @@ public sealed class UnitPlanViewBuilder
         return name.Trim();
     }
 
-    private static string Uniquify(string name, ISet<string> taken)
+    public static string Uniquify(string name, ISet<string> taken)
     {
         if (taken.Add(name)) return name;
 
@@ -548,6 +613,18 @@ public sealed class UnitPlanViewBuilder
     {
         var rows = new List<UnitViewRow>();
 
+        // Nothing to duplicate means every view would be a fresh, empty plan - the outcome
+        // that produced six correctly named views with no tags and no dimensions. Stop here
+        // rather than manufacture them; the caller turns this into a readable dialog.
+        if (source is null && _settings.RequireMasterView)
+        {
+            throw new InvalidOperationException(
+                $"No master view to duplicate, so the unit views would be created empty - no room tags, no dimensions, no detailing.\n\n" +
+                $"Open the annotated storey plan (a Floor Plan, not the Ceiling Plan of the same name) and run this again, " +
+                $"or set MasterViewName to the view you want copied.\n\n" +
+                $"Set RequireMasterView = false only if blank plans are genuinely what you want.");
+        }
+
         // Templates are deliberately INCLUDED. They are View elements sharing one name
         // namespace, so a template called like our target name would make the rename throw;
         // uniquifying against it costs nothing and avoids the failure.
@@ -563,6 +640,7 @@ public sealed class UnitPlanViewBuilder
         var created = 0;
         var skipped = 0;
         var failed = 0;
+        var createdIds = new List<ElementId>();
         var unresolved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var tokens = ResolveTokens(warnings);
         var templateId = ResolveViewTemplate(source, warnings);
@@ -613,11 +691,16 @@ public sealed class UnitPlanViewBuilder
                 try
                 {
                     var duplicated = false;
+                    var hidden = 0;
                     var createdId = ElementId.InvalidElementId;
+
+                    // Per level, not per run: a maisonette's upper storey needs that storey's
+                    // own annotated plan, not the ground floor's.
+                    var master = MasterForLevel(group.LevelId, source, warnings);
 
                     Transactions.Run(_doc, $"Unit plan {group.Unit}", () =>
                     {
-                        var view = CreateView(group, source, floorPlanType, out duplicated);
+                        var view = CreateView(group, master, floorPlanType, out duplicated);
                         view.Name = name;
                         createdId = view.Id;
 
@@ -659,6 +742,11 @@ public sealed class UnitPlanViewBuilder
                             var annotation = view.get_Parameter(BuiltInParameter.VIEWER_ANNOTATION_CROP_ACTIVE);
                             if (annotation is { IsReadOnly: false }) annotation.Set(1);
                         }
+
+                        // Last, so the collector sees the view exactly as it will be drawn -
+                        // cropped, templated, and with the annotation crop already applied.
+                        if (_settings.HideForeignElements)
+                            hidden = HideForeignElements(view, group, box, warnings);
                     });
 
                     // Browser placement is read AFTER the commit: the organization resolves a
@@ -669,7 +757,9 @@ public sealed class UnitPlanViewBuilder
                         warnings.Add($"Unit {group.Unit}: '{name}' sits in browser folder '{folder}' but the master is in '{sourceFolder}'. Whatever parameter the Browser Organization groups by did not carry across.");
 
                     var how = duplicated ? "created - duplicated with detailing" : "created - NEW plan, not a duplicate";
-                    rows.Add(new UnitViewRow(group.Unit, group.LevelName, group.Rooms.Count, name, $"{how}; {FootprintM2(box):0} m2; browser: {folder}"));
+                    rows.Add(new UnitViewRow(group.Unit, group.LevelName, group.Rooms.Count, name,
+                        $"{how}; {FootprintM2(box):0} m2; hid {hidden} foreign; browser: {folder}"));
+                    createdIds.Add(createdId);
                     created++;
                 }
                 catch (Exception ex)
@@ -708,7 +798,7 @@ public sealed class UnitPlanViewBuilder
             $"Source: {(source is null ? "no plan active - new views, NO detailing" : $"'{source.Name}' duplicated with detailing")}",
         };
 
-        return new UnitViewResult(rows, summary, warnings);
+        return new UnitViewResult(rows, summary, warnings, createdIds);
     }
 
     private ViewPlan CreateView(UnitGroup group, ViewPlan? source, ViewFamilyType? floorPlanType, out bool duplicated)
@@ -738,6 +828,251 @@ public sealed class UnitPlanViewBuilder
             throw new InvalidOperationException($"Unit {group.Unit} has no level to place a plan view on.");
 
         return ViewPlan.Create(_doc, floorPlanType.Id, levelId);
+    }
+
+    /// <summary>
+    /// The view to duplicate: the one named by <see cref="UnitViewSettings.MasterViewName"/>,
+    /// falling back to the active plan.
+    ///
+    /// AMBIGUITY IS RESOLVED BY ANNOTATION COUNT, not by picking the first match. Two views
+    /// sharing a name is not a hypothetical here - a Ceiling Plan and a Floor Plan both called
+    /// "(02) Stueplan, terraen" exist in this model, and only one of them carries the room tags
+    /// and dimensions the unit plans are supposed to inherit. Type alone does not settle it
+    /// either, since both are ViewPlan to the API.
+    /// </summary>
+    public ViewPlan? ResolveMaster(ViewPlan? active, List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.MasterViewName)) return active;
+
+        var target = ParameterHelper.Normalize(_settings.MasterViewName);
+
+        var candidates = new FilteredElementCollector(_doc)
+            .OfClass(typeof(ViewPlan))
+            .Cast<ViewPlan>()
+            .Where(v => !v.IsTemplate && ParameterHelper.Normalize(v.Name) == target)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            warnings.Add($"No view named '{_settings.MasterViewName}' was found, so the active view is used instead.");
+            return active;
+        }
+
+        if (candidates.Count == 1) return candidates[0];
+
+        var ranked = candidates
+            .Select(v => (View: v, Annotations: AnnotationCount(v)))
+            .OrderByDescending(x => x.Annotations)
+            .ToList();
+
+        var chosen = ranked[0];
+        warnings.Add(
+            $"{candidates.Count} views are named '{_settings.MasterViewName}'. Duplicating the {chosen.View.ViewType} " +
+            $"one, which carries {chosen.Annotations} tag(s) and dimension(s); the others carry " +
+            $"{string.Join(", ", ranked.Skip(1).Select(r => $"{r.Annotations} ({r.View.ViewType})"))}.");
+
+        return chosen.View;
+    }
+
+    /// <summary>
+    /// "48 room tag(s) and 70 dimension(s)" for the confirmation dialog, so the user can see
+    /// before committing whether the master actually carries anything worth duplicating.
+    /// </summary>
+    public string AnnotationSummary(View view)
+    {
+        try
+        {
+            var tags = new FilteredElementCollector(_doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_RoomTags).GetElementCount();
+            var dimensions = new FilteredElementCollector(_doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_Dimensions).GetElementCount();
+
+            return tags + dimensions == 0
+                ? "NO room tags or dimensions - check this is the right view"
+                : $"{tags} room tag(s) and {dimensions} dimension(s)";
+        }
+        catch
+        {
+            return "detailing";
+        }
+    }
+
+    /// <summary>
+    /// The annotated floor plan for one level.
+    ///
+    /// A maisonette forced this. Unit 0380 has three rooms on the ground floor and five on
+    /// the storey above, so it produces two plan groups - and a single master view can only
+    /// serve one of them, because duplicating carries the source's level with it. The upper
+    /// group previously fell through to a fresh, empty ViewPlan.
+    ///
+    /// Candidates are floor plans on that level, ranked by how much annotation they carry,
+    /// for the same reason ResolveMaster ranks: this model has two views per level sharing a
+    /// name, and only one of each pair is drawn on.
+    /// </summary>
+    public ViewPlan? MasterForLevel(ElementId levelId, ViewPlan? fallback, List<string> warnings)
+    {
+        if (levelId == ElementId.InvalidElementId) return fallback;
+        if (_mastersByLevel.TryGetValue(levelId.Value, out var cached)) return cached;
+
+        var best = new FilteredElementCollector(_doc)
+            .OfClass(typeof(ViewPlan))
+            .Cast<ViewPlan>()
+            .Where(v => !v.IsTemplate
+                        && v.ViewType == ViewType.FloorPlan
+                        && v.GenLevel?.Id == levelId)
+            .Select(v => (View: v, Annotations: AnnotationCount(v)))
+            .OrderByDescending(x => x.Annotations)
+            .FirstOrDefault();
+
+        var chosen = best.View;
+
+        if (chosen is null)
+        {
+            var levelName = (_doc.GetElement(levelId) as Level)?.Name ?? levelId.Value.ToString();
+            warnings.Add($"No floor plan exists on level '{levelName}', so that level's unit plans fall back to '{fallback?.Name ?? "a new empty plan"}' and will not carry its detailing.");
+            chosen = fallback;
+        }
+        else if (best.Annotations == 0)
+        {
+            warnings.Add($"The floor plan '{chosen.Name}' carries no tags or dimensions, so unit plans duplicated from it will be bare.");
+        }
+
+        _mastersByLevel[levelId.Value] = chosen;
+        return chosen;
+    }
+
+    /// <summary>Room tags plus dimensions visible in a view - the detailing worth inheriting.</summary>
+    private int AnnotationCount(View view)
+    {
+        try
+        {
+            var tags = new FilteredElementCollector(_doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_RoomTags).GetElementCount();
+            var dimensions = new FilteredElementCollector(_doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_Dimensions).GetElementCount();
+
+            return tags + dimensions;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Hides annotation and equipment belonging to other units.
+    ///
+    /// OWNERSHIP IS ESTABLISHED BY ROOM WHERE IT CAN BE, and only falls back to geometry where
+    /// no room association exists:
+    ///
+    ///   Room tags       - the tagged room either is or is not one of this unit's. Exact, and
+    ///                     immune to a tag dragged outside the room it labels.
+    ///   Casework etc.   - FamilyInstance.Room when Revit knows it, otherwise the location
+    ///                     point against the unit's extents.
+    ///   Dimensions      - geometry only. A dimension has no room, so its midpoint is tested.
+    ///
+    /// The extents used are the unit's TRUE extents, not the crop box: the crop carries a
+    /// 500 mm margin that reaches well into the neighbour, and testing against it would keep
+    /// exactly the elements this is meant to remove.
+    /// </summary>
+    public int HideForeignElements(View view, UnitGroup group, BoundingBoxXYZ tight, List<string> warnings)
+    {
+        var ownRoomIds = group.Rooms.Select(r => r.Id.Value).ToHashSet();
+        var tolerance = _settings.ForeignToleranceFeet;
+        var foreign = new List<ElementId>();
+
+        bool Inside(XYZ point, double slack) =>
+            point.X >= tight.Min.X - slack && point.X <= tight.Max.X + slack
+            && point.Y >= tight.Min.Y - slack && point.Y <= tight.Max.Y + slack;
+
+        // THE VIEW ARGUMENT IS NOT OPTIONAL. A view-specific element - a dimension, a detail
+        // line - has no model-space bounding box, so get_BoundingBox(null) returns null for
+        // it. Passing null here is what hid every dimension in the first version: the centre
+        // came back null, the containment test failed, and the whole category was classed as
+        // foreign.
+        XYZ? CentreOf(Element element)
+        {
+            var box = element.get_BoundingBox(view) ?? element.get_BoundingBox(null);
+            if (box is null) return null;
+
+            var centre = (box.Min + box.Max) / 2.0;
+            return box.Transform.OfPoint(centre);
+        }
+
+        // Collecting against the view means the crop has already narrowed this to elements
+        // near the unit, rather than sweeping the whole storey.
+        foreach (var tag in new FilteredElementCollector(_doc, view.Id)
+                     .OfCategory(BuiltInCategory.OST_RoomTags)
+                     .OfType<RoomTag>())
+        {
+            ElementId? taggedRoom = null;
+            try { taggedRoom = tag.Room?.Id; } catch { /* tag pointing at a deleted room */ }
+
+            // A tag whose room cannot be read is left visible: hiding on a failed lookup would
+            // quietly strip labels that are perfectly valid.
+            if (taggedRoom is null) continue;
+
+            if (!ownRoomIds.Contains(taggedRoom.Value)) foreign.Add(tag.Id);
+        }
+
+        foreach (var category in _settings.ForeignCategories)
+        {
+            foreach (var instance in new FilteredElementCollector(_doc, view.Id)
+                         .OfCategory(category)
+                         .OfType<FamilyInstance>())
+            {
+                ElementId? host = null;
+                try { host = instance.Room?.Id; } catch { /* no room in this phase */ }
+
+                if (host is not null)
+                {
+                    if (!ownRoomIds.Contains(host.Value)) foreign.Add(instance.Id);
+                    continue;
+                }
+
+                // No room association: fall back to position, and KEEP anything whose position
+                // cannot be established. Hiding on an unknown is how a whole category
+                // disappears at once.
+                var point = (instance.Location as LocationPoint)?.Point ?? CentreOf(instance);
+                if (point is not null && !Inside(point, tolerance)) foreign.Add(instance.Id);
+            }
+        }
+
+        // Dimensions get the CROP MARGIN as slack, not the tight 150 mm the others use. A
+        // dimension line is drawn offset outside the wall it measures - at 1:50 a few
+        // millimetres on paper is several hundred in the model - so a witness line for this
+        // unit's own wall sits beyond the room boundary by more than the casework tolerance
+        // allows. Judging it that tightly would delete the unit's own dimensions.
+        var dimensionSlack = Math.Max(tolerance, _settings.MarginFeet);
+
+        foreach (var dimension in new FilteredElementCollector(_doc, view.Id)
+                     .OfCategory(BuiltInCategory.OST_Dimensions)
+                     .WhereElementIsNotElementType())
+        {
+            var centre = CentreOf(dimension);
+            if (centre is not null && !Inside(centre, dimensionSlack)) foreign.Add(dimension.Id);
+        }
+
+        // CanBeHidden is not optional - HideElements throws on the whole collection if one
+        // member refuses, which would lose every legitimate hide alongside it.
+        var hideable = foreign
+            .Where(id => _doc.GetElement(id) is { } e && e.CanBeHidden(view))
+            .ToList();
+
+        if (hideable.Count > 0)
+        {
+            try
+            {
+                view.HideElements(hideable);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Unit {group.Unit}: could not hide {hideable.Count} element(s) from neighbouring units - {ex.Message}");
+                return 0;
+            }
+        }
+
+        return hideable.Count;
     }
 
     /// <summary>Footprint of a crop box in square metres, ignoring height.</summary>
@@ -782,7 +1117,7 @@ public sealed class UnitPlanViewBuilder
             if (ratio >= 2.0)
                 warnings.Add($"Unit {group.Unit}: footprint {area:0} m2 is {ratio:0.0}x the median unit ({median:0} m2). Its rooms are spread far wider than an apartment - check they all really belong to this unit before using the view.");
             else if (ratio <= 0.5)
-                warnings.Add($"Unit {group.Unit}: footprint {area:0} m2 is only {ratio:0.00}x the median unit ({median:0} m2). Rooms are probably missing a '{_settings.UnitParameterName}' value, so the crop will clip the apartment.");
+                warnings.Add($"Unit {group.Unit}: footprint {area:0} m2 is only {ratio:0.00}x the median unit ({median:0} m2) ON THIS LEVEL. Either rooms are missing a '{_settings.UnitParameterName}' value, or the unit continues on another storey - check the other levels before treating this as an error.");
         }
     }
 

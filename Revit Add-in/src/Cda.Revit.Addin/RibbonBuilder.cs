@@ -174,17 +174,22 @@ internal static class RibbonBuilder
         //
         // The icon is 'highlight' because no view icon is embedded. A missing name renders a
         // text-only button, which looks broken next to iconned neighbours - reuse beats blank.
+        // ONE button, not two. The plan and 3D passes were separate commands until the 3D
+        // camera stopped being inherited from the active view - once the orientation was fixed
+        // to Top-Front-Right, nothing forced the user to be standing anywhere in particular,
+        // and the grouping work could be done once and shared instead of twice and diverging.
         AddButton(views,
-            name: "CdaUnitPlanViews",
-            text: "Unit Plan\nViews",
-            command: typeof(Commands.CreateUnitPlanViewsCommand),
-            tooltip: "One cropped floor plan per apartment unit, grouped by a room parameter.",
-            longDescription: "Groups placed rooms by the unit number on 'Department', duplicates the " +
-                             "ACTIVE plan for each unit, crops it to that unit's rooms plus a 500 mm " +
-                             "margin and names it to the document-ID convention. Open the storey plan " +
-                             "you want copied first - its filters, overrides and detailing come with " +
-                             "it. Offers a dry run that lists every view name before anything is " +
-                             "created; the whole batch is one Ctrl+Z.",
+            name: "CdaUnitViews",
+            text: "Unit\nViews",
+            command: typeof(Commands.CreateUnitViewsCommand),
+            tooltip: "Cropped plan and section-boxed 3D view per apartment unit, from the room 'Department'.",
+            longDescription: "Groups placed rooms by unit number, then for each unit duplicates the " +
+                             "annotated storey plan cropped to that unit, and builds a Top-Front-Right " +
+                             "3D view section-boxed to it. Neighbouring units' tags, dimensions and " +
+                             "casework are hidden in both. Names follow the document-ID convention, with " +
+                             "the project, case and building segments read from the model. Offers a dry " +
+                             "run listing every name first, and can do plans only or 3D only; the whole " +
+                             "batch is one Ctrl+Z.",
             icon: "highlight",
             availability: typeof(ProjectDocumentAvailability));
 
