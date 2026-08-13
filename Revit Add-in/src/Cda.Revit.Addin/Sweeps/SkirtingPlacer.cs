@@ -40,8 +40,17 @@ public sealed class SkirtingPlacer
     private readonly Document _doc;
     private readonly FamilySymbol _symbol;
 
-    /// <summary>Room-side face references per wall, resolved on demand and reused.</summary>
-    private readonly Dictionary<long, Reference?> _faceCache = [];
+    /// <summary>
+    /// Room-side face references, resolved on demand and reused.
+    ///
+    /// KEYED ON THE WALL AND THE SIDE, NOT THE WALL ALONE. A wall between two qualifying
+    /// rooms gets a board on each face - that is the brief - so a cache keyed on the wall
+    /// handed the second room the face reference resolved for the first. With a face-hosted
+    /// family that puts every board in one of the two rooms on the wrong side of the wall,
+    /// displaced by its full thickness, while the distance test that would have caught it ran
+    /// exactly once per wall and never again.
+    /// </summary>
+    private readonly Dictionary<(long Wall, int Side), Reference?> _faceCache = [];
 
     /// <summary>Length parameter names seen in the wild, English and Danish.</summary>
     private static readonly string[] LengthNames =
@@ -84,7 +93,12 @@ public sealed class SkirtingPlacer
     /// Places one board. Returns the instance, or null with the reason in
     /// <paramref name="failure"/>.
     /// </summary>
-    public FamilyInstance? Place(Curve run, Wall wall, Level? level, out string? failure)
+    /// <param name="host">
+    /// What the board is being placed against. A wall for the face strategies to host onto;
+    /// null, a column or any other boundary element falls through to point placement, which
+    /// is how a room bounded by something other than a wall still gets its board.
+    /// </param>
+    public FamilyInstance? Place(Curve run, Element? host, Level? level, out string? failure)
     {
         failure = null;
 
@@ -93,8 +107,8 @@ public sealed class SkirtingPlacer
             var instance = Strategy switch
             {
                 SkirtingStrategy.CurveDriven => PlaceOnCurve(run, level),
-                SkirtingStrategy.FaceLine => PlaceOnFace(run, wall, level),
-                SkirtingStrategy.FacePoint => PlaceOnFace(run, wall, level),
+                SkirtingStrategy.FaceLine => PlaceOnFace(run, host, level),
+                SkirtingStrategy.FacePoint => PlaceOnFace(run, host, level),
                 _ => PlaceAndRotate(run, level),
             };
 
@@ -129,9 +143,11 @@ public sealed class SkirtingPlacer
     /// stretches a line-driven face family across the run - and drops to the point overload
     /// for families that only accept a location.
     /// </summary>
-    private FamilyInstance? PlaceOnFace(Curve run, Wall wall, Level? level)
+    private FamilyInstance? PlaceOnFace(Curve run, Element? host, Level? level)
     {
-        var face = RoomSideFace(wall, run);
+        // Only a wall exposes side faces to host onto. A column bounding a room is placed by
+        // point and rotation instead - a board on it rather than no board at all.
+        var face = host is Wall wall ? RoomSideFace(wall, run) : null;
 
         if (face is null)
         {
@@ -198,7 +214,9 @@ public sealed class SkirtingPlacer
     /// </summary>
     private Reference? RoomSideFace(Wall wall, Curve run)
     {
-        if (_faceCache.TryGetValue(wall.Id.Value, out var cached) && cached is not null) return cached;
+        var key = (wall.Id.Value, SideOf(wall, run));
+
+        if (_faceCache.TryGetValue(key, out var cached) && cached is not null) return cached;
 
         Reference? best = null;
         var bestDistance = double.MaxValue;
@@ -233,8 +251,35 @@ public sealed class SkirtingPlacer
             }
         }
 
-        _faceCache[wall.Id.Value] = best;
+        _faceCache[key] = best;
         return best;
+    }
+
+    /// <summary>
+    /// Which side of the wall this run lies on: +1 towards <see cref="Wall.Orientation"/>,
+    /// -1 away from it. Only ever used to keep the two sides of one wall in separate cache
+    /// entries, so the labelling matters less than the fact that it separates them.
+    /// </summary>
+    private static int SideOf(Wall wall, Curve run)
+    {
+        try
+        {
+            if (wall.Location is not LocationCurve location) return 0;
+
+            var here = run.Evaluate(0.5, true);
+            var onCentreline = location.Curve.Project(here)?.XYZPoint;
+
+            if (onCentreline is null) return 0;
+
+            var offset = new XYZ(here.X - onCentreline.X, here.Y - onCentreline.Y, 0);
+            if (offset.GetLength() < 1e-9) return 0;
+
+            return offset.Normalize().DotProduct(wall.Orientation.Normalize()) > 0 ? 1 : -1;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     // --------------------------------------------------------------- length driving
@@ -282,6 +327,74 @@ public sealed class SkirtingPlacer
         }
 
         return false;
+    }
+
+    // ------------------------------------------------------------------- mitring
+
+    /// <summary>
+    /// Writes the end-cut angles that turn a butt joint into a mitre.
+    ///
+    /// Returns false when the family exposes no writable angle parameter, which is the
+    /// difference between "this family can mitre" and "this family cannot" - and the caller
+    /// must know, because the corner strategy depends on it. A board that runs to the apex
+    /// expecting to be cut, and is not, OVERLAPS its neighbour. Silence here would trade a
+    /// visible step for an invisible clash, which is worse.
+    /// </summary>
+    /// <param name="startAngle">Radians, or null to leave that end square.</param>
+    /// <param name="endAngle">Radians, or null to leave that end square.</param>
+    public bool SetEndAngles(
+        FamilyInstance instance,
+        double? startAngle,
+        double? endAngle,
+        IReadOnlyList<string> startNames,
+        IReadOnlyList<string> endNames)
+    {
+        var wroteStart = startAngle is null || Write(instance, startNames, startAngle.Value);
+        var wroteEnd = endAngle is null || Write(instance, endNames, endAngle.Value);
+
+        return wroteStart && wroteEnd;
+    }
+
+    /// <summary>
+    /// Can this family be mitred at all? Answered from a real instance, because a parameter
+    /// can exist on the type and still be read-only on the instance.
+    /// </summary>
+    public bool SupportsMitre(
+        FamilyInstance probe, IReadOnlyList<string> startNames, IReadOnlyList<string> endNames) =>
+        Find(probe, startNames) is not null && Find(probe, endNames) is not null;
+
+    private static bool Write(FamilyInstance instance, IReadOnlyList<string> names, double radians)
+    {
+        var parameter = Find(instance, names);
+        if (parameter is null) return false;
+
+        try
+        {
+            return parameter.Set(radians);
+        }
+        catch
+        {
+            // Constrained or driven by a formula; the caller falls back to butting.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The first writable angle parameter matching any candidate name. Angles are stored in
+    /// RADIANS in the API regardless of how the family displays them.
+    /// </summary>
+    private static Parameter? Find(FamilyInstance instance, IReadOnlyList<string> names)
+    {
+        foreach (var name in names)
+        {
+            Parameter? parameter;
+            try { parameter = instance.LookupParameter(name); }
+            catch { continue; }
+
+            if (parameter is { IsReadOnly: false, StorageType: StorageType.Double }) return parameter;
+        }
+
+        return null;
     }
 
     /// <summary>What to tell the user about how this family will behave.</summary>

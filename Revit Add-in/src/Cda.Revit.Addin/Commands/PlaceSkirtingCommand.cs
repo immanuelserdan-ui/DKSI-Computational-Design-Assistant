@@ -7,7 +7,7 @@ namespace Cda.Revit.Addin.Commands;
 
 /// <summary>
 /// Places the skirting board component along the interior perimeter of every room that is
-/// not a wet room, broken at openings and casework.
+/// not excluded by name or Department, broken at openings and casework.
 /// </summary>
 [Transaction(TransactionMode.Manual)]
 public sealed class PlaceSkirtingCommand : CommandBase
@@ -23,26 +23,51 @@ public sealed class PlaceSkirtingCommand : CommandBase
             MainInstruction = "Place skirting boards in every qualifying room?",
             MainContent =
                 $"Places '{settings.TypeName}' as a component along the room-side face of every " +
-                "wall bounding a room, at 0 above the floor.\n\n" +
-                "Rooms whose Name or Department contains " +
-                $"{string.Join(" or ", settings.ExcludedRoomKeywords.Select(k => $"'{k}'"))} are skipped, " +
-                $"as are '{settings.ExteriorRoomPrefix}' exterior placeholder rooms - those are " +
-                "outdoors, and the walls bounding them are the building's exterior faces.\n\n" +
+                "boundary of every room, at 0 above the floor. Walls, and also columns and piers - " +
+                "anything presenting a face to the room gets a board, not only walls.\n\n" +
+                (settings.ExcludedRoomKeywords.Length == 0
+                    ? "No room type is skipped by name - wet rooms are skirted like any other. "
+                    : "Rooms whose Name or Department contains " +
+                      $"{string.Join(" or ", settings.ExcludedRoomKeywords.Select(k => $"'{k}'"))} " +
+                      "are skipped. ") +
+                $"'{settings.ExteriorRoomPrefix}' exterior placeholder rooms are skipped - those " +
+                "are outdoors, and the walls bounding them are the building's exterior faces." +
+                (settings.RequireDepartment
+                    ? " Rooms with no Department are skipped too: that is this project's marker for " +
+                      "'this room has been designed', and it usually excludes more rooms than the " +
+                      "name rule does."
+                    : string.Empty) + "\n\n" +
                 "Doors, windows, wall openings and casework break the run: each wall is placed as " +
                 "several shorter pieces rather than one board with holes voided out of it, so the " +
                 "lengths in a schedule are the lengths you actually buy.\n\n" +
                 "Where an opening leaves bare wall thickness on show at floor level, a board wraps " +
-                "across that reveal too. Doors are excluded from this by default - their frame " +
-                "already covers the reveal - but cased openings are included.",
+                "across that reveal too - door jambs, cased openings and wall openings alike, so " +
+                "the jamb returns are both modelled and measured.\n\n" +
+                "Each jamb is measured against the opening family's own geometry first. A door " +
+                "that lines its reveal in full gets no board and cannot double up; one with a " +
+                "frame at a single face gets a board on the depth left bare; a cased opening gets " +
+                "the whole return. Nothing is placed in space the door model already occupies.",
             ExpandedContent =
                 "Re-running is safe and repeatable: it deletes what it made last time, so the " +
                 "result depends only on the model and the rules - never on what an earlier run " +
                 "happened to leave behind.\n\n" +
                 "A wall between two qualifying rooms gets a board on each face - there is skirting " +
                 "in both rooms.\n\n" +
-                $"Everything placed is stamped in Comments as '{SkirtingSettings.Stamp}...', which is " +
-                "how Regenerate finds and removes it. A board placed by hand carries no stamp and " +
-                "is never touched.\n\n" +
+                "CORNERS are mitred. The board arriving at a corner runs through it to the apex " +
+                "and the board leaving starts where its own thickness clears the arriving one, so " +
+                "the two meet with no gap and no shared material at any angle - not only at 90 " +
+                "degrees.\n\n" +
+                "NOTHING OVERLAPS. Every board is checked against what is already standing at the " +
+                "same level before it is created, and cut back to the stretch nothing covers - " +
+                "whatever it is hosted on, so a column set flush into a wall cannot be skirted " +
+                "twice along the same line.\n\n" +
+                "WALL SWEEPS STAY WALL-HOSTED. Jamb boards do not: they cross the wall's faces at " +
+                "right angles and belong to the opening, so they are placed as independent " +
+                "components with no host relationship to the wall and no involvement in the door " +
+                "family's lining logic.\n\n" +
+                $"Everything placed is stamped '{SkirtingSettings.Stamp}...' in Extensible Storage - " +
+                "invisible in the UI and not editable by hand - which is how Regenerate finds and " +
+                "removes it. A board placed by hand carries no stamp and is never touched.\n\n" +
                 BuildInfo.DescribeFull(),
             FooterText = $"{BuildInfo.Describe()}  ·  Log: {Log.CurrentFile}",
             CommonButtons = TaskDialogCommonButtons.Cancel,
@@ -85,11 +110,11 @@ public sealed class PlaceSkirtingCommand : CommandBase
                 ? "Nothing was placed."
                 : $"Placed {result.Placed} piece(s), {Measure.ToMetres(result.TotalLength):0.00} m total.",
             MainContent =
-                $"{result.RoomsQualifying} qualifying room(s); {result.RoomsExcluded} excluded as wet " +
-                $"rooms; {result.RoomsExterior} skipped as exterior placeholders.\n" +
+                $"{result.RoomsQualifying} qualifying room(s); {result.RoomsExcluded} excluded by " +
+                $"name or missing Department; {result.RoomsExterior} skipped as exterior placeholders.\n" +
                 $"{result.OpeningBreaks} break(s) at doors/windows/openings, " +
                 $"{result.CaseworkBreaks} at casework.\n" +
-                $"{result.RevealPieces} reveal board(s) wrapping into openings, " +
+                $"{result.RevealPieces} jamb/reveal board(s) wrapping into openings, " +
                 $"{Measure.ToMetres(result.RevealLength):0.00} m." +
                 // NOT "expected on a second run" any more. That message survived from the
                 // removed Top-up mode, which skipped faces it had already visited. Regenerate

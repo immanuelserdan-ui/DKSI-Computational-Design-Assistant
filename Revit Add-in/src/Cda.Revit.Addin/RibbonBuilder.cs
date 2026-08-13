@@ -95,7 +95,7 @@ internal static class RibbonBuilder
             name: "CdaPlaceSkirting",
             text: "Place Skirting\n(Wall Sweep)",
             command: typeof(Commands.PlaceSkirtingCommand),
-            tooltip: "Places skirting boards as native wall sweeps in every room that is not a wet room.",
+            tooltip: "Places skirting boards in every room except those excluded by name or Department.",
             longDescription: "Rooms whose Name or Department contains 'Bad' or 'Toilet' are skipped. " +
                              "Boards break at doors, windows and openings through Revit's own wall " +
                              "sweep behaviour, and are cut where casework stands against them. Safe " +

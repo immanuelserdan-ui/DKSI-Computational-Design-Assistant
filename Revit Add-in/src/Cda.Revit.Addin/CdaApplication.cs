@@ -19,8 +19,49 @@ public sealed class CdaApplication : IExternalApplication
     {
         try
         {
-            Log.Info($"Startup: Revit {application.ControlledApplication.VersionNumber} " +
-                     $"build {application.ControlledApplication.VersionBuild}");
+            var host = application.ControlledApplication.VersionNumber;
+
+            Log.Info($"Startup: Revit {host} " +
+                     $"build {application.ControlledApplication.VersionBuild} " +
+                     $"(add-in built for Revit {BuildInfo.TargetRevitVersion})");
+
+            // EXCLUSIVELY REVIT 2027 - CHECKED HERE, NOT ONLY AT BUILD TIME.
+            //
+            // The build already targets one release: the API references resolve out of the
+            // Revit 2027 folder, the runtime is net10.0-windows to match that host, and both
+            // installers write only to Addins\2027. None of that governs what happens if the
+            // manifest and payload are copied into another version's folder by hand, by a
+            // migration script, or by an IT deployment that "helpfully" fans out to every
+            // installed release.
+            //
+            // What happens then is version-dependent and none of it is good. An older host
+            // is on an older .NET and cannot load a net10.0 assembly at all, so Revit shows
+            // its own unexplained "add-in failed to load" box. A FUTURE host on the same
+            // runtime is the dangerous one: it loads cleanly and runs against an API that
+            // has moved underneath it, and the failure surfaces later as wrong geometry
+            // rather than as a refusal.
+            //
+            // So the add-in verifies the host itself and declines politely. Cancelled rather
+            // than Failed: Failed makes Revit add its own dialog on top of this one, and two
+            // boxes saying different things about the same event is worse than one saying
+            // the right thing.
+            if (BuildInfo.TargetRevitVersion.Length > 0 &&
+                !string.Equals(host, BuildInfo.TargetRevitVersion, StringComparison.Ordinal))
+            {
+                var message =
+                    $"DKSI Revit Tools is built exclusively for Revit {BuildInfo.TargetRevitVersion}, " +
+                    $"and this is Revit {host}.\n\n" +
+                    "The add-in has not been loaded. Nothing has been added to the ribbon and no " +
+                    "model has been touched.\n\n" +
+                    "This usually means the add-in files were copied into the wrong Addins folder. " +
+                    $"They belong in Addins\\{BuildInfo.TargetRevitVersion}, and only there.\n\n" +
+                    $"Loaded from: {BuildInfo.Location}";
+
+                Log.Warn($"Refusing to load: built for Revit {BuildInfo.TargetRevitVersion}, host is {host}.");
+                TaskDialog.Show($"DKSI Revit Tools - wrong Revit version", message);
+
+                return Result.Cancelled;
+            }
 
             // Before the ribbon, because the answer explains everything the user is about to
             // see. A duplicate install means Revit may be running a copy of this add-in that
