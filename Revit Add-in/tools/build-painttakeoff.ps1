@@ -120,8 +120,8 @@ if (-not (Test-Path (Join-Path $payload '..\PaintedMaterialTakeoff.addin'))) {
 # tab. DKSI Revit Tools now carries the same three tools in its pull-down, so keeping that
 # entry would put each of them on the ribbon twice from a single install.
 #
-# The replacement drops that one entry and changes nothing else - see the comments in it. The
-# DLL is untouched, so this is reversible by deleting the override and rebuilding.
+# The replacement drops that one entry and changes nothing else - see the comments in it.
+# Reversible by deleting the override and rebuilding.
 
 $manifest = Join-Path $InstallerDir 'PaintedMaterialTakeoff.addin'
 if (-not (Test-Path $manifest)) {
@@ -130,6 +130,51 @@ if (-not (Test-Path $manifest)) {
 }
 
 Copy-Item $manifest -Destination (Join-Path $payload '..\PaintedMaterialTakeoff.addin') -Force
+
+# ---------------------------------------------------------------- DLL override
+#
+# THE SECOND PART OF THE PAYLOAD THAT IS NOT SHIPPED AS EXTRACTED, and the more serious one:
+# this replaces the product's own binary.
+#
+# WHY
+#   The shipped 1.0.1 DLL loses paint materials on REGULAR walls. WallSegmentCalculator
+#   apportions a segment's area correctly across every split-face region, but then hands
+#   carrier geometry to ONE of them - the region with the largest share. Every other material
+#   ends up with a row, an area, and no Generic Model. The schedule reads Generic Models, so
+#   those materials are absent from it while sitting correctly in the CSV.
+#
+#   Measured in FM_Template 2027V1.00_EN, wall 29307636 in Køkken: G59 (3,472 m²) and G99
+#   (4,417 m²) both computed, only G99 scheduled. The product's own run summary named it -
+#   "1 row(s) with area had no usable geometry for a carrier element and are in the CSV only."
+#   Hanging walls were never affected: InteriorElementCalculator skins each region's own face,
+#   so every bucket gets geometry.
+#
+#   The fix keeps the solid RegionShare was already building and discarding, and gives every
+#   material its own carrier. Verified against this model: G59 appears, totals reconcile, and
+#   the hanging-wall rows are unchanged.
+#
+# WHERE THIS BINARY CAME FROM - READ BEFORE CHANGING IT
+#   NOT from the PaintedMaterialTakeoff source tree, which is not on this machine (its PDB
+#   points at D:\John Documents\Revit Automation Project\Painted Material\). It was rebuilt
+#   from the SHIPPED ASSEMBLY, decompiled with ilspycmd, and the source of that rebuild is
+#   committed beside this override as PaintedMaterialTakeoff.source.cs.
+#
+#   The rebuild was checked against the original before being trusted: recompiled, decompiled
+#   again, and compared order-independently - 58 differing lines out of 6,025, every one a
+#   decompiler rendering difference (ElementId. vs Autodesk.Revit.DB.ElementId., out var vs
+#   out MaterialBucket, inverted-equivalent conditionals). No semantic drift.
+#
+#   THIS IS A STOPGAP. If the original source is ever recovered, port the same change there,
+#   delete this override, and rebuild - exactly as with the manifest override above.
+
+$dll = Join-Path $InstallerDir 'PaintedMaterialTakeoff.dll'
+if (-not (Test-Path $dll)) {
+    Say "DLL override not found: $dll" 'Red'
+    exit 1
+}
+
+Copy-Item $dll -Destination (Join-Path $payload 'PaintedMaterialTakeoff.dll') -Force
+Say "Applied DLL override - split-face paint now gets one carrier per material on regular walls."
 Say "Applied manifest override - the product no longer builds a ribbon of its own."
 
 # ---------------------------------------------------------------- link
