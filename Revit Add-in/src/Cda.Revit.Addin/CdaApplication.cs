@@ -80,6 +80,13 @@ public sealed class CdaApplication : IExternalApplication
             // it - so an unarmed session pays one early-return per selection and no more.
             Overlay.PaintHighlightService.Register(application);
 
+            // Also SelectionChanged, and deliberately NOT armed by anything: selecting a row in
+            // a takeoff schedule selects a carrier the view's filter is painting out, so the
+            // click appears to do nothing. This switches that one filter on, zooms to it, and
+            // switches it back when the selection moves on. Cheap enough to leave running - a
+            // selection that is not a Generic Model costs one category check.
+            Overlay.CarrierRevealService.Register(application);
+
             // Same reasoning, and last of all: time tracking is the only feature here that
             // subscribes to Idling, so a fault in it would otherwise be felt on every tick.
             // It swallows its own failures for the same reason.
@@ -112,6 +119,7 @@ public sealed class CdaApplication : IExternalApplication
         TimeTracking.TimeTrackingService.Unregister(application);
 
         Overlay.PaintHighlightService.Unregister(application);
+        Overlay.CarrierRevealService.Unregister(application);
         Finishes.FinishAutomation.Unregister(application);
         Log.Info("Shutdown");
         return Result.Succeeded;
