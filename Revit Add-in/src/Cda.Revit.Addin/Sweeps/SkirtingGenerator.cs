@@ -392,6 +392,35 @@ public sealed class SkirtingGenerator
     /// <summary>Distinct reasons containment declined, for the problem list.</summary>
     private readonly HashSet<string> _clipReasons = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Containments for rooms on the far side of an opening, built once each. The same few
+    /// rooms sit across every opening in a unit, and a spatial element calculation per jamb
+    /// would cost more than the whole rest of the run.
+    /// </summary>
+    private readonly Dictionary<long, RoomContainment?> _farContainment = [];
+
+    /// <summary>
+    /// How far past the wall's own Width a measured far face may sit and still be believed.
+    /// Half a wall again is generous enough for finishes the Width parameter does not carry,
+    /// and tight enough to reject a ray that found the room beyond a cavity.
+    /// </summary>
+    private const double MaxRevealDepthFactor = 1.5;
+
+    /// <summary>Jambs whose room side was settled by comparing two ray lengths.</summary>
+    private int _revealSideFromRay;
+
+    /// <summary>
+    /// Jambs where neither the ray nor the probes could say which side the room is on. These
+    /// get no reveal board at all, and the number was previously invisible.
+    /// </summary>
+    private int _revealSideUnknown;
+
+    /// <summary>Reveals whose far end was measured to a face other than wall Width.</summary>
+    private int _revealDepthMeasured;
+
+    /// <summary>The worst of those disagreements, in internal units.</summary>
+    private double _revealDepthWorst;
+
     /// <summary>Pieces refused by the no-overlap rule. Should be zero on a clean model.</summary>
     private int _refusedOverlaps;
 
@@ -1189,6 +1218,28 @@ public sealed class SkirtingGenerator
                 "the opening is outdoors or unmodelled space. A reveal board spans the wall's whole " +
                 "thickness, so without this an opening in an external wall puts skirting on the " +
                 "outside of the building.");
+        }
+
+        _report.Add(
+            $"REVEAL SIDE: {_revealSideFromRay} jamb(s) had their room side settled by measuring " +
+            $"how far a ray runs into the room each way; {_revealSideUnknown} could not be settled " +
+            "at all and got no board. It was a pair of yes/no probes 30 mm either side, which " +
+            "agree with each other - and so decide nothing - at a corner, in a doorway throat, " +
+            "and anywhere the enclosure is marginal. That is where openings are, so the reveals " +
+            "were being lost exactly where they exist. Two lengths can be compared; two coin " +
+            "flips cannot.");
+
+        if (_revealDepthMeasured > 0)
+        {
+            _report.Add(
+                $"REVEAL DEPTH MEASURED: {_revealDepthMeasured} reveal(s) were cut to the far " +
+                "room's own finish face rather than to the host wall's Width parameter, the " +
+                $"largest disagreement being {Measure.ToMillimetres(_revealDepthWorst):0} mm. " +
+                "Width off the near face is exact only when the near curve is at Finish location; " +
+                "a room that fell back to its Center boundary starts the reveal on the wall " +
+                "CENTRELINE, where Width overshoots the far face by half a wall and puts a board " +
+                "through it. A large number here means Center fallbacks, not a measuring fault - " +
+                "check the rooms listed under problems.");
         }
     }
 
@@ -3501,6 +3552,12 @@ public sealed class SkirtingGenerator
     /// wall's orientation: the perpendicular is taken from the curve's own tangent, both
     /// directions are probed, and the one that leaves the room is the one the reveal runs
     /// along. That works for curved walls and for walls drawn either way round.
+    ///
+    /// WHERE IT ENDS IS MEASURED, NOT ASSUMED. The far end used to be the wall's Width taken
+    /// off the near face. That is exactly right for a room whose boundary came back at Finish
+    /// location and wrong for one that fell back to Center, where the near face IS the
+    /// centreline and Width overshoots the far face by half a wall. The far room's own solid
+    /// knows where its finish face is, so the reveal is cut to it. See MeasuredFarFace.
     /// </summary>
     private Curve? RevealRun(Curve axis, Room room, double parameter, double thickness)
     {
@@ -3510,16 +3567,9 @@ public sealed class SkirtingGenerator
             var tangent = axis.ComputeDerivatives(parameter, false).BasisX.Normalize();
             var perpendicular = tangent.CrossProduct(XYZ.BasisZ).Normalize();
 
-            var probe = SkirtingSettings.SideProbe;
+            var inward = RevealDirection(room, start, perpendicular, thickness);
+            if (inward is null) return null;
 
-            var forwardInRoom = TryPointInRoom(room, start + perpendicular * probe);
-            var backwardInRoom = TryPointInRoom(room, start - perpendicular * probe);
-
-            // Both or neither means the jamb sits somewhere ambiguous - a corner, or a room
-            // whose enclosure is broken. Guessing here drives a board through the wall.
-            if (forwardInRoom == backwardInRoom) return null;
-
-            var inward = forwardInRoom ? -perpendicular : perpendicular;
             var end = start + inward * thickness;
 
             // INTERIOR ONLY.
@@ -3529,6 +3579,12 @@ public sealed class SkirtingGenerator
             // just beyond that far face settles it: another room means a genuine internal
             // reveal shared by two rooms, nothing means open air or unmodelled space and the
             // board has left the room-bounding range entirely.
+            //
+            // THIS CANNOT BE ANSWERED BY THE RAY. The reveal leaves this room at its first
+            // step, so this room's solid says nothing about what is on the other side of the
+            // wall, and the far side is a different room that has to be found before it can
+            // be asked. The ray measures the far face; only GetRoomAtPoint can say whose it
+            // is - which is also why the 'Udvendig' test below is still needed.
             if (_settings.InteriorRevealsOnly)
             {
                 var beyond = end + inward * SkirtingSettings.SideProbe;
@@ -3544,6 +3600,9 @@ public sealed class SkirtingGenerator
                     _revealsOutside++;
                     return null;
                 }
+
+                var measured = MeasuredFarFace(farRoom, beyond, inward, start, thickness);
+                if (measured is not null) end = measured;
             }
 
             return Line.CreateBound(start, end);
@@ -3552,6 +3611,136 @@ public sealed class SkirtingGenerator
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Which way the reveal runs into the wall, or null when the jamb sits somewhere nothing
+    /// can answer for.
+    ///
+    /// BY RAY, NOT BY A PAIR OF YES/NO PROBES. It was two IsPointInRoom probes 30 mm either
+    /// side, and a reveal was abandoned whenever they agreed - which happens at a corner, in
+    /// a doorway throat, and anywhere the enclosure is marginal, so the reveals were lost
+    /// exactly where openings are. A ray returns a LENGTH, and the room side is simply the
+    /// side the ray runs further into. Two lengths can be compared where two coin flips
+    /// cannot be.
+    ///
+    /// The probes are also lifted off the floor plane, for the same reason the containment
+    /// clip is: the boundary curve and the room solid's underside are the same plane, and a
+    /// point there is on the boundary rather than inside or outside it.
+    /// </summary>
+    private XYZ? RevealDirection(Room room, XYZ start, XYZ perpendicular, double thickness)
+    {
+        var containment = _containment;
+
+        if (containment is not null)
+        {
+            // Far enough to clear the wall, so a ray that starts in open room space is not
+            // cut short by an obstruction a few centimetres in.
+            var reach = Math.Max(thickness, SkirtingSettings.SideProbe * 4.0);
+
+            var origin = new XYZ(start.X, start.Y, containment.ProbeZ(start.Z + (BoardBand / 2.0)));
+
+            var forward = containment.MaxDepth(origin, perpendicular, reach).Length;
+            var backward = containment.MaxDepth(origin, perpendicular.Negate(), reach).Length;
+
+            // A tie means the ray settled nothing - the jamb is not on this room's face at
+            // all, which is what happens on a Center-boundary fallback where the curve runs
+            // inside the wall. Fall through to the probes rather than guess from noise.
+            if (RevealRules.RaySettles(forward, backward, SkirtingSettings.SideProbe))
+            {
+                _revealSideFromRay++;
+
+                // INTO THE WALL is away from the room, so it is the SHORTER ray's direction.
+                return RevealRules.RevealRunsForward(forward, backward)
+                    ? perpendicular
+                    : perpendicular.Negate();
+            }
+        }
+
+        var probe = SkirtingSettings.SideProbe;
+
+        var forwardInRoom = TryPointInRoom(room, start + perpendicular * probe);
+        var backwardInRoom = TryPointInRoom(room, start - perpendicular * probe);
+
+        // Both or neither means the jamb sits somewhere ambiguous - a corner, or a room
+        // whose enclosure is broken. Guessing here drives a board through the wall.
+        if (forwardInRoom == backwardInRoom)
+        {
+            _revealSideUnknown++;
+            return null;
+        }
+
+        return forwardInRoom ? perpendicular.Negate() : perpendicular;
+    }
+
+    /// <summary>
+    /// The far room's finish face on this wall, or null when it cannot be measured.
+    ///
+    /// <paramref name="beyond"/> is already known to be inside the far room - the interior
+    /// test just resolved it there - so a ray from it back TOWARDS the wall leaves that room
+    /// exactly at the face the reveal should stop on. Whatever the near curve's location and
+    /// whatever the wall's Width parameter says, that face is where the wall ends.
+    ///
+    /// Refused rather than trusted when the result is not a sane reveal: behind the start,
+    /// or more than half a wall past the assumed end. A measurement that disagrees with the
+    /// wall that much is a sign the ray found something else, not a reason to build a board
+    /// there.
+    /// </summary>
+    private XYZ? MeasuredFarFace(Room farRoom, XYZ beyond, XYZ inward, XYZ start, double thickness)
+    {
+        var containment = ContainmentFor(farRoom);
+        if (containment is null) return null;
+
+        var back = inward.Negate();
+        var depth = containment.MaxDepth(beyond, back, thickness + (SkirtingSettings.SideProbe * 2.0));
+
+        if (depth.Outcome != ClipOutcome.Clipped) return null;
+
+        var face = beyond + (back * depth.Length);
+
+        var reach = (face - start).DotProduct(inward);
+
+        // Behind the jamb, or improbably deep. Either way the wall's own Width is the better
+        // answer than a ray that found something the wall is not.
+        if (!RevealRules.DepthIsBelievable(
+                reach, thickness, _settings.MinimumRun, MaxRevealDepthFactor))
+        {
+            return null;
+        }
+
+        var drift = Math.Abs(reach - thickness);
+
+        if (drift > 1e-6)
+        {
+            _revealDepthMeasured++;
+            if (drift > _revealDepthWorst) _revealDepthWorst = drift;
+        }
+
+        return face;
+    }
+
+    /// <summary>
+    /// A containment for a room other than the one being skirted, built once and kept.
+    ///
+    /// A spatial element calculation per jamb would be ruinous - the same handful of rooms
+    /// sit on the far side of every opening in a unit.
+    /// </summary>
+    private RoomContainment? ContainmentFor(Room room)
+    {
+        long id;
+        try { id = room.Id.Value; }
+        catch { return null; }
+
+        if (_farContainment.TryGetValue(id, out var cached)) return cached;
+
+        RoomContainment? containment;
+        try { containment = new RoomContainment(_doc, room); }
+        catch { containment = null; }
+
+        if (containment is not null && !containment.IsUsable) containment = null;
+
+        _farContainment[id] = containment;
+        return containment;
     }
 
     /// <summary>

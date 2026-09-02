@@ -55,6 +55,8 @@ internal static class Program
         OrderOfOperations();
         Nonsense();
         NeverWidens();
+        RevealSide();
+        RevealDepth();
 
         Console.WriteLine($"\n{_run - _failed}/{_run} passed.");
 
@@ -242,6 +244,88 @@ internal static class Program
         }
 
         True($"no rule widened a board across {checkedCount} combinations", widened == 0);
+    }
+
+    // -------------------------------------------------------------------- reveals
+
+    /// <summary>The 30 mm side probe, as a ray-comparison tolerance.</summary>
+    private const double SideProbe = 30;
+
+    /// <summary>A 108 mm partition, off the reference plan.</summary>
+    private const double Wall = 108;
+
+    private static void RevealSide()
+    {
+        Section("Which way a reveal runs into the wall");
+
+        // A jamb on the room-side face: the ray into the room runs the room's width, the ray
+        // into the wall stops at once. The reveal follows the SHORT one - into the wall.
+        True("a long forward ray means the reveal runs backward",
+            !RevealRules.RevealRunsForward(forward: 3000, backward: 0));
+
+        True("a long backward ray means the reveal runs forward",
+            RevealRules.RevealRunsForward(forward: 0, backward: 3000));
+
+        // The sign convention stated the other way round, so a reversed implementation
+        // cannot pass both of these.
+        True("the two directions disagree with each other",
+            RevealRules.RevealRunsForward(0, 3000) != RevealRules.RevealRunsForward(3000, 0));
+
+        Section("When two rays have settled nothing");
+
+        True("a clear difference settles it",
+            RevealRules.RaySettles(3000, 0, SideProbe));
+
+        // Both rays leaving the room at once: the jamb is inside the wall, which is the
+        // Center-boundary fallback. Nothing has been decided and the caller must not pick.
+        True("two dead rays settle nothing",
+            !RevealRules.RaySettles(0, 0, SideProbe));
+
+        True("two equal long rays settle nothing",
+            !RevealRules.RaySettles(1200, 1200, SideProbe));
+
+        True("a difference of exactly the probe settles nothing",
+            !RevealRules.RaySettles(SideProbe, 0, SideProbe));
+
+        True("a millimetre more settles it",
+            RevealRules.RaySettles(SideProbe + 1, 0, SideProbe));
+
+        True("order does not change whether it settles",
+            RevealRules.RaySettles(0, 3000, SideProbe) == RevealRules.RaySettles(3000, 0, SideProbe));
+    }
+
+    private static void RevealDepth()
+    {
+        Section("Whether a measured far face is believed");
+
+        // The ordinary case: the measurement agrees with the wall.
+        True("a face at the wall's own thickness is believed",
+            RevealRules.DepthIsBelievable(Wall, Wall, Minimum, 1.5));
+
+        // The case this measurement exists for: a Center-boundary room starts the reveal on
+        // the CENTRELINE, so the true reach is half a wall more than Width.
+        True("a Center-boundary reveal at 1.5 walls is believed",
+            RevealRules.DepthIsBelievable(Wall * 1.5, Wall, Minimum, 1.5));
+
+        True("and just past that is refused",
+            !RevealRules.DepthIsBelievable((Wall * 1.5) + 1, Wall, Minimum, 1.5));
+
+        // A ray that ran through a cavity into the room beyond.
+        True("a face three walls away is refused",
+            !RevealRules.DepthIsBelievable(Wall * 3, Wall, Minimum, 1.5));
+
+        // Behind the jamb is not a reveal at all.
+        True("a face behind the jamb is refused",
+            !RevealRules.DepthIsBelievable(-Wall, Wall, Minimum, 1.5));
+
+        True("a face at the jamb is refused",
+            !RevealRules.DepthIsBelievable(0, Wall, Minimum, 1.5));
+
+        True("a sliver of a reveal is refused",
+            !RevealRules.DepthIsBelievable(Minimum - 1, Wall, Minimum, 1.5));
+
+        True("exactly the minimum run is believed",
+            RevealRules.DepthIsBelievable(Minimum, Wall, Minimum, 1.5));
     }
 
     // ------------------------------------------------------------------- harness

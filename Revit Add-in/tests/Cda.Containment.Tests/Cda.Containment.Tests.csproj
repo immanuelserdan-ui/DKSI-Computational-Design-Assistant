@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\src\Cda.Revit.Addin\Rooms\ClipRules.cs" Link="ClipRules.cs" />
+    <Compile Include="..\..\src\Cda.Revit.Addin\Rooms\RevealRules.cs" Link="RevealRules.cs" />
   </ItemGroup>
 
 </Project>
