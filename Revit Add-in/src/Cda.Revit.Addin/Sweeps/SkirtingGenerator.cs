@@ -3,6 +3,7 @@ using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.DB.Structure;
 using Cda.Revit.Addin.Finishes;
 using Cda.Revit.Addin.Infrastructure;
+using Cda.Revit.Addin.Rooms;
 
 namespace Cda.Revit.Addin.Sweeps;
 
@@ -101,8 +102,16 @@ public sealed class SkirtingGenerator
     /// </summary>
     private readonly List<string> _jambAudit = [];
 
+    /// <summary>Openings that reached the jamb pass on at least one run.</summary>
+    private readonly HashSet<long> _revealOpeningsSeen = [];
+
+    /// <summary>Openings that produced at least one audit line.</summary>
+    private readonly HashSet<long> _revealOpeningsAudited = [];
+
     private void RecordJamb(Element insert, int jamb, double length, string outcome)
     {
+        try { _revealOpeningsAudited.Add(insert.Id.Value); } catch { /* id unreadable */ }
+
         if (_jambAudit.Count >= 200) return;
 
         string name;
@@ -339,6 +348,49 @@ public sealed class SkirtingGenerator
 
     private int _clippedToRoom;
     private int _droppedOutsideRoom;
+
+    /// <summary>
+    /// The room solid the containment clip is answered against, rebuilt per room. Null when
+    /// this room has none, which is the only case that falls back to sampling.
+    /// </summary>
+    private RoomContainment? _containment;
+
+    /// <summary>
+    /// Rooms whose solid could not be built, so their boards were clipped by IsPointInRoom
+    /// sampling instead. The sampling path is the one that cannot distinguish "outside" from
+    /// "could not tell", so this number is how much of the run is still exposed to that.
+    /// </summary>
+    private int _roomsWithoutSolid;
+
+    /// <summary>
+    /// Boards REFUSED because containment could not answer for them.
+    ///
+    /// THE NUMBER THAT DID NOT EXIST. Every failure in the old clip returned the board
+    /// unchanged - an undecidable side, an exception, anything - so a board driven through a
+    /// wall and a board legitimately left alone were the same event and neither was counted.
+    /// A board through a wall reads as deliberate and gets built; a refused board with a
+    /// reason attached gets fixed. This is now a refusal, and it is counted.
+    /// </summary>
+    private int _clipUndecidable;
+
+    /// <summary>
+    /// The subset of <see cref="_clipUndecidable"/> that was actually REFUSED - the solid
+    /// path. The rest were placed unverified, because their room had no solid to refuse them
+    /// against. Kept separate so the report can say which of the discarded boards were
+    /// outside the room and which were merely unprovable; they are different faults with
+    /// different fixes, and one number cannot carry both.
+    /// </summary>
+    private int _clipRefused;
+
+    /// <summary>
+    /// Boards placed with NO containment test at all, because the setting is off or the
+    /// piece is not a straight line. Not a failure - but it was previously indistinguishable
+    /// from a board that passed the test.
+    /// </summary>
+    private int _clipNotAttempted;
+
+    /// <summary>Distinct reasons containment declined, for the problem list.</summary>
+    private readonly HashSet<string> _clipReasons = new(StringComparer.Ordinal);
 
     /// <summary>Pieces refused by the no-overlap rule. Should be zero on a clean model.</summary>
     private int _refusedOverlaps;
@@ -668,13 +720,19 @@ public sealed class SkirtingGenerator
         {
             foreach (var category in _settings.BlockingCategories)
             {
+                // DirectShapes excluded here for the same reason as the opening sweep below:
+                // generated geometry is not furniture. Casework alone is unaffected today,
+                // but BlockingCategories is configurable, and adding Generic Models to it
+                // would otherwise reproduce the whole-face suppression exactly.
                 _casework.AddRange(new FilteredElementCollector(_doc)
                     .OfCategory(category)
-                    .WhereElementIsNotElementType());
+                    .WhereElementIsNotElementType()
+                    .Where(e => e is not DirectShape));
             }
         }
 
         _openingModels = [];
+        var carriersIgnored = 0;
 
         if (_settings.AvoidOpeningGeometry)
         {
@@ -685,11 +743,41 @@ public sealed class SkirtingGenerator
                          BuiltInCategory.OST_GenericModel,
                      })
             {
-                _openingModels.AddRange(new FilteredElementCollector(_doc)
+                var found = new FilteredElementCollector(_doc)
                     .OfCategory(category)
-                    .WhereElementIsNotElementType());
+                    .WhereElementIsNotElementType()
+                    .ToList();
+
+                // DIRECTSHAPES ARE NEVER OPENING GEOMETRY, and letting them in here stopped
+                // this tool placing a single wall board.
+                //
+                // Paint takeoff carriers - ours and PaintedMaterialTakeoff's alike - are
+                // DirectShapes in Generic Models, one per painted wall face, occupying that
+                // face exactly. This sweep exists to cut boards back off a door's architrave
+                // and lining, so a carrier lying flat on the wall reads as an architrave the
+                // width of the entire wall, and every run gets trimmed to nothing. The run
+                // that found this placed 6 jamb reveals totalling 0.30 m and no wall boards at
+                // all, while reporting "0 problem(s)" - the faces were all accounted for as
+                // 'covered', which is exactly what a full-face obstruction means.
+                //
+                // The distinction is not a heuristic: an architrave, a lining and a cased
+                // opening are FAMILY INSTANCES. A DirectShape is generated geometry that some
+                // other tool put in the model, and none of it is something a skirting board
+                // has to dodge.
+                carriersIgnored += found.Count(e => e is DirectShape);
+
+                _openingModels.AddRange(found.Where(e => e is not DirectShape));
             }
         }
+
+        if (carriersIgnored > 0)
+            _report.Add(
+                $"GENERATED GEOMETRY IGNORED: {carriersIgnored} DirectShape(s) were excluded from " +
+                "the opening-geometry pass. Paint takeoff carriers sit flat on a wall face in " +
+                "Generic Models, and treating one as an obstruction suppresses the whole face - " +
+                "which is why a model with a paint takeoff in it used to come back with jamb " +
+                "reveals and no wall boards. Only family instances are dodged; generated " +
+                "geometry another tool placed is not something a board collides with.");
 
         _report.Add(
             "BLOCKERS: only " +
@@ -746,6 +834,21 @@ public sealed class SkirtingGenerator
             catch (Exception ex) { _problems.Add($"{Label(room)}: {ex.Message}"); }
         }
 
+        if (_clipReasons.Count > 0)
+        {
+            _problems.Add(
+                $"{_clipUndecidable} board(s) could not be verified against their room. Distinct " +
+                "reasons follow - each one is a place where a board's position rests on nothing " +
+                "having been measured:");
+
+            // Capped: a systemic fault produces one reason per room, and a problem list
+            // nobody reads to the end is a problem list that hides the other entries.
+            foreach (var reason in _clipReasons.Take(20)) _problems.Add($"    {reason}");
+
+            if (_clipReasons.Count > 20)
+                _problems.Add($"    ... and {_clipReasons.Count - 20} more, in the log.");
+        }
+
         if (_wrongLength > 0)
         {
             _problems.Add(
@@ -789,6 +892,26 @@ public sealed class SkirtingGenerator
 
                 _report.AddRange(_jambAudit);
             }
+
+            // RECONCILIATION. The audit's whole value is that absence means "never reached",
+            // and that only holds if absence is impossible for an opening the pass actually
+            // handled. An opening offered to several runs and refused by all of them - each
+            // refusal correct on its own terms, because the opening is not on THAT stretch -
+            // leaves no line anywhere. This names those, and it is the only entry in the
+            // report that indicates a defect rather than a decision.
+            var unaudited = _revealOpeningsSeen.Except(_revealOpeningsAudited).ToList();
+
+            _report.Add(
+                unaudited.Count == 0
+                    ? $"JAMB RECONCILIATION: every one of the {_revealOpeningsSeen.Count} opening(s) " +
+                      "that reached the jamb pass produced an audit line above. Nothing was dropped " +
+                      "silently."
+                    : $"JAMB RECONCILIATION - {unaudited.Count} OPENING(S) DROPPED WITH NO AUDIT " +
+                      $"LINE: id(s) {string.Join(", ", unaudited.Take(20))}. These reached the jamb " +
+                      "pass and were then refused by every run they were offered to, so they appear " +
+                      "nowhere above. THIS IS A DEFECT, not a rule: each refusal is individually " +
+                      "correct - the opening is not on that stretch of wall - but no run ever " +
+                      "claimed them, so their jambs were never considered by anything.");
 
             _report.Add(
                 "NO DOUBLING UP AT A LINED DOOR: each jamb is intersected with the opening " +
@@ -969,9 +1092,11 @@ public sealed class SkirtingGenerator
             "obstruction is what stops the stubs.");
 
         _report.Add(
-            $"CONTAINMENT: every board was sampled against the room with IsPointInRoom before " +
+            $"CONTAINMENT: every board was measured against the room's own SOLID before " +
             $"placement. {_clippedToRoom} board(s) were shortened to the part actually inside the " +
-            $"room; {_droppedOutsideRoom} were discarded for lying wholly outside it. Both counts " +
+            $"room; {Math.Max(0, _droppedOutsideRoom - _clipRefused)} were discarded for lying " +
+            $"wholly outside it, and {_clipRefused} were REFUSED because containment could not " +
+            "answer for them at all - a different fault with a different fix. The first two counts " +
             "should be low - a high number means boundary curves are running past their room, " +
             "which is a modelling condition worth looking at rather than a tool setting. " +
             "An end that meets a genuine corner is forgiven up to " +
@@ -981,6 +1106,25 @@ public sealed class SkirtingGenerator
             "converge the room is narrower than the board long before the apex. Clipping there " +
             "is what was removing the material that fills a corner, and it is why the gaps were " +
             "worst on the slanted walls.");
+
+        _report.Add(
+            $"CONTAINMENT NOT VERIFIED: {_clipUndecidable} board(s) could not be checked - " +
+            $"{_clipRefused} of them refused and not built, {_clipUndecidable - _clipRefused} " +
+            $"PLACED ANYWAY in rooms with no solid. {_clipNotAttempted} were not checked at all " +
+            "(containment off, or a curved piece). " +
+            $"{_roomsWithoutSolid} room(s) had no computable solid and fell back to IsPointInRoom " +
+            "sampling. THESE ARE THE NUMBERS THAT MATTER FOR BOARDS CROSSING A BOUNDARY, and " +
+            "none of them existed before: every containment failure used to return the board " +
+            "unchanged, so a board driven through a wall and a board that passed the test were " +
+            "the same event and the report moved for neither. Where the room has a solid an " +
+            "unanswerable board is now REFUSED; where it has none the board is still placed, " +
+            "because dropping every board in an unenclosed room is worse - so a non-zero room " +
+            "count here is the part of the model where a board can still cross a boundary." +
+            (RoomContainment.VolumesComputed(_doc)
+                ? string.Empty
+                : " 'Areas and Volumes' computation is OFF for this document, which is why rooms " +
+                  "have no solids: run the finish tools' boundary fix, or turn it on in Area and " +
+                  "Volume Computations, and re-run."));
 
         _report.Add(
             $"BOUNDARY SEGMENTS NOT USED: {_separationLines} room separation line(s) - expected, " +
@@ -1339,6 +1483,22 @@ public sealed class SkirtingGenerator
     {
         var level = _doc.GetElement(room.LevelId) as Level;
         var baseZ = FloorElevation(room, level);
+
+        // The boundary every board in this room is measured against, built ONCE per room -
+        // a spatial element calculation is far too expensive to run per board. See
+        // RoomContainment for why the clip is answered against a solid rather than by
+        // probing points, and why an unanswerable clip now refuses the board.
+        _containment = new RoomContainment(_doc, room);
+
+        if (!_containment.IsUsable)
+        {
+            _roomsWithoutSolid++;
+
+            if (_containment.Unavailable is not null)
+                _clipReasons.Add($"{Label(room)}: {_containment.Unavailable}");
+
+            _containment = null;   // sampling fallback for this room only
+        }
 
         // Finish is where a board actually goes - the curve already lies on the room-side
         // face of each wall, so there is no offsetting from a centreline and no reasoning
@@ -1775,6 +1935,11 @@ public sealed class SkirtingGenerator
             // that cannot place it, and the room that actually contains the door never gets a
             // board. That is missing reveals at real openings and stray boards at corners,
             // from a single unchecked projection.
+            // Every opening that gets this far is one the jamb pass is responsible for. Noted
+            // BEFORE the on-run test, because an opening rejected by every run it is offered
+            // to disappears without trace otherwise - see the reconciliation in the report.
+            try { _revealOpeningsSeen.Add(insert.Id.Value); } catch { /* id unreadable */ }
+
             if (!SkirtingRun.OnRun(axis, insert, _doc, thickness, _settings.JambMargin))
             {
                 _revealsElsewhere++;
@@ -1784,7 +1949,22 @@ public sealed class SkirtingGenerator
             // Unpadded: the pad exists to hold boards clear of a frame, but the jamb line
             // itself is where the reveal face actually starts.
             var span = SkirtingRun.FromInsert(axis, insert, _doc, pad: 0.0);
-            if (span is not { } jambs) continue;
+
+            if (span is not { } jambs)
+            {
+                // UNMEASURABLE IS NOT THE SAME AS ABSENT, AND IT MUST NOT LOOK THE SAME.
+                //
+                // This returned silently, so an opening whose span could not be measured
+                // vanished from the audit entirely - and the audit reads absence as "never
+                // reached", which is the one thing it promises to distinguish. A wall Opening
+                // is exactly the case that lands here: it has no LocationPoint and no width
+                // parameter, so the measurement falls back to its bounding box and can fail
+                // outright.
+                RecordJamb(insert, 0, 0.0, "no board - the opening's extent could not be measured on this run");
+                RecordJamb(insert, 1, 0.0, "no board - the opening's extent could not be measured on this run");
+
+                continue;
+            }
 
             // Two jambs that measure to the same point are not two jambs. A real opening is
             // at least its own width across; anything less is a projection artefact.
@@ -2687,7 +2867,125 @@ public sealed class SkirtingGenerator
     }
 
     /// <summary>
-    /// The part of a board that is actually inside the room, found by asking the room.
+    /// The part of a board that is actually inside the room, or null when none of it is.
+    ///
+    /// TWO PATHS, AND WHICH ONE RAN IS COUNTED. The room's own solid answers this wherever
+    /// one can be built, because a solid IS the boundary and an intersection against it is
+    /// exact at the corners and doorways where point probes are least reliable. Where the
+    /// solid cannot be built - an unenclosed room, volumes off - the older sampling path
+    /// still runs, and <see cref="_roomsWithoutSolid"/> says how many rooms that was.
+    ///
+    /// WHAT CHANGED. Every failure used to return the board UNCHANGED: an undecidable side,
+    /// a thrown intersection, anything. That is not a neutral default - it places a board
+    /// through whatever it was crossing, and it looks exactly like a board that passed the
+    /// test, so no number in the report ever moved. The solid path refuses instead, and
+    /// counts the refusal.
+    /// </summary>
+    private Curve? ClipToRoom(Room room, Curve piece, double forgiveStart, double forgiveEnd)
+    {
+        if (!_settings.ConfineToRoom || piece is not Line line)
+        {
+            _clipNotAttempted++;
+            return piece;
+        }
+
+        return _containment is not null
+            ? ClipToRoomSolid(line, forgiveStart, forgiveEnd)
+            : ClipBySampling(room, line, forgiveStart, forgiveEnd);
+    }
+
+    /// <summary>
+    /// Containment answered against the room solid. See <see cref="RoomContainment"/>.
+    ///
+    /// The corner allowance is applied here rather than inside the containment class, which
+    /// is why that class returns the SPAN and not only a curve: where the room ends is a
+    /// question about geometry, whether that is a reason to shorten the board is a question
+    /// about corners, and the two must not be decided in the same place.
+    /// </summary>
+    private Curve? ClipToRoomSolid(Line piece, double forgiveStart, double forgiveEnd)
+    {
+        var containment = _containment;
+        if (containment is null) return piece;
+
+        try
+        {
+            var start = piece.GetEndPoint(0);
+            var end = piece.GetEndPoint(1);
+            var length = start.DistanceTo(end);
+
+            if (length < 1e-9) return null;
+
+            // Mid-board height, pulled into the solid's own extent. A board's line and the
+            // room solid's underside are the same plane, and an intersection along a shared
+            // plane is settled by rounding rather than by geometry.
+            var result = containment.ClipCurve(piece, containment.ProbeZ(start.Z + (BoardBand / 2.0)));
+
+            switch (result.Outcome)
+            {
+                case ClipOutcome.WhollyInside:
+                    return piece;
+
+                case ClipOutcome.Undecidable:
+                    _clipUndecidable++;
+                    _clipRefused++;
+                    if (result.Reason is not null) _clipReasons.Add(result.Reason);
+                    return null;   // FAIL CLOSED. An unverifiable board is not built.
+
+                case ClipOutcome.WhollyOutside:
+                    return Apply(
+                        piece,
+                        ClipRules.ForNothingInside(length, forgiveStart, forgiveEnd));
+            }
+
+            return Apply(
+                piece,
+                ClipRules.ForSpan(
+                    length, result.From, result.To,
+                    forgiveStart, forgiveEnd, _settings.MinimumRun));
+        }
+        catch (Exception ex)
+        {
+            _clipUndecidable++;
+            _clipRefused++;
+            _clipReasons.Add($"clip failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Turns a decision back into a curve. The only place a containment clip becomes
+    /// geometry, so the count and the cut cannot disagree.
+    /// </summary>
+    private Curve? Apply(Line piece, ClipDecision decision)
+    {
+        if (decision.Action == ClipAction.KeepWhole) return piece;
+        if (decision.Action == ClipAction.Refuse) return null;
+
+        try
+        {
+            var start = piece.GetEndPoint(0);
+            var direction = (piece.GetEndPoint(1) - start).Normalize();
+
+            var clipped = Line.CreateBound(
+                start + direction * decision.From,
+                start + direction * decision.To);
+
+            _clippedToRoom++;
+            return clipped;
+        }
+        catch (Exception ex)
+        {
+            // The rules said trim and the trim cannot be built. Refusing is the only honest
+            // outcome: returning the whole board would build the length the rules just cut.
+            _clipUndecidable++;
+            _clipRefused++;
+            _clipReasons.Add($"clipped span unbuildable: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Containment by sampling. The fallback, for rooms with no computable solid.
     ///
     /// Samples along the board at a small inward offset and keeps the first-to-last
     /// contiguous stretch that reports inside. Returns null when none of it does.
@@ -2703,9 +3001,9 @@ public sealed class SkirtingGenerator
     /// corner. See the note at the call site: at a sharp corner the board legitimately
     /// occupies space the room does not, and clipping there is what opened the corner gaps.
     /// </param>
-    private Curve? ClipToRoom(Room room, Curve piece, double forgiveStart, double forgiveEnd)
+    private Curve? ClipBySampling(Room room, Line line, double forgiveStart, double forgiveEnd)
     {
-        if (!_settings.ConfineToRoom || piece is not Line line) return piece;
+        var piece = (Curve)line;
 
         try
         {
@@ -2718,7 +3016,18 @@ public sealed class SkirtingGenerator
             var direction = (end - start).Normalize();
 
             var inward = InwardNormal(room, start + direction * (length / 2.0), direction);
-            if (inward is null) return piece;   // undecidable - leave the board alone
+
+            if (inward is null)
+            {
+                // Undecidable. The board is left alone here, unlike the solid path, because
+                // this room has no solid to refuse it against and dropping every board in an
+                // unenclosed room would be worse than placing them. It is COUNTED now, which
+                // it never was - these are the boards free to cross a boundary.
+                _clipUndecidable++;
+                _clipReasons.Add($"{Label(room)}: no room solid, and IsPointInRoom could not " +
+                                 "decide which side a board is on");
+                return piece;
+            }
 
             var steps = Math.Max(2, (int)Math.Ceiling(length / _settings.ContainmentSample));
 
@@ -2739,7 +3048,7 @@ public sealed class SkirtingGenerator
             // sharp corner has no interior sample at all, because the room there is narrower
             // than the probe. Keep it when it is short enough to be nothing but corner.
             if (first is null || last is null)
-                return length <= forgiveStart + forgiveEnd ? piece : null;
+                return Apply(line, ClipRules.ForNothingInside(length, forgiveStart, forgiveEnd));
 
             if (first == 0 && last == steps) return piece;                  // wholly inside
 
@@ -2763,26 +3072,21 @@ public sealed class SkirtingGenerator
                 : Refine(room, start, direction, inward,
                          last.Value * step, (last.Value + 1) * step, wantInside: false);
 
-            // THE CORNER ALLOWANCE. Everything above measures where the ROOM ends; this
-            // decides whether that is a reason to shorten the BOARD. Within a corner's reach
-            // of a genuine corner it is not: the board has to fill that space precisely
-            // because the room does not extend into it.
-            if (from <= forgiveStart) from = 0.0;
-            if (length - to <= forgiveEnd) to = length;
-
-            if (from <= 0.0 && to >= length) return piece;
-
-            var clippedStart = start + direction * from;
-            var clippedEnd = start + direction * to;
-
-            if (clippedStart.DistanceTo(clippedEnd) < _settings.MinimumRun) return null;
-
-            _clippedToRoom++;
-            return Line.CreateBound(clippedStart, clippedEnd);
+            // Everything above measures where the ROOM ends; ClipRules decides whether that
+            // is a reason to shorten the BOARD. Shared with the solid path, so the corner
+            // allowance cannot drift between the two.
+            return Apply(
+                line,
+                ClipRules.ForSpan(
+                    length, from, to, forgiveStart, forgiveEnd, _settings.MinimumRun));
         }
-        catch
+        catch (Exception ex)
         {
-            return piece;   // a failed test must not lose a board
+            // A failed test must not lose a board in a room that has no solid to check it
+            // against - but it is a board nothing verified, and it is counted as one.
+            _clipUndecidable++;
+            _clipReasons.Add($"{Label(room)}: sampled clip failed: {ex.Message}");
+            return piece;
         }
     }
 
@@ -3845,6 +4149,19 @@ public sealed class SkirtingGenerator
     /// </summary>
     private bool NeverBlocks(Element element)
     {
+        // A HOLE IN THE WALL ALWAYS BLOCKS, WHATEVER IT IS CALLED.
+        //
+        // Opening is the API's own class for a void cut through a host - there is nothing to
+        // fix a board to and nothing to run behind. It can never be exempt, and testing it by
+        // name is how it became exempt: Revit names these elements "Rectangular Straight Wall
+        // Opening", and NeverBlockHints carries "opening" to catch void-cutter FAMILIES like
+        // 'Floor Void'. The substring matched the API's own name and every wall opening in
+        // the model stopped breaking the run, so boards were placed straight across holes.
+        //
+        // Class beats name. The hints exist for families filed in the wrong category, which
+        // is a naming problem; an Opening is not a naming problem.
+        if (element is Opening) return false;
+
         try
         {
             var category = element.Category?.Id.Value;

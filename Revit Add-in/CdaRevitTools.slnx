@@ -2,4 +2,10 @@
   <Folder Name="/src/">
     <Project Path="src/Cda.Revit.Addin/Cda.Revit.Addin.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Cda.Heating.Tests/Cda.Heating.Tests.csproj" />
+    <Project Path="tests/Cda.Dimensions.Tests/Cda.Dimensions.Tests.csproj" />
+    <Project Path="tests/Cda.Udvendig.Tests/Cda.Udvendig.Tests.csproj" />
+    <Project Path="tests/Cda.Containment.Tests/Cda.Containment.Tests.csproj" />
+  </Folder>
 </Solution>
