@@ -223,6 +223,31 @@ namespace PaintedMaterialTakeoff
 							takeoffResult.Warnings.Add("Wall audit export failed: " + ex2.Message);
 						}
 					}
+
+					// TAKEOFFVALIDATOR'S OWN ISSUES WERE THE SAME BLIND SPOT WARNINGS WAS - the
+					// results dialog's "See details" is built fresh from takeoffResult.Issues
+					// every time it is shown and never written anywhere first. Measured live
+					// (2026-08-29): a run reported "validation FAILED: 3 error(s)" and the CSV,
+					// WallAudit and Warnings files between them carried zero trace of what those
+					// three actually were. Folded into the same Warnings file rather than a
+					// fourth export - one place to look, and Issues is already ordered the same
+					// way the dialog orders it (errors first).
+					foreach (ValidationIssue issue in takeoffResult.Issues.OrderBy((ValidationIssue i) => i.Severity).ThenBy((ValidationIssue i) => i.Check, StringComparer.Ordinal))
+					{
+						takeoffResult.Warnings.Add($"[{((issue.Severity == IssueSeverity.Error) ? "ERROR" : "review")}] {issue.Check}: {issue.Detail}");
+					}
+
+					// LAST, so it also captures the two export-failure messages above if either
+					// happened. Nothing else in this run writes Warnings to disk - see
+					// WarningsExporter's own doc comment for why that has been the actual
+					// obstacle in diagnosing CeilingGap, not the geometry.
+					try
+					{
+						takeoffResult.WarningsPath = WarningsExporter.Write(document, takeoffResult.Warnings, takeoffSettings);
+					}
+					catch
+					{
+					}
 				}
 			}
 			catch (Exception ex3)
@@ -1508,6 +1533,18 @@ namespace PaintedMaterialTakeoff.Model
 
 		public string? MergedSegmentLabel { get; init; }
 
+		/// <summary>
+		/// Which Split Face region of the wall face this row measures, or -1 when the face was
+		/// never split.
+		///
+		/// IT HAS TO LIVE ON THE RECORD, not just on the bucket that built it, because
+		/// WallFaceMerger groups records AFTER the buckets are gone. Keyed without it, two
+		/// regions of one face that share a room and a material are indistinguishable there and
+		/// get summed back into a single row - which silently undid the whole region split one
+		/// step after it was made.
+		/// </summary>
+		public int RegionIndex { get; init; } = -1;
+
 		public ElementId MaterialId { get; init; } = Autodesk.Revit.DB.ElementId.InvalidElementId;
 
 		public string MaterialName { get; init; } = "";
@@ -1875,6 +1912,56 @@ namespace PaintedMaterialTakeoff.Model
 
 		public double MinOverheadClearanceFt { get; } = 0.5;
 
+		/// <summary>
+		/// Never accept an overhead element that sits above the room's OWN upper limit.
+		///
+		/// THE BUG THIS FIXES. ResolveOverhead used
+		/// <c>Math.Max(unboundedHeight + 0.5, DefaultOverheadSearchFt)</c>, which makes
+		/// DefaultOverheadSearchFt a FLOOR on the search rather than a cap on it: a room only
+		/// 10,34 ft tall still had its prism extruded a full 16 ft. That prism passes straight
+		/// through the slab above the room and into the storey beyond, and because the tiers are
+		/// evaluated <c>Ceilings &amp;&amp; Floors &amp;&amp; Roofs</c> with short-circuiting, a
+		/// CEILING BELONGING TO THE ROOM ABOVE outranks the floor slab that is this room's actual
+		/// lid - the Floors tier is never even reached.
+		///
+		/// Measured on FM_Template: Kælderrum 4 (40) is a basement room whose own bounding box
+		/// tops out at -1,0 m. The takeoff gave it ZTop +0,75 m and a 4,75 m clear height by
+		/// finding Loftrum's ceiling one storey up. Its wall carriers then spanned -4,0 m to
+		/// +0,75 m and overlapped Loftrum's own carriers on the very same wall faces: two
+		/// elements, identical "Paint Segment" names, 4,67 m² of one face counted for BOTH rooms.
+		/// Paint feeding a digital twin cannot carry that.
+		///
+		/// WHAT THIS DOES. The room's own upper limit becomes a hard ceiling on both the search
+		/// prism and the candidates: anything starting above it is discarded before it can win a
+		/// tier. That is the "strictly constrained by room boundaries" rule stated as geometry
+		/// rather than hoped for from tier ordering.
+		///
+		/// LEFT AS A SETTING because it changes measured height for every room in every model,
+		/// not just the broken ones. Turning it off restores the previous behaviour exactly.
+		/// </summary>
+		public bool EnforceRoomUpperLimitOnOverhead { get; set; } = true;
+
+		/// <summary>
+		/// When a room's ceiling has a real opening in it - a light shaft, a dormer - continue
+		/// the overhead search upward through that opening and let InteriorElementCalculator's
+		/// search prism reach the same height, so a dormer's own walls (which start AT the
+		/// ceiling and are never part of any room boundary segment) are measured instead of
+		/// silently excluded.
+		///
+		/// THE RULE THIS ENFORCES: a painted face physically inside the room's volume counts,
+		/// whatever shape that volume is - stated directly (2026-08-29) after a dormer's walls
+		/// were found to be clipped at the ceiling plane despite the room's own Upper Limit
+		/// having been raised to include them, and a matching hole confirmed in the ceiling's
+		/// own area (355,53 sq ft measured against a 363,1 sq ft bounding rectangle - a 7,57
+		/// sq ft shortfall against the dormer's ~7,75 sq ft interior footprint).
+		///
+		/// SCOPED TO Ceiling ONLY, NOT Floor OR Roof overheads. A Ceiling is the one tier where
+		/// a real, deliberate architectural opening in an otherwise-covering element is a normal
+		/// thing to model. Extending this to every overhead kind would search past a Floor or
+		/// Roof answer too, on far thinner justification.
+		/// </summary>
+		public bool MeasureThroughCeilingGaps { get; set; } = true;
+
 		public double FloorSearchDepthFt { get; } = 4.0;
 
 		public MaterialFunctionAssignment TargetWallLayerFunction { get; set; } = MaterialFunctionAssignment.Finish2;
@@ -1919,6 +2006,35 @@ namespace PaintedMaterialTakeoff.Model
 		public bool IncludeInteriorSlabTopFaces { get; set; } = true;
 
 		public bool DeductOccludedWallArea { get; set; } = true;
+
+		/// <summary>
+		/// Measure the wall STANDING BEHIND a boundary segment whose own wall does not reach the
+		/// room's full height.
+		///
+		/// THE CASE THIS EXISTS FOR - a thin wall face-aligned onto a bigger wall and JOINED to
+		/// it, so the join carves the thin wall's footprint out of the host and the thin wall
+		/// takes a different paint material. Revit re-routes the room boundary onto the thin
+		/// wall for that stretch, so the segment's ElementId is the THIN wall. Process() then
+		/// measures only the thin wall's solid - and the host wall's face ABOVE and BELOW the
+		/// thin patch, which is still bare host wall facing this room, is measured by nothing at
+		/// all. It is not deducted on purpose and not reported as excluded; it simply never
+		/// appears, because a room boundary names one element per stretch and that element was
+		/// the patch.
+		///
+		/// Measured on FM_Template, room Bad, segment 0.1: thin wall 29334759 ("121", 4 mm,
+		/// 0,56 m long, 0,693 m tall) sits on host 29307639. Segment slice is 0,56 x 2,75 =
+		/// 1,54 m²; the thin wall answers for 0,388 m² of it; the remaining 1,152 m² of host
+		/// face is absent from every row in the takeoff.
+		///
+		/// WHY IT IS SAFE AGAINST DOUBLE COUNTING. Room boundary segments partition the room
+		/// perimeter - each plan stretch belongs to exactly one segment - and the probe is built
+		/// from this segment's own curve with ProbeEndOvershootFt = 0, so it cannot reach into a
+		/// neighbouring segment's stretch. The host's own segment elsewhere on the same wall
+		/// covers a different stretch and is unaffected. The host geometry read here already has
+		/// the join notch removed by Revit, so the patch's own footprint is absent from it and
+		/// cannot be counted twice.
+		/// </summary>
+		public bool MeasureWallsBehindShortSegments { get; set; } = true;
 
 		public double OcclusionLayerFt { get; } = 0.05;
 
@@ -2377,6 +2493,22 @@ namespace PaintedMaterialTakeoff.Export
 					parameters.WriteText(directShape, "Paint Layer", record.LayerLabel);
 					parameters.WriteText(directShape, "Paint Status", Truncate(record.Status, 250));
 					parameters.WriteText(directShape, "Paint As Paint", (record.MaterialId == ElementId.InvalidElementId) ? "" : (record.AsPaint ? "Yes" : "No"));
+
+					// THE ONE PARAMETER THIS METHOD NEVER WROTE. 'Paint Host Id' is bound to
+					// every carrier and read by consumers - PaintHighlight.ResolveTakeoffRow's
+					// forward lookup, and Cda.Revit.Addin's ModelToScheduleSync building its
+					// reverse index from it - but nothing in this class ever put a value in it.
+					// record.ElementId IS the host: every PaintRecord constructor in this file
+					// sets it to the wall/floor/ceiling this row was measured against (wall.Id,
+					// host.Id, behind.Id), so it does not need deriving here, only writing.
+					// InvalidElementId writes empty text rather than "-1", matching how every
+					// other id-shaped field in this class (the CSV's own Element Id column,
+					// SurfaceKey) already spells "no host for this row".
+					parameters.WriteText(directShape, "Paint Host Id",
+						(record.ElementId == ElementId.InvalidElementId)
+							? ""
+							: record.ElementId.Value.ToString(CultureInfo.InvariantCulture));
+
 					Parameter parameter2 = ((Element)directShape).get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
 					if (parameter2 != null && !parameter2.IsReadOnly && !string.IsNullOrWhiteSpace(record.Notes))
 					{
@@ -2641,6 +2773,67 @@ namespace PaintedMaterialTakeoff.Export
 				return value;
 			}
 			return "\"" + value.Replace("\"", "\"\"") + "\"";
+		}
+
+		private static string Sanitize(string name)
+		{
+			char[] invalidFileNameChars = Path.GetInvalidFileNameChars();
+			foreach (char oldChar in invalidFileNameChars)
+			{
+				name = name.Replace(oldChar, '_');
+			}
+			return name;
+		}
+	}
+
+	/// <summary>
+	/// Writes the run's own Warnings list to a plain text file beside the CSV.
+	///
+	/// WHY THIS HAS TO EXIST: THIS TOOL HAS NO PERSISTENT LOG. Every diagnostic message this
+	/// class builds up (room-by-room notes, the CeilingGap trace, anything RoomEnvelope or
+	/// SegmentElementWriter added) previously reached exactly one place - the results
+	/// TaskDialog shown once, in the Revit session, and gone the moment it closes. Confirmed
+	/// live (2026-08-29): a CSV from the very run that produced fresh Warnings carried none of
+	/// them, and there was no way to recover what the dialog had said after the fact. Every
+	/// other diagnostic channel in this product's sibling add-in writes to disk for exactly
+	/// this reason; this one write brings CeilingGap's trace in line with that.
+	///
+	/// PLAIN TEXT, NOT CSV. Warnings are prose, one thought per line, sometimes containing
+	/// commas and semicolons of their own - forcing them through CsvExporter's escaping for a
+	/// file nobody schedules or pivots would be work with no reader.
+	/// </summary>
+	internal static class WarningsExporter
+	{
+		public static string? Write(Document doc, IReadOnlyList<string> warnings, TakeoffSettings s)
+		{
+			if (warnings.Count == 0)
+			{
+				return null;
+			}
+			string path = ResolveFolder(doc);
+			string value = (string.IsNullOrWhiteSpace(doc.Title) ? "Model" : Sanitize(doc.Title));
+			string text = Path.Combine(path, $"PaintTakeoff_{value}_Warnings_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+			File.WriteAllLines(text, warnings, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+			return text;
+		}
+
+		private static string ResolveFolder(Document doc)
+		{
+			try
+			{
+				if (!string.IsNullOrWhiteSpace(doc.PathName))
+				{
+					string directoryName = Path.GetDirectoryName(doc.PathName);
+					if (!string.IsNullOrWhiteSpace(directoryName) && Directory.Exists(directoryName))
+					{
+						return directoryName;
+					}
+				}
+			}
+			catch
+			{
+			}
+			return Environment.GetFolderPath(Environment.SpecialFolder.Personal);
 		}
 
 		private static string Sanitize(string name)
@@ -3349,6 +3542,60 @@ namespace PaintedMaterialTakeoff.Core
 			return num * 0.5;
 		}
 
+		/// <summary>
+		/// XY-only containment against a room's own footprint, ignoring Z entirely. Even-odd
+		/// ray-casting, XORed across every loop in <paramref name="profile"/> so a hole (a light
+		/// shaft, a stair opening) correctly excludes itself without any special-casing.
+		///
+		/// WHY THIS EXISTS NEXT TO Room.IsPointInRoom, NOT INSTEAD OF IT: IsPointInRoom tests a
+		/// point against the room's own computed 3D volume, which stops at whatever the room
+		/// hits first going up - normally its ceiling. That is exactly right for arbitrating
+		/// between two rooms sharing a boundary (see the call site's own comment), and exactly
+		/// wrong above a ceiling gap: a dormer wall's face there is genuinely inside the room's
+		/// footprint, but sits above the room's native volume through no fault of the paint, so
+		/// IsPointInRoom reads it as "not in room" and the face is lost. This method answers the
+		/// only question that still makes sense that high up - is the point over the room's own
+		/// plan, at all - and leaves height to whatever clip prism the caller already built.
+		/// </summary>
+		public static bool PointInProfileXY(IEnumerable<CurveLoop> profile, XYZ point)
+		{
+			bool inside = false;
+			double px = point.X;
+			double py = point.Y;
+			foreach (CurveLoop loop in profile)
+			{
+				XYZ first = null;
+				XYZ prev = null;
+				foreach (Curve curve in loop)
+				{
+					foreach (XYZ p in curve.Tessellate())
+					{
+						if (prev != null && CrossesRay(prev, p, px, py))
+						{
+							inside = !inside;
+						}
+						first ??= p;
+						prev = p;
+					}
+				}
+				if (prev != null && first != null && (prev.X != first.X || prev.Y != first.Y) && CrossesRay(prev, first, px, py))
+				{
+					inside = !inside;
+				}
+			}
+			return inside;
+		}
+
+		private static bool CrossesRay(XYZ a, XYZ b, double px, double py)
+		{
+			if ((a.Y > py) == (b.Y > py))
+			{
+				return false;
+			}
+			double num = a.X + (py - a.Y) / (b.Y - a.Y) * (b.X - a.X);
+			return px < num;
+		}
+
 		public static List<CurveLoop> NormalizeProfile(IEnumerable<CurveLoop> loops, double z)
 		{
 			List<(CurveLoop, double, double)> list = new List<(CurveLoop, double, double)>();
@@ -3710,6 +3957,35 @@ namespace PaintedMaterialTakeoff.Core
 			return num;
 		}
 
+		/// <summary>
+		/// Total area of the faces pointing along <paramref name="dir"/> - the room-facing side
+		/// of a ceiling or floor. Used either side of the occluder trim to measure what the trim
+		/// actually removed.
+		///
+		/// The same normal and minimum-area tests the measurement pass itself uses, so the
+		/// before/after difference is expressed in the same currency as the net area it is
+		/// reported beside. It deliberately does NOT apply the proximity or material filters:
+		/// those decide which faces are BILLED, and a wall covering a face that was never going
+		/// to be billed has occluded nothing worth reporting.
+		/// </summary>
+		private double FacingArea(List<Solid> solids, XYZ dir)
+		{
+			double total = 0.0;
+			foreach (Face face in GeometryUtil.Faces(solids))
+			{
+				if (face.Area <= _s.MinFaceAreaSqFt)
+				{
+					continue;
+				}
+				XYZ normal = GeometryUtil.FaceNormal(face);
+				if (normal != null && !(normal.DotProduct(dir) < _s.FaceNormalDot))
+				{
+					total += face.Area;
+				}
+			}
+			return total;
+		}
+
 		public IEnumerable<PaintRecord> Floors(RoomEnvelope env)
 		{
 			if (env.FloorsBelow.Count == 0)
@@ -3790,6 +4066,51 @@ namespace PaintedMaterialTakeoff.Core
 					list.Add(solid);
 				}
 			}
+			// THE RULE: where a ceiling and a wall intersect, that part of the ceiling is wall,
+			// not ceiling, and belongs in neither the area nor the drawn surface.
+			//
+			// SUBTRACTED FROM THE GEOMETRY, not from the total afterwards. This used to be pure
+			// arithmetic: OccludedArea() produced a figure and every material bucket was scaled
+			// by (area - occluded) / area. That got the room total right and two other things
+			// wrong. The carrier kept the UNTRIMMED shape - Shape is built from these faces -
+			// so the surface drawn in the view ran straight through the hanging wall while the
+			// number beside it said otherwise. And a ceiling carrying two materials had the
+			// deduction smeared across both in proportion, even where the wall covered only
+			// one of them, so both material rows were wrong while the total looked right.
+			//
+			// Trimming the solid fixes all three at once, because the area, the shape and the
+			// per-material split are then read from the same geometry and cannot disagree.
+			//
+			// FAIL-SAFE: TryBoolean returns null when it cannot evaluate, and the solid is then
+			// left exactly as it was - so a boolean that fails costs the deduction, never the
+			// surface.
+			double trimmedAwaySqFt = 0.0;
+			if (_occluders.Count > 0 && _s.DeductOccludedWallArea)
+			{
+				// MEASURED BEFORE AND AFTER, so the figure reported as 'Occluded [m2]' is the
+				// deduction that was ACTUALLY made rather than a second, independent estimate of
+				// it. The two disagreed badly on the first real run - the thin-layer probe said
+				// 0.22 m2 while the boolean removed 0.60 - because the probe only caught the
+				// hanging wall and the trim correctly caught the four lightwell walls crossing
+				// the same ceiling as well. A takeoff whose audit column cannot be reconciled
+				// against its own net area is worse than one with no audit column.
+				double before = FacingArea(list, xYZ);
+				for (int i = 0; i < list.Count; i++)
+				{
+					foreach (Element occluder in _occluders)
+					{
+						foreach (Solid cutter in GeometryUtil.GetSolids(occluder, _s.MinSolidVolumeCuFt))
+						{
+							Solid trimmed = GeometryUtil.TryBoolean(list[i], cutter, BooleanOperationsType.Difference, _s.MinSolidVolumeCuFt);
+							if ((object)trimmed != null)
+							{
+								list[i] = trimmed;
+							}
+						}
+					}
+				}
+				trimmedAwaySqFt = Math.Max(before - FacingArea(list, xYZ), 0.0);
+			}
 			if (list.Count == 0)
 			{
 				yield break;
@@ -3853,21 +4174,14 @@ namespace PaintedMaterialTakeoff.Core
 					}
 				}
 			}
-			double num3 = OccludedArea(env, upward ? env.ZBottom : env.ZTop, !upward);
-			double occludedApplied = 0.0;
-			if (num3 > _s.MinFaceAreaSqFt)
-			{
-				double num4 = dictionary.Values.Sum((MaterialBucket b) => b.Area);
-				if (num4 > _s.MinFaceAreaSqFt)
-				{
-					occludedApplied = Math.Min(num3, num4);
-					double num5 = (num4 - occludedApplied) / num4;
-					foreach (MaterialBucket value3 in dictionary.Values)
-					{
-						value3.Area *= num5;
-					}
-				}
-			}
+			// REPORTED ONLY - NO LONGER APPLIED, and that is the whole point of the change above.
+			// The solids were trimmed before their faces were measured, so every bucket's Area
+			// already excludes the wall. Scaling them here as well would deduct the same wall a
+			// second time, which is the one way this change could quietly under-report.
+			//
+			// It is the area the trim actually removed, not OccludedArea's separate estimate of
+			// it, so 'nominal - occluded' reconciles against the net area a reader can see.
+			double occludedApplied = ((trimmedAwaySqFt > _s.MinFaceAreaSqFt) ? trimmedAwaySqFt : 0.0);
 			foreach (MaterialBucket value4 in dictionary.Values)
 			{
 				FaceMaterial material2 = value4.Material;
@@ -3979,7 +4293,12 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				return new List<Element>();
 			}
-			double num = env.ZTop - env.ZBottom;
+			// Reaches past the ceiling and up to whatever is really overhead when this room has
+			// a ceiling gap - a dormer's own walls start AT the ceiling and are never part of
+			// any room boundary segment, so this search prism is the only path that ever finds
+			// them. See TakeoffSettings.MeasureThroughCeilingGaps and RoomEnvelope.GapZTop.
+			double num3 = env.HasCeilingGap ? Math.Max(env.ZTop, env.GapZTop) : env.ZTop;
+			double num = num3 - env.ZBottom;
 			if (num <= 0.1)
 			{
 				return new List<Element>();
@@ -3999,10 +4318,40 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				excluded.Add(overheadElement.Id.Value);
 			}
+
+			// TEMPORARY DIAGNOSTIC (2026-08-29) - same investigation as ResolveCeilingGap's.
+			// Reports the raw collector count for a gap room BEFORE the excluded/RoomBounding/
+			// curtain filters run, so a wall that disappears in one of those filters is
+			// distinguishable from one the BoundingBoxIntersectsFilter never found at all.
+			if (env.HasCeilingGap)
+			{
+				List<Element> raw = new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(list)).WhereElementIsNotElementType().WherePasses(new BoundingBoxIntersectsFilter(outline)).ToElements().ToList();
+				env.Warnings.Add($"[CeilingGap {env.RoomNumber} '{env.RoomName}'] search prism height={GeometryUtil.ToM(num):0.###} m (to Z={GeometryUtil.ToM(num3):0.###} m). " + $"Raw collector: {raw.Count} element(s) [{string.Join(",", raw.Select(e => e.Id.Value))}]. " + $"Excluded ids: [{string.Join(",", excluded)}].");
+			}
+
+			// ROOM BOUNDING IS NOT ASKED ABOUT HERE, DELIBERATELY (2026-09-08).
+			//
+			// This method finds elements INTERIOR to a room - a mezzanine slab standing inside
+			// it, a hanging wall dropping into it. Those are, by definition, not part of the
+			// room's boundary, and unchecking Room Bounding is how they are modelled so the
+			// room's volume stays whole. Filtering on IsRoomBounding therefore discarded
+			// exactly the elements this search exists to find, and the filter contradicted the
+			// method's own name.
+			//
+			// MEASURED ON FM_Template, not reasoned about: mezzanine floor 29321329 carries
+			// 12.25 m2 of deck and hanging wall 29330864 carries 1.87 m2 of face. Both reached
+			// this prism and were then dropped here, so no carrier was ever generated for them
+			// and neither appeared in the schedule. The room-bounding half of the pass had
+			// already measured the mezzanine's UNDERSIDE as a ceiling, which is why the loss
+			// showed up as a missing floor rather than as a missing element.
+			//
+			// NOTHING IS WEAKENED BY REMOVING IT. Boundary walls, the floors below and the
+			// overhead elements are all removed through `excluded` a few lines above, so an
+			// element the boundary pass already measured still cannot be counted twice here.
 			return (from e in (from e in new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(list)).WhereElementIsNotElementType().WherePasses(new BoundingBoxIntersectsFilter(outline))
 						.ToElements()
 					where !excluded.Contains(e.Id.Value)
-					select e).Where(RoomBounding.IsRoomBounding)
+					select e)
 				where !(e is Wall wall) || wall.CurtainGrid == null
 				select e).ToList();
 		}
@@ -4023,6 +4372,45 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				yield break;
 			}
+
+			// THE GAP EXTENSION IS A COLUMN, NOT A ROOM-WIDE RAISE.
+			//
+			// This used to build the WHOLE clip at Max(ZTop, GapZTop) - one height for every
+			// interior element in the room, wherever it stood. A room's ceiling gap is a
+			// specific, usually small, patch of the plan; a hanging wall standing anywhere
+			// else in that same room has no gap above it and its own real ceiling is still
+			// ZTop. Raising the whole room let a bulkhead metres away from the gap keep every
+			// millimetre of its own height, including the part above the FINISHED ceiling -
+			// the same plenum void a boundary wall's paint area already correctly stops at.
+			//
+			// The fix mirrors WallSegmentCalculator.RestoreCeilingGap exactly: the base clip
+			// stays at the true ceiling everywhere, and only the gap's own plan footprint - no
+			// more - gets a taller column unioned in, up to where the room is genuinely capped
+			// there.
+			if (env.HasCeilingGap && (object)env.GapFootprint != null)
+			{
+				// TEMPORARY (2026-09-03) - the overlap fix did not move clip volume at all
+				// between runs (846.4914 cu ft identically, before and after), which means
+				// either GapColumn itself is returning null/empty, or the Union with it is
+				// failing - the earlier diagnostic never distinguished the two. This does.
+				double baseVolume = clip.Volume;
+				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, _s.InteriorClipOutsetFt);
+				string gapColumnNote = (object)gapColumn == null
+					? "GapColumn returned null"
+					: $"GapColumn volume={gapColumn.Volume:0.########} cu ft";
+				env.Warnings.Add($"[UnionDiag {env.RoomNumber} '{env.RoomName}'] base clip volume={baseVolume:0.####} cu ft. {gapColumnNote}.");
+				if ((object)gapColumn != null)
+				{
+					Solid unioned = GeometryUtil.TryBoolean(clip, gapColumn, BooleanOperationsType.Union, _s.MinSolidVolumeCuFt);
+					env.Warnings.Add($"[UnionDiag {env.RoomNumber} '{env.RoomName}'] Union(clip, gapColumn) = " +
+						$"{((object)unioned == null ? "null" : $"volume={unioned.Volume:0.####} cu ft")}.");
+					if ((object)unioned != null)
+					{
+						clip = unioned;
+					}
+				}
+			}
+
 			foreach (Element interiorElement in interiorElements)
 			{
 				foreach (PaintRecord item in Measure(env, interiorElement, clip))
@@ -4035,6 +4423,20 @@ namespace PaintedMaterialTakeoff.Core
 		private IEnumerable<PaintRecord> Measure(RoomEnvelope env, Element element, Solid clip)
 		{
 			List<Solid> solids = GeometryUtil.GetSolids(element, _s.MinSolidVolumeCuFt);
+
+			// TEMPORARY (2026-09-03) - a fourth attempt at the same shaft/turret walls
+			// (29336568-71) still produced no row. Rather than a fifth hypothesis, this logs
+			// exactly where each of THIS element's faces drops out, whenever the room has a
+			// ceiling gap. Remove once the cause is confirmed.
+			bool diag = env.HasCeilingGap;
+			if (diag)
+			{
+				XYZ clipBox = (object)clip != null ? GeometryUtil.OutlineOf(clip)?.MinimumPoint : null;
+				XYZ clipBoxMax = (object)clip != null ? GeometryUtil.OutlineOf(clip)?.MaximumPoint : null;
+				env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value}: " +
+					$"GetSolids returned {solids.Count} solid(s). clip volume={((object)clip != null ? clip.Volume : -1):0.####} cu ft, " +
+					$"clip box=[{(clipBox != null ? $"{clipBox.X:0.##},{clipBox.Y:0.##},{clipBox.Z:0.##}" : "null")}]..[{(clipBoxMax != null ? $"{clipBoxMax.X:0.##},{clipBoxMax.Y:0.##},{clipBoxMax.Z:0.##}" : "null")}].");
+			}
 			if (solids.Count == 0)
 			{
 				yield break;
@@ -4042,10 +4444,26 @@ namespace PaintedMaterialTakeoff.Core
 			bool isWall = element is Wall;
 			List<Face> list = GeometryUtil.FacesWithRegions(solids).ToList();
 			Dictionary<(long, FaceRole), MaterialBucket> dictionary = new Dictionary<(long, FaceRole), MaterialBucket>();
+
+			if (diag)
+			{
+				env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value}: {list.Count} face(s) with regions found.");
+			}
+
+			// TEMPORARY. Three fixes for the Bad/Køkken mezzanine sliver have now been deployed
+			// and none removed the row, so the next change will be based on what this reports
+			// rather than on another hypothesis. Remove once the cause is known.
+			Dictionary<(long, FaceRole), string> diagnostics = new Dictionary<(long, FaceRole), string>();
+			int faceIndexDiag = -1;
 			foreach (Face item2 in list)
 			{
+				faceIndexDiag++;
 				if (item2.Area <= _s.MinFaceAreaSqFt)
 				{
+					if (diag)
+					{
+						env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: area {GeometryUtil.ToSqM(item2.Area):0.####}m2 <= MinFaceAreaSqFt, skipped.");
+					}
 					continue;
 				}
 				XYZ xYZ = GeometryUtil.FaceNormal(item2);
@@ -4057,6 +4475,10 @@ namespace PaintedMaterialTakeoff.Core
 				bool flag = !GeometryUtil.FaceBelongsToRoomBelow(xYZ.Z);
 				if (flag && (isWall || !_s.IncludeInteriorSlabTopFaces))
 				{
+					if (diag)
+					{
+						env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: normal=({xYZ.X:0.###},{xYZ.Y:0.###},{xYZ.Z:0.###}) area={GeometryUtil.ToSqM(item2.Area):0.####}m2 - excluded as a wall's own top/upward face.");
+					}
 					continue;
 				}
 				bool flag2 = !flag && GeometryUtil.FaceIsDownward(xYZ.Z) && xYZ2.Z > env.ZBottom + _s.HeadMinHeightFt;
@@ -4065,13 +4487,173 @@ namespace PaintedMaterialTakeoff.Core
 				FaceMaterial material = _materials.Resolve(element, hostFace);
 				if (_s.PaintedFacesOnly && !material.AsPaint)
 				{
+					if (diag)
+					{
+						env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: material '{material.Name}' AsPaint=false, PaintedFacesOnly is on - excluded.");
+					}
 					continue;
 				}
-				double num = ClippedFaceArea(item2, xYZ, clip);
-				if (num <= _s.MinFaceAreaSqFt)
+				Solid clipped = ClippedFaceSolid(item2, xYZ, clip);
+				if (diag)
+				{
+					XYZ faceCentre = GeometryUtil.FaceCenter(item2);
+					env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: role={faceRole} " +
+						$"centre=({(faceCentre != null ? $"{faceCentre.X:0.###},{faceCentre.Y:0.###},{faceCentre.Z:0.###}" : "null")}) " +
+						$"faceArea={GeometryUtil.ToSqM(item2.Area):0.####}m2 clippedVolume={((object)clipped != null ? clipped.Volume : -1):0.########} " +
+						$"clippedArea={((object)clipped != null ? GeometryUtil.ToSqM(clipped.Volume / _s.SkinThicknessFt) : -1):0.####}m2.");
+
+					// TEMPORARY (2026-09-03) - the union is now confirmed valid (its own
+					// volume matches base+column-overlap exactly), yet ClippedFaceSolid still
+					// returns null for these faces. This splits its two internal steps apart
+					// to find out which one actually fails: the thin plate built from the
+					// face's own edges, or the intersect of that plate against clip.
+					if ((object)clipped == null)
+					{
+						Solid diagPlate = GeometryUtil.TryPlate(item2, -xYZ, _s.SkinThicknessFt);
+						if ((object)diagPlate == null)
+						{
+							env.Warnings.Add($"[ClipDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: TryPlate itself returned null.");
+						}
+						else
+						{
+							bool clipContainsPlateBox = false;
+							try
+							{
+								Outline plateBox = GeometryUtil.OutlineOf(diagPlate);
+								Outline clipBox = GeometryUtil.OutlineOf(clip);
+								clipContainsPlateBox = plateBox != null && clipBox != null &&
+									plateBox.MinimumPoint.X >= clipBox.MinimumPoint.X - 0.01 && plateBox.MaximumPoint.X <= clipBox.MaximumPoint.X + 0.01 &&
+									plateBox.MinimumPoint.Y >= clipBox.MinimumPoint.Y - 0.01 && plateBox.MaximumPoint.Y <= clipBox.MaximumPoint.Y + 0.01 &&
+									plateBox.MinimumPoint.Z >= clipBox.MinimumPoint.Z - 0.01 && plateBox.MaximumPoint.Z <= clipBox.MaximumPoint.Z + 0.01;
+							}
+							catch
+							{
+							}
+							env.Warnings.Add($"[ClipDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: " +
+								$"plate built OK, volume={diagPlate.Volume:0.########} cu ft, plate box within clip box (by outline)={clipContainsPlateBox}. " +
+								"The Intersect(plate, clip) step is what returned null.");
+						}
+					}
+				}
+				if ((object)clipped == null)
 				{
 					continue;
 				}
+				double num = clipped.Volume / _s.SkinThicknessFt;
+				if (num <= _s.MinFaceAreaSqFt)
+				{
+					if (diag)
+					{
+						env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: clipped area {GeometryUtil.ToSqM(num):0.####}m2 <= MinFaceAreaSqFt, excluded.");
+					}
+					continue;
+				}
+
+				// THE CLIPPED PORTION DECIDES, AND ITS CENTROID IS WHERE IT LIVES.
+				//
+				// `clip` is deliberately larger than the room - Process() outsets the profile
+				// by InteriorClipOutsetFt (0,02 ft, 6,1 mm) so an element standing flush ON the
+				// boundary is not missed by an exact-fit clip. The cost is that anything just
+				// OUTSIDE the room intersects it too and is reported as if it were inside.
+				//
+				// Measured in FM_Template: the mezzanine slab edge on 29311004 sits wholly
+				// inside Køkken (0,44 m²) but its edge is coincident with the Køkken/Bad
+				// boundary at X=-72,95, so Bad picked up 0,001 m² - the slab edge's height
+				// times 6,1 mm, the outset itself, to the millimetre.
+				//
+				// TWO EARLIER ATTEMPTS FAILED AND ARE WORTH NOT REPEATING:
+				//   - probing the FACE's centre: that is the same point whichever room is
+				//     asking, so it gives both rooms the same answer and discriminates nothing.
+				//   - re-measuring against an un-outset prism: it did not change the result,
+				//     most likely because the raw profile will not extrude and the code fell
+				//     back to the outset clip.
+				//
+				// What belongs to a room is the CLIPPED SOLID, and ClippedFaceArea was already
+				// building it and throwing it away to return a number - the same waste that hid
+				// the carrier bug. Kept now, its centroid is a point genuinely inside the part
+				// that lies in this room, and IsPointInRoom on THAT discriminates: Bad's sliver
+				// centres 3 mm outside Bad, Køkken's centres well inside Køkken.
+				//
+				// Undecidable keeps the face: losing real paint is worse than a rare sliver.
+				XYZ where = null;
+				string centroidNote = "centroid=none";
+				try
+				{
+					where = clipped.ComputeCentroid();
+				}
+				catch (Exception ex)
+				{
+					centroidNote = "centroid threw: " + ex.Message;
+				}
+				if (where != null)
+				{
+					bool insideRoom;
+					string verdict;
+					try
+					{
+						// Above the room's own native volume (only reachable when the caller's
+						// clip searched taller than that - the ceiling-gap extension), IsPointInRoom
+						// tests against a volume that stops at the ceiling and would reject every
+						// dormer face on principle, not on merit. Fall back to an XY-only test
+						// against the room's own footprint there; the clip already got the height
+						// right. See GeometryUtil.PointInProfileXY's doc for the full reasoning.
+						if (where.Z > env.ZProbeTop + 0.01)
+						{
+							insideRoom = GeometryUtil.PointInProfileXY(env.Profile, where);
+							verdict = insideRoom ? "inRoom(gap-XY)=TRUE" : "inRoom(gap-XY)=FALSE";
+						}
+						else
+						{
+							insideRoom = env.Room.IsPointInRoom(where);
+							verdict = insideRoom ? "inRoom=TRUE" : "inRoom=FALSE";
+
+							// THE SAME XY-ONLY FALLBACK AS THE GAP CASE ABOVE, NOT JUST FOR IT.
+							//
+							// Confirmed on the Køkken mezzanine platform (element 29317163):
+							// IsPointInRoom returned false for BOTH its top and underside centroids
+							// - (-71.379,32.93,-8.21) and (-71.379,32.93,-8.85) - though both sit
+							// well inside Køkken's plan footprint and comfortably inside its
+							// computed Z range (base -13.12 ft, top ~+3.6 ft), and neither is near
+							// the level's Room Computation Height (-9.19 ft here, clear of both).
+							// Every mezzanine and mezzanine soffit measured through this path is
+							// exactly this shape: a small internal slab whose faces sit deep inside
+							// a tall room, which is the case IsPointInRoom apparently cannot always
+							// be trusted for. `clipped` was already built by intersecting this face
+							// against `clip` - a solid extruded from THIS room's own boundary loop
+							// (env.Profile) - so surviving that with real volume is already strong
+							// evidence the point belongs here, the same reasoning that already made
+							// PointInProfileXY the preferred test above ZProbeTop. Only reached when
+							// IsPointInRoom said no, so it costs nothing when the two agree - which
+							// is every ordinary case.
+							if (!insideRoom && GeometryUtil.PointInProfileXY(env.Profile, where))
+							{
+								insideRoom = true;
+								verdict = "inRoom=FALSE, inRoom(xy-fallback)=TRUE";
+							}
+						}
+					}
+					catch (Exception ex)
+					{
+						insideRoom = true;
+						verdict = "inRoom threw: " + ex.Message;
+					}
+					centroidNote = $"centroid=({where.X:0.###},{where.Y:0.###},{where.Z:0.###}) {verdict}";
+					if (diag)
+					{
+						env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: {centroidNote} " +
+							$"(ZProbeTop={GeometryUtil.ToM(env.ZProbeTop):0.###}m).");
+					}
+					if (!insideRoom)
+					{
+						continue;
+					}
+				}
+				else if (diag)
+				{
+					env.Warnings.Add($"[MeasureDiag {env.RoomNumber} '{env.RoomName}'] element {element.Id.Value} face#{faceIndexDiag}: {centroidNote} - kept (undecidable is kept, not excluded).");
+				}
+				diagnostics[(material.MaterialId.Value, faceRole)] =
+					$"[DIAG face={GeometryUtil.ToSqM(item2.Area):0.####}m2 clipped={GeometryUtil.ToSqM(num):0.####}m2 {centroidNote}]";
 				(long, FaceRole) key = (material.MaterialId.Value, faceRole);
 				if (!dictionary.TryGetValue(key, out var value))
 				{
@@ -4083,10 +4665,21 @@ namespace PaintedMaterialTakeoff.Core
 				value.Area += num;
 				if (_s.CreateSegmentElements)
 				{
-					GeometryObject geometryObject = GeometryUtil.TrySkin(item2, -xYZ, _s.SkinThicknessFt);
-					if ((object)geometryObject != null)
+					// CLIPPED, NOT RESKINNED FROM THE ELEMENT'S OWN FACE.
+					//
+					// `clipped` is already sitting right above this line - the exact solid the
+					// AREA was measured from, already bounded by `clip` (the room's own search
+					// prism, ceiling- and gap-aware). Re-skinning `item2` here instead threw
+					// that away and rebuilt the shape from the element's RAW, UNCLIPPED face -
+					// so a hanging wall that is a full-height structural wall running through
+					// several storeys got a carrier as tall as the wall itself, poking through
+					// the ceiling into the room above, while the NUMBER two lines up had
+					// already been measured correctly. Same class of bug as RegionClip's own
+					// unclipped probe: the area and the shape were answering two different
+					// questions.
+					if ((object)clipped != null)
 					{
-						value.Shape.Add(geometryObject);
+						value.Shape.Add(clipped);
 					}
 				}
 			}
@@ -4101,6 +4694,7 @@ namespace PaintedMaterialTakeoff.Core
 					bool flag3 = !isWall && item == FaceRole.Underside;
 					bool flag4 = !isWall && item == FaceRole.Top;
 					string notes = (flag3 ? "Underside of an overhead floor slab, reported as the room's ceiling surface: in construction this face is the ceiling of the space below. Found geometrically because Revit's plan slice at the Room Computation Height does not reach a slab inside the room, so it never appears in the room boundary." : (flag4 ? "Top of a mezzanine slab inside this room — its walking surface. Strictly this deck belongs to the space above, and it is charged to this room only because no Room is placed on the mezzanine, which would otherwise leave its painted floor finish belonging to nothing. Place a Room on the mezzanine to have it reported there instead." : ((isWall ? "Wall" : "Slab") + " standing inside the room but absent from its boundary — Revit's plan slice at the Room Computation Height does not reach it. Measured geometrically against the room volume.")));
+					notes = notes + " " + (diagnostics.TryGetValue(key2, out var diagnostic) ? diagnostic : "[DIAG none]");
 					yield return new PaintRecord
 					{
 						RoomName = env.RoomName,
@@ -4133,18 +4727,137 @@ namespace PaintedMaterialTakeoff.Core
 
 		private double ClippedFaceArea(Face face, XYZ normal, Solid clip)
 		{
-			double skinThicknessFt = _s.SkinThicknessFt;
-			Solid solid = GeometryUtil.TryPlate(face, -normal, skinThicknessFt);
+			Solid solid = ClippedFaceSolid(face, normal, clip);
 			if ((object)solid == null)
 			{
 				return 0.0;
 			}
-			Solid solid2 = GeometryUtil.TryBoolean(solid, clip, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt);
-			if ((object)solid2 == null)
+			return solid.Volume / _s.SkinThicknessFt;
+		}
+
+		/// <summary>
+		/// The part of a face that lies inside the clip, AS A SOLID.
+		///
+		/// ClippedFaceArea used to build this and return only its volume, discarding the shape
+		/// - the same waste that hid the carrier-geometry bug for so long. The solid is what
+		/// says WHERE the clipped part is, which is what decides which room owns it; the area
+		/// alone cannot.
+		/// </summary>
+		private Solid? ClippedFaceSolid(Face face, XYZ normal, Solid clip)
+		{
+			Solid plate = GeometryUtil.TryPlate(face, -normal, _s.SkinThicknessFt);
+			if ((object)plate == null)
 			{
-				return 0.0;
+				return null;
 			}
-			return solid2.Volume / skinThicknessFt;
+			return GeometryUtil.TryBoolean(plate, clip, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt);
+		}
+
+		/// <summary>
+		/// A column over the ceiling gap's own plan shape, from the true ceiling up to
+		/// GapZTop - the piece Process() unions into an otherwise ZTop-height clip so the
+		/// taller reach applies only where the gap actually is.
+		///
+		/// BUILT AT AN EXACT Z, NOT AT WHATEVER Z A CHOSEN FACE HAPPENED TO SIT AT. The first
+		/// version picked the wafer's own top face and extruded from there - which is 0,1 ft
+		/// (the wafer's own thickness) ABOVE env.ZTop, not AT it. That left a 0,1 ft seam
+		/// between this column's base and the room-height clip's own top, covered by NEITHER
+		/// solid. For a wall with real height below ZTop that seam is a rounding error lost
+		/// in its bulk; for a hanging wall whose own base sits exactly ON the ceiling and
+		/// rises only into the gap - a shaft or turret wall with nothing below ZTop at all -
+		/// that seam is where its ENTIRE material is, and the union came back empty: the wall
+		/// vanished from the takeoff rather than being under-measured by it. Measured on
+		/// FM_Template: walls 29336568-71 all have their own base at z=-4,101 ft, bit-identical
+		/// to Køkken's ZTop.
+		///
+		/// The fix: take the gap footprint's own plan shape from any of its horizontal faces,
+		/// LIFT its curve loops to exactly env.ZTop via a transform, and extrude from there.
+		/// TryExtrude always goes +Z - no direction to get wrong - so this needs no guess
+		/// about which of the wafer's two faces winds which way, only its shape.
+		///
+		/// A SECOND, DIFFERENT BUG IN THAT SAME FIX, CAUGHT BY LOGGING RATHER THAN GUESSED
+		/// (2026-09-03). "Exactly at env.ZTop" turned out to be exactly the wrong target: this
+		/// column's base then sits FLUSH against the room-height clip's own top, and Union-ing
+		/// two solids that only TOUCH along a coincident plane is a textbook degenerate case
+		/// for a boolean kernel - it can report a plausible volume and bounding box while being
+		/// topologically unreliable for the very next boolean run against it. Every one of
+		/// those four walls' own paintable face came back ClippedFaceSolid=null against
+		/// exactly this clip, confirmed face by face in the Warnings log, with the clip's own
+		/// volume and box both looking entirely normal. Overlapping the two pieces by
+		/// <paramref name="overlap"/> - the same PrismInsetFt this file already uses to avoid
+		/// coincident-boundary problems elsewhere - gives the kernel unambiguous, genuinely
+		/// solid material to union rather than two shells meeting at a knife-edge.
+		/// </summary>
+		private static Solid? GapColumn(RoomEnvelope env, double overlap, double outset)
+		{
+			double height = env.GapZTop - env.ZTop + overlap;
+			if (height <= 0.05 || (object)env.GapFootprint == null)
+			{
+				return null;
+			}
+			List<CurveLoop> loops = new List<CurveLoop>();
+			double? faceZ = null;
+			foreach (Face face in env.GapFootprint.Faces)
+			{
+				XYZ normal = GeometryUtil.FaceNormal(face);
+				if (normal == null || normal.Z <= 0.99)
+				{
+					continue;
+				}
+				XYZ centre = GeometryUtil.FaceCenter(face);
+				if (centre == null)
+				{
+					continue;
+				}
+				IList<CurveLoop> faceLoops;
+				try
+				{
+					faceLoops = face.GetEdgesAsCurveLoops();
+				}
+				catch
+				{
+					continue;
+				}
+				if (faceLoops == null || faceLoops.Count == 0)
+				{
+					continue;
+				}
+				if (!faceZ.HasValue)
+				{
+					faceZ = centre.Z;
+				}
+				loops.AddRange(faceLoops);
+			}
+			if (loops.Count == 0 || !faceZ.HasValue)
+			{
+				return null;
+			}
+			Autodesk.Revit.DB.Transform lift = Autodesk.Revit.DB.Transform.CreateTranslation(new XYZ(0.0, 0.0, env.ZTop - overlap - faceZ.Value));
+			List<CurveLoop> lifted = loops.Select((CurveLoop l) => CurveLoop.CreateViaTransform(l, lift)).ToList();
+
+			// OUTSET LATERALLY, FOR THE SAME REASON Process() OUTSETS THE BASE CLIP - and this
+			// is the actual cause of the shaft walls vanishing, found by splitting
+			// ClippedFaceSolid's two steps apart in the log rather than by reasoning.
+			//
+			// A room's ceiling gap IS the hole cut around whatever stands in it, so the hole's
+			// own edges are those elements' faces. Extruding GapFootprint unchanged puts this
+			// column's vertical sides EXACTLY on the shaft walls' own face planes, and
+			// intersecting a SkinThicknessFt-thin plate that is coplanar with the target
+			// solid's boundary face is the degenerate case Revit's boolean throws on rather
+			// than returning a sliver for. Measured on FM_Template walls 29336568-71: plate
+			// built fine (0,18-0,37 cu ft), its box sat inside the clip's box, and
+			// Intersect(plate, clip) still came back null on every one of them.
+			//
+			// InteriorClipOutsetFt is the tolerance this file already uses for exactly this -
+			// "so an element standing flush ON the boundary is not missed by an exact-fit
+			// clip" - so the column gets it too. It only ever grows the search volume
+			// laterally by 6 mm; what is actually measured is still the wall's own face.
+			if (outset > 0.0)
+			{
+				lifted = GeometryUtil.OutsetProfile(lifted, outset);
+			}
+
+			return GeometryUtil.TryExtrude(lifted, height);
 		}
 
 		private static string LabelFor(bool isWall, FaceRole role)
@@ -4175,6 +4888,13 @@ namespace PaintedMaterialTakeoff.Core
 		public List<GeometryObject> Shape { get; } = new List<GeometryObject>();
 
 		public WallLayerInfo? Layer { get; set; }
+
+		/// <summary>
+		/// Which Split Face region of the parent face this bucket holds, or -1 when the face
+		/// was never split. Part of the bucket key, so two regions sharing a material no
+		/// longer merge; carried here so the row can be labelled R1 / R2.
+		/// </summary>
+		public int RegionIndex { get; set; } = -1;
 
 		public bool IsJamb { get; set; }
 
@@ -4308,6 +5028,8 @@ namespace PaintedMaterialTakeoff.Core
 
 		public string? WallAuditPath { get; set; }
 
+		public string? WarningsPath { get; set; }
+
 		public int SegmentsSeen { get; set; }
 
 		public int SegmentsWithRows { get; set; }
@@ -4392,13 +5114,33 @@ namespace PaintedMaterialTakeoff.Core
 					takeoffResult.RoomsSkipped++;
 					continue;
 				}
-				takeoffResult.Warnings.AddRange(roomEnvelope.Warnings);
 				takeoffResult.RoomsProcessed++;
 				HashSet<long> boundaryWallIds = (from s in roomEnvelope.Loops.SelectMany((IList<BoundarySegment> l) => l)
 					select s.ElementId into id
 					where id != ElementId.InvalidElementId
 					select id.Value).ToHashSet();
 				List<Element> list = InteriorElementCalculator.FindInteriorElements(_doc, roomEnvelope, _s, boundaryWallIds);
+
+				// MOVED PAST FindInteriorElements, NOT LEFT WHERE IT WAS - measured live
+				// (2026-08-29). AddRange snapshots roomEnvelope.Warnings at the point it runs;
+				// FindInteriorElements adds its own diagnostic line to that SAME list
+				// (env.Warnings is the same object), but only after it has finished searching.
+				// Copying immediately after Build() - which is where this used to sit - took the
+				// snapshot before that line existed, so it silently never reached
+				// takeoffResult.Warnings or the Warnings file, on every run since the diagnostic
+				// was added. Nothing downstream reads roomEnvelope.Warnings directly, so moving
+				// the copy costs nothing.
+				takeoffResult.Warnings.AddRange(roomEnvelope.Warnings);
+
+				// AND THE SAME TRAP AGAIN, ONE STAGE LATER (2026-09-03). The note above fixed
+				// the snapshot for FindInteriorElements, but Process() -> Measure() runs LATER
+				// STILL, and anything it adds to this same list after this point was equally
+				// lost. A whole diagnostic pass written to trace why four shaft walls produce
+				// no rows logged perfectly and reached nothing, which reads exactly like a
+				// failed deploy and cost a round of chasing one. The count is remembered here
+				// and whatever Measure appends is harvested after the interior pass below.
+				int warningsHarvested = roomEnvelope.Warnings.Count;
+
 				wallSegmentCalculator.BeginRoom(list);
 				horizontalSurfaceCalculator.BeginRoom(list);
 				int num = 0;
@@ -4442,6 +5184,18 @@ namespace PaintedMaterialTakeoff.Core
 				{
 					takeoffResult.Warnings.Add("Room " + roomEnvelope.RoomNumber + " interior walls: " + ex3.Message);
 				}
+
+				// The second half of the harvest - see the note beside warningsHarvested above.
+				// Everything Measure() appended during the interior pass lands here; without
+				// this it stays in roomEnvelope.Warnings, which nothing downstream reads.
+				if (roomEnvelope.Warnings.Count > warningsHarvested)
+				{
+					for (int w = warningsHarvested; w < roomEnvelope.Warnings.Count; w++)
+					{
+						takeoffResult.Warnings.Add(roomEnvelope.Warnings[w]);
+					}
+				}
+
 				takeoffResult.Records.AddRange(list2);
 				takeoffResult.SegmentsSeen += num;
 				takeoffResult.SegmentsWithRows += hashSet.Count;
@@ -4781,11 +5535,50 @@ namespace PaintedMaterialTakeoff.Core
 
 		public double ZProbeTop { get; private set; }
 
+		/// <summary>
+		/// Hard Z ceiling for overhead candidates - the room's own upper limit. double.MaxValue
+		/// means "no limit", which is both the disabled state and the state before
+		/// ResolveOverhead has run, so every comparison against it passes by default and nothing
+		/// is rejected accidentally. See TakeoffSettings.EnforceRoomUpperLimitOnOverhead.
+		/// </summary>
+		private double _roomTopLimitZ = double.MaxValue;
+
 		public OverheadKind TopSource { get; private set; } = OverheadKind.RoomUpperLimit;
 
 		public List<Element> OverheadElements { get; } = new List<Element>();
 
 		public List<Solid> OverheadSolids { get; } = new List<Solid>();
+
+		/// <summary>
+		/// True when the ceiling found for this room does not cover its whole plan footprint -
+		/// a light shaft or dormer opening. See <see cref="ResolveCeilingGap"/> for how this is
+		/// detected and <see cref="GapZTop"/> for what a caller does with it.
+		/// </summary>
+		public bool HasCeilingGap { get; private set; }
+
+		/// <summary>
+		/// The real overhead above a ceiling gap - a roof, most often - found by continuing the
+		/// search upward from the ceiling, restricted to the gap's own footprint. Meaningless
+		/// unless <see cref="HasCeilingGap"/> is true.
+		///
+		/// DELIBERATELY SEPARATE FROM ZTop, NOT A REPLACEMENT FOR IT. ZTop is still every normal
+		/// boundary wall's clip height - a room's ceiling is its ceiling. This is consulted only
+		/// by callers that specifically search past it, currently
+		/// <see cref="InteriorElementCalculator"/>, whose search prism already has no boundary
+		/// curve to key off and is exactly where a dormer's own walls are found - they start at
+		/// the ceiling and are never part of any room boundary segment in the first place.
+		/// </summary>
+		public double GapZTop { get; private set; }
+
+		/// <summary>
+		/// The gap's own plan shape, as the thin wafer solid ResolveCeilingGap already builds
+		/// to find it - same inset, same precision. Persisted so a caller can restrict a
+		/// restore-height operation to EXACTLY where the ceiling is missing, rather than to a
+		/// bounding rectangle around it (which would extend height onto a wall that stands
+		/// just outside the gap and has a perfectly good ceiling of its own). Null whenever
+		/// <see cref="HasCeilingGap"/> is false.
+		/// </summary>
+		public Solid? GapFootprint { get; private set; }
 
 		public List<Element> FloorsBelow { get; } = new List<Element>();
 
@@ -4835,6 +5628,29 @@ namespace PaintedMaterialTakeoff.Core
 			roomEnvelope.ZBottom = roomEnvelope.ResolveFloorTop(doc, num, s);
 			roomEnvelope.Profile = GeometryUtil.NormalizeProfile(roomEnvelope.Profile, roomEnvelope.ZBottom);
 			roomEnvelope.ResolveOverhead(doc, room, s);
+
+			// EVERY TIER THAT FOUND SOMETHING, NOT JUST Ceiling (2026-09-03).
+			//
+			// This used to read `TopSource == OverheadKind.Ceiling`, so a room capped by a
+			// FLOOR ABOVE or a ROOF was never gap-checked at all - a hole in that slab went
+			// undetected exactly the way a hole in a ceiling did before ResolveCeilingGap
+			// existed. Not hypothetical on this model: Udestue 18, Kælderrum 4 and Alrum 2
+			// are all FloorAbove-capped, so a stairwell or shaft opening in the slab over any
+			// of them would silently under-measure its walls.
+			//
+			// TryTier is category-agnostic - it fills OverheadSolids and sets ZTop the same
+			// way whichever tier won - so ResolveCeilingGap's coverage test (a slab at ZTop
+			// minus the union of OverheadSolids) is already correct for all three.
+			//
+			// RoomUpperLimit MUST stay out, and the OverheadSolids test is what enforces it:
+			// that is the "nothing overhead was found" fallback, where there is nothing to
+			// subtract, so the whole room's plan would come back as one enormous false gap.
+			if (s.MeasureThroughCeilingGaps
+				&& roomEnvelope.TopSource != OverheadKind.RoomUpperLimit
+				&& roomEnvelope.OverheadSolids.Count > 0)
+			{
+				roomEnvelope.ResolveCeilingGap(doc, s);
+			}
 			double height = Math.Max(roomEnvelope.ZProbeTop - roomEnvelope.ZBottom, 0.1);
 			roomEnvelope.Prism = GeometryUtil.TryExtrude(roomEnvelope.Profile, height) ?? GeometryUtil.TryExtrude(GeometryUtil.InsetProfile(roomEnvelope.Profile, s.PrismInsetFt), height);
 			if ((object)roomEnvelope.Prism == null)
@@ -4928,7 +5744,60 @@ namespace PaintedMaterialTakeoff.Core
 		{
 			double unboundedHeight = room.UnboundedHeight;
 			double searchHeight = Math.Min(Math.Max((unboundedHeight > 0.1) ? (unboundedHeight + 0.5) : s.DefaultOverheadSearchFt, s.DefaultOverheadSearchFt), s.MaxOverheadSearchFt);
-			if (!TryTier(doc, s, BuiltInCategory.OST_Ceilings, searchHeight, OverheadKind.Ceiling) && !TryTier(doc, s, BuiltInCategory.OST_Floors, searchHeight, OverheadKind.FloorAbove) && !TryTier(doc, s, BuiltInCategory.OST_Roofs, s.RoofSearchFt, OverheadKind.Roof))
+
+			// The room's own upper limit, as a hard Z ceiling on everything below - see
+			// TakeoffSettings.EnforceRoomUpperLimitOnOverhead for the measured case this fixes.
+			// double.MaxValue when the rule is off, so every comparison against it passes and the
+			// behaviour is byte-for-byte what it was.
+			_roomTopLimitZ = double.MaxValue;
+			if (s.EnforceRoomUpperLimitOnOverhead && unboundedHeight > 0.1)
+			{
+				// +0,5 ft of slack so a slab sitting exactly ON the limit is still accepted; the
+				// storey above is far further away than that, so this cannot re-admit it.
+				_roomTopLimitZ = ZBottom + unboundedHeight + 0.5;
+
+				// The prism is capped too, not just the candidates. Extruding 16 ft through a
+				// slab to then discard what is found is wasted boolean work on every room.
+				searchHeight = Math.Min(searchHeight, unboundedHeight + 0.5);
+			}
+
+			// THE ROOM'S OWN SOLID IS A HARDER LIMIT THAN ITS UNBOUNDED HEIGHT, and using only
+			// the latter let one room's paint climb into the room above it.
+			//
+			// UnboundedHeight is the distance to the room's CONFIGURED Upper Limit, which is
+			// often generous. Revit's computed room solid stops far lower when a slab caps it,
+			// and that solid is what actually says how far up the room reaches.
+			//
+			// Measured in FM_Template 2027V1.00_EN, 2026-09-02. 'Udestue 18' on Kaelder:
+			// ZBottom -13.123 ft, UnboundedHeight 21.123 ft, so the old limit was +8.50 ft - but
+			// its room solid tops at -3.937 ft. The ceiling tier is tried BEFORE the floor tier,
+			// so the search sailed past the slab overhead and took the ceiling of 'Loftrum 13'
+			// on Terraen at +2.461 ft, giving Udestue a 4.75 m clear height instead of 2.80 m.
+			// Its wall carriers then ran the full stack height and overlapped Loftrum's own
+			// carriers exactly: 12.37 m2 across three walls, every square metre billed to two
+			// rooms. Both rooms reported the identical "Ceiling at 0.75 m" for that reason.
+			//
+			// Capping by the solid fixes it without reordering the tiers. Ceiling-before-floor
+			// is right where both are genuinely this room's; the fault was never the order, it
+			// was that a candidate belonging to a DIFFERENT room was in range at all.
+			//
+			// SAME +0,5 ft SLACK, so a ceiling sitting on the room's top face still counts - a
+			// room whose solid is capped by the very ceiling it should measure to must not lose
+			// it to a rounding difference.
+			if (s.EnforceRoomUpperLimitOnOverhead)
+			{
+				double solidTopZ = RoomSolidTopZ(room);
+				if (solidTopZ < double.MaxValue)
+				{
+					_roomTopLimitZ = Math.Min(_roomTopLimitZ, solidTopZ + 0.5);
+
+					// Never below a floor's worth of prism: a degenerate or unreadable solid
+					// must not collapse the search to nothing and silently report no overhead.
+					searchHeight = Math.Min(searchHeight, Math.Max(solidTopZ + 0.5 - ZBottom, 1.0));
+				}
+			}
+
+			if (!TryTier(doc, s, BuiltInCategory.OST_Ceilings, searchHeight, OverheadKind.Ceiling) && !TryTier(doc, s, BuiltInCategory.OST_Floors, searchHeight, OverheadKind.FloorAbove) && !TryTier(doc, s, BuiltInCategory.OST_Roofs, Math.Min(s.RoofSearchFt, (_roomTopLimitZ < double.MaxValue) ? (_roomTopLimitZ - ZBottom) : s.RoofSearchFt), OverheadKind.Roof))
 			{
 				TopSource = OverheadKind.RoomUpperLimit;
 				ZTop = ZBottom + ((unboundedHeight > 0.1) ? unboundedHeight : s.DefaultOverheadSearchFt);
@@ -4936,6 +5805,27 @@ namespace PaintedMaterialTakeoff.Core
 				OverheadIsFlat = true;
 				ZProbeTop = ZTop;
 				Warnings.Add($"Room {RoomNumber} '{RoomName}': no ceiling, slab above or roof found; used the room's Upper Limit ({GeometryUtil.ToM(ZTop - ZBottom):0.###} m clear height).");
+			}
+		}
+
+		/// <summary>
+		/// The top of the room's own computed solid, or double.MaxValue when it cannot be read.
+		///
+		/// The BOUNDING BOX, not the geometry: this is only ever used as an upper bound, a box
+		/// is what Revit already has cached, and a room whose solid is unreadable must fall back
+		/// to "no extra limit" rather than to a wrong one. Null view because the room's extent
+		/// is a model fact - a view-specific box could be cropped and would under-report.
+		/// </summary>
+		private static double RoomSolidTopZ(Room room)
+		{
+			try
+			{
+				BoundingBoxXYZ boundingBox = room.get_BoundingBox(null);
+				return (boundingBox != null) ? boundingBox.Max.Z : double.MaxValue;
+			}
+			catch
+			{
+				return double.MaxValue;
 			}
 		}
 
@@ -4965,6 +5855,17 @@ namespace PaintedMaterialTakeoff.Core
 					if ((object)solid2 != null)
 					{
 						var (item, num) = GeometryUtil.ZRange(solid2);
+
+						// STARTS ABOVE THIS ROOM'S OWN LID, so it belongs to the storey above and
+						// is not this room's overhead however well it intersects the prism. Tested
+						// on ZMin - where the element BEGINS - because a slab spanning the limit
+						// is still this room's ceiling, while one that only starts past it never
+						// is. This is the candidate-level half of the rule; capping the prism
+						// alone would still admit anything the cap's slack reaches.
+						if (item > _roomTopLimitZ)
+						{
+							continue;
+						}
 						if (!(num <= ZBottom + s.MinOverheadClearanceFt))
 						{
 							list.Add((el, solid3, item, num));
@@ -4997,6 +5898,162 @@ namespace PaintedMaterialTakeoff.Core
 			OverheadIsFlat = ZTopHighest - ZTop <= 0.05;
 			ZProbeTop = Math.Max(source.Max<(Element, Solid, double, double)>(((Element Element, Solid Solid, double ZMin, double ZMax) tuple2) => tuple2.ZMax) + 0.05, ZTop + 0.05);
 			return true;
+		}
+
+		/// <summary>
+		/// Detects a real opening in this room's ceiling and, if one exists, finds what is
+		/// really overhead through it - see TakeoffSettings.MeasureThroughCeilingGaps for why.
+		///
+		/// THE TEST IS COVERAGE, NOT PRESENCE. TryTier already succeeded and populated
+		/// OverheadSolids - there IS a ceiling. What this asks is whether that ceiling's pieces,
+		/// unioned together, cover the room's WHOLE plan profile. A thin slab is built over the
+		/// full profile at the ceiling plane and the union of OverheadSolids is subtracted from
+		/// it; a null or empty result means full coverage - by far the common case, and the loop
+		/// exits in two boolean operations. A nonzero residual is the hole.
+		///
+		/// INSET BY THE SAME PrismInsetFt TryTier ITSELF USED, AND THAT MATTERS - CAUGHT BEFORE
+		/// SHIPPING, NOT AFTER. A first version built this slab from the raw, un-inset Profile.
+		/// OverheadSolids is built from TryTier's own search prism, which IS inset by
+		/// PrismInsetFt (0,02 ft, 6 mm) off the room boundary - so a fully-covering ceiling's
+		/// pieces never reach that outer 6 mm strip in the first place, and subtracting them
+		/// from an un-inset slab would leave a thin false "gap" ring around the perimeter of
+		/// EVERY room, not only ones with a real hole. Matching the inset here means a solid
+		/// ceiling produces a genuinely empty difference, and only an opening smaller than even
+		/// the inset boundary registers as one.
+		/// </summary>
+		private void ResolveCeilingGap(Document doc, TakeoffSettings s)
+		{
+			// TEMPORARY DIAGNOSTIC (2026-08-29) - the dormer this was written for still did not
+			// appear on the first live run, and nothing about WHY is visible from the CSV alone.
+			// This file has no persistent log; Warnings is the only channel that reaches the
+			// user, so the trace goes there, one line per room this method actually runs for.
+			// Remove once the missing branch is found.
+			string diagPrefix = $"[CeilingGap {RoomNumber} '{RoomName}']";
+
+			Solid slab = GeometryUtil.TryExtrude(GeometryUtil.InsetProfile(GeometryUtil.NormalizeProfile(Profile, ZTop), s.PrismInsetFt), 0.1);
+			if ((object)slab == null)
+			{
+				Warnings.Add($"{diagPrefix} slab could not be built - profile likely will not extrude.");
+				return;
+			}
+			Warnings.Add($"{diagPrefix} OverheadSolids.Count={OverheadSolids.Count}, slab built OK.");
+
+			Solid covered = GeometryUtil.TryUnion(OverheadSolids, s.MinSolidVolumeCuFt);
+			if ((object)covered == null)
+			{
+				Warnings.Add($"{diagPrefix} TryUnion(OverheadSolids) returned null - treating whole slab as gap.");
+			}
+			Solid gap = ((object)covered == null) ? slab : GeometryUtil.TryBoolean(slab, covered, BooleanOperationsType.Difference, s.MinSolidVolumeCuFt);
+			if ((object)gap == null)
+			{
+				Warnings.Add($"{diagPrefix} Difference(slab, covered) is null - ceiling fully covers the room (or the boolean failed).");
+				return;
+			}
+			Outline outline = GeometryUtil.OutlineOf(gap);
+			if (outline == null)
+			{
+				Warnings.Add($"{diagPrefix} gap solid exists (volume={gap.Volume:0.####} cu ft) but OutlineOf returned null.");
+				return;
+			}
+			double gapPlanAreaSqFt = gap.Volume / 0.1;
+			Warnings.Add($"{diagPrefix} GAP FOUND: ~{GeometryUtil.ToSqM(gapPlanAreaSqFt):0.##} m² footprint, outline min=({outline.MinimumPoint.X:0.##},{outline.MinimumPoint.Y:0.##}) max=({outline.MaximumPoint.X:0.##},{outline.MaximumPoint.Y:0.##}).");
+
+			double num = (_roomTopLimitZ < double.MaxValue) ? (_roomTopLimitZ - ZTopHighest) : s.RoofSearchFt;
+			double remaining = Math.Min(s.RoofSearchFt, num);
+			if (remaining <= 0.1)
+			{
+				Warnings.Add($"{diagPrefix} remaining search height is {remaining:0.###} ft - too small to search upward (room's own Upper Limit may be capping it).");
+				return;
+			}
+
+			// THE GAP'S OWN OUTLINE CANNOT BE THE SEARCH BOX - MEASURED, NOT REASONED. `gap` is
+			// the residual of a 0,1 ft-thick slab, so its outline is a wafer sitting AT the
+			// ceiling plane. BoundingBoxIntersectsFilter takes that literally: the dormer roof
+			// four feet higher never intersects it, so Candidates() returned nothing and every
+			// tier reported empty - "gap confirmed but NOTHING found above it" in the live
+			// Warnings file, on a model where the roof demonstrably exists at Z=0..3,125 ft.
+			// The ZRange tests inside TryGapTier were never even reached.
+			//
+			// So the box is rebuilt here: the gap's X/Y footprint - which is the part that must
+			// stay tight, it is what restricts the search to the opening rather than the whole
+			// room - extruded up through the entire remaining search height.
+			Outline searchOutline = outline;
+			try
+			{
+				XYZ gapMin = outline.MinimumPoint;
+				XYZ gapMax = outline.MaximumPoint;
+				searchOutline = new Outline(new XYZ(gapMin.X, gapMin.Y, ZTopHighest), new XYZ(gapMax.X, gapMax.Y, ZTopHighest + remaining));
+			}
+			catch (Exception ex)
+			{
+				Warnings.Add($"{diagPrefix} could not extend the gap outline upward ({ex.Message}); searching against the flat gap box instead.");
+			}
+
+			double? num2 = TryGapTier(doc, s, BuiltInCategory.OST_Roofs, searchOutline, remaining) ?? TryGapTier(doc, s, BuiltInCategory.OST_Floors, searchOutline, remaining) ?? TryGapTier(doc, s, BuiltInCategory.OST_Ceilings, searchOutline, remaining);
+			if (num2.HasValue)
+			{
+				GapZTop = num2.Value;
+				GapFootprint = gap;
+				HasCeilingGap = true;
+				Warnings.Add($"{diagPrefix} overhead found above the gap at Z={GeometryUtil.ToM(GapZTop):0.###} m - HasCeilingGap=true.");
+			}
+			else
+			{
+				Warnings.Add($"{diagPrefix} gap confirmed but NOTHING found above it (Roofs/Floors/Ceilings all empty within {remaining:0.###} ft) - HasCeilingGap stays false.");
+			}
+		}
+
+		/// <summary>
+		/// The lowest underside, among candidates of one category restricted to the gap's own
+		/// footprint, that starts above the ceiling this room already has - so a candidate that
+		/// merely overlaps the gap in plan but sits at or below the ceiling (a duct, a beam
+		/// running through the same shaft) cannot be mistaken for the real overhead above it.
+		/// </summary>
+		private double? TryGapTier(Document doc, TakeoffSettings s, BuiltInCategory category, Outline outline, double remaining)
+		{
+			double num = double.MinValue;
+			bool flag = false;
+			foreach (Element el in Candidates(doc, category, outline))
+			{
+				foreach (Solid item in GeometryUtil.GetSolids(el, s.MinSolidVolumeCuFt))
+				{
+					var (zMin, zMax) = GeometryUtil.ZRange(item);
+					if (zMin <= ZTopHighest + s.MinOverheadClearanceFt)
+					{
+						continue;
+					}
+					if (zMin > ZTopHighest + remaining)
+					{
+						continue;
+					}
+					if (_roomTopLimitZ < double.MaxValue && zMin > _roomTopLimitZ)
+					{
+						continue;
+					}
+
+					// SLOPED ROOFS DO NOT HAVE ONE HEIGHT. The qualifying test above is right to
+					// use the solid's own UNDERSIDE (zMin, the eave) - that is what makes a roof
+					// "close enough" to be this gap's overhead. But reporting that same eave
+					// height back as GapZTop, as this used to do, means a caller's clip prism is
+					// flat at the eave - and a gable dormer's wall rises past the eave toward the
+					// ridge, which is exactly the peak this tier exists to find. Report the
+					// solid's own TOP (zMax) instead, still capped by the same search/room
+					// limits that bounded the qualifying test, so the clip clears the whole roof
+					// volume over this footprint, ridge included, rather than cutting the gable
+					// off at its lowest edge.
+					double num2 = Math.Min(zMax, ZTopHighest + remaining);
+					if (_roomTopLimitZ < double.MaxValue)
+					{
+						num2 = Math.Min(num2, _roomTopLimitZ);
+					}
+					flag = true;
+					if (num2 > num)
+					{
+						num = num2;
+					}
+				}
+			}
+			return flag ? new double?(num) : null;
 		}
 
 		private static IEnumerable<Element> Candidates(Document doc, BuiltInCategory category, Outline outline)
@@ -5152,10 +6209,18 @@ namespace PaintedMaterialTakeoff.Core
 					list.Add(record);
 				}
 			}
-			IEnumerable<IGrouping<(long Room, long Wall, long Material), PaintRecord>> enumerable = from r in list2
-				group r by (Room: r.RoomId.Value, Wall: r.ElementId.Value, Material: r.MaterialId.Value);
+			// REGION IS PART OF THE KEY. Merging a wall face that a room's boundary describes
+			// as several segments into one row is what this class is FOR - "Face 0.2+0.3" is a
+			// correct and wanted outcome. Merging across Split Face regions is not: those are
+			// different surfaces that happen to share a room, a wall and a material, and
+			// summing them puts the paint under a stair back together with the paint beside it.
+			//
+			// Regions of an unsplit face all carry -1, so they group exactly as before and no
+			// existing row moves.
+			var enumerable = from r in list2
+				group r by (Room: r.RoomId.Value, Wall: r.ElementId.Value, Material: r.MaterialId.Value, Region: r.RegionIndex);
 			List<IEnumerable<PaintRecord>> list3 = new List<IEnumerable<PaintRecord>>();
-			foreach (IGrouping<(long, long, long), PaintRecord> item in enumerable)
+			foreach (var item in enumerable)
 			{
 				if ((from r in item
 					select r.ShellSide into s
@@ -5201,7 +6266,11 @@ namespace PaintedMaterialTakeoff.Core
 					select n).Distinct().ToList();
 				list.Add(paintRecord2 with
 				{
-					MergedSegmentLabel = string.Join("+", list4.Select((PaintRecord r) => $"{r.LoopIndex}.{r.SegmentIndex}")),
+					// The region marker has to survive the merge. Every record in this group
+					// shares a region - it is part of the key - so one region can still span
+					// several boundary segments and come out as "0.2+0.3 R2".
+					MergedSegmentLabel = string.Join("+", list4.Select((PaintRecord r) => $"{r.LoopIndex}.{r.SegmentIndex}"))
+						+ ((list4[0].RegionIndex >= 0) ? $" R{list4[0].RegionIndex + 1}" : ""),
 					NetAreaSqFt = list4.Sum((PaintRecord r) => r.NetAreaSqFt),
 					OccludedAreaSqFt = list4.Sum((PaintRecord r) => r.OccludedAreaSqFt),
 					SegmentLengthFt = list4.Sum((PaintRecord r) => r.SegmentLengthFt),
@@ -5822,27 +6891,83 @@ namespace PaintedMaterialTakeoff.Core
 					double[] array = new double[list3.Count];
 					Solid[] regionSolids = new Solid[list3.Count];
 					double num5 = 0.0;
+
+					// CLIPPED AGAINST THE TRIMMED SOLID, NOT THE RAW PROBE.
+					//
+					// `solid` is BuildProbe's own search volume, extruded to env.ZProbeTop -
+					// deliberately generous, the same margin the carrier's own shape used to
+					// overshoot the ceiling by before TrimUnderOverhead existed. A Split Face
+					// region was still being clipped against THAT probe here, bypassing every
+					// ceiling and ceiling-gap trim this file does everywhere else: a wall face
+					// with no Split Face regions is bounded by list2 (TrimUnderOverhead's own
+					// output) via TrySkin below, but a region on the SAME wall, in the SAME
+					// room, went through this branch instead and got the untrimmed probe's
+					// full height - the one shape on the wall guaranteed to still be wrong
+					// after every other fix in this file.
+					//
+					// list2 IS already ceiling- and gap-trimmed - it is exactly what feeds the
+					// undivided-face path a few lines below. Reusing it here, unioned when the
+					// wall contributed more than one solid, makes both paths answer from the
+					// same geometry instead of two different definitions of "in the room."
+					Solid trimmedProbe = (list2.Count == 1)
+						? list2[0]
+						: (GeometryUtil.TryUnion(list2, _s.MinSolidVolumeCuFt) ?? solid);
+
 					for (int i = 0; i < list3.Count; i++)
 					{
-						regionSolids[i] = RegionClip(list3[i], inward, solid);
+						regionSolids[i] = RegionClip(list3[i], inward, trimmedProbe);
 						array[i] = (((object)regionSolids[i] != null) ? (regionSolids[i].Volume / _s.SkinThicknessFt) : 0.0);
 						num5 += array[i];
 					}
 					if (num5 > 0.0)
 					{
 						int num6 = Array.IndexOf(array, array.Max());
+
+						// DETERMINISTIC REGION NUMBERING. CoplanarFacing promises no order, so
+						// without this a region's label changes between runs for no reason the
+						// reader can see, and the schedule reshuffles. Lowest first, then
+						// leftmost, taken from the clipped region solid.
+						int[] rank = new int[list3.Count];
+						List<int> order = new List<int>();
+						for (int r = 0; r < list3.Count; r++)
+						{
+							order.Add(r);
+						}
+						order.Sort(delegate(int a, int b)
+						{
+							XYZ ca = RegionCentre(regionSolids[a]);
+							XYZ cb = RegionCentre(regionSolids[b]);
+							int byZ = ca.Z.CompareTo(cb.Z);
+							return (byZ != 0) ? byZ : ca.X.CompareTo(cb.X);
+						});
+						for (int r = 0; r < order.Count; r++)
+						{
+							rank[order[r]] = r;
+						}
+
 						for (int j = 0; j < list3.Count; j++)
 						{
 							if (!(array[j] <= 0.0))
 							{
-								Contribute(list3[j], face.Area * array[j] / num5, j == num6, regionSolids[j]);
+								Contribute(list3[j], face.Area * array[j] / num5, j == num6, regionSolids[j], rank[j]);
 							}
 						}
 						continue;
 					}
 				}
-				Contribute(face4, face.Area, carrier: true, null);
-				void Contribute(Face? host, double num12, bool carrier, Solid regionSolid)
+				Contribute(face4, face.Area, carrier: true, null, -1);
+				static XYZ RegionCentre(Solid s)
+				{
+					try
+					{
+						return ((object)s != null) ? s.ComputeCentroid() : XYZ.Zero;
+					}
+					catch
+					{
+						return XYZ.Zero;
+					}
+				}
+				void Contribute(Face? host, double num12, bool carrier, Solid regionSolid, int regionIndex)
 				{
 					FaceMaterial material3 = _materials.Resolve(wall, host);
 					if (_s.PaintedFacesOnly && !material3.AsPaint)
@@ -5851,12 +6976,32 @@ namespace PaintedMaterialTakeoff.Core
 					}
 					else
 					{
-						string key2 = $"{material3.MaterialId.Value}|{layer?.LayerIndex ?? (-1)}";
+						// THE REGION IS PART OF THE KEY, and this is the whole fix.
+						//
+						// Keyed by material and layer alone, two Split Face regions of ONE face
+						// that carry the same paint collapsed into one bucket, became one
+						// PaintRecord, and were written as ONE Generic Model holding both
+						// solids. Every downstream symptom followed from that: clicking a row
+						// selected a carrier spanning both regions, and no schedule could price
+						// the patch under a stair apart from the wall beside it.
+						//
+						// The regions were never lost - RegionClip had already measured and
+						// clipped each one correctly, and both solids were on the carrier. Only
+						// the filing was wrong.
+						//
+						// Regions are numbered deterministically above, so R1/R2 mean the same
+						// thing on every run. regionIndex is -1 for an undivided face, which
+						// keeps the key byte-identical to the old one there - a wall with no
+						// Split Face schedules exactly as it did before.
+						string key2 = ((regionIndex < 0)
+							? $"{material3.MaterialId.Value}|{layer?.LayerIndex ?? (-1)}"
+							: $"{material3.MaterialId.Value}|{layer?.LayerIndex ?? (-1)}|R{regionIndex}");
 						if (!buckets.TryGetValue(key2, out MaterialBucket value4))
 						{
 							value4 = new MaterialBucket(material3)
 							{
-								Layer = layer
+								Layer = layer,
+								RegionIndex = regionIndex
 							};
 							buckets[key2] = value4;
 						}
@@ -5891,6 +7036,8 @@ namespace PaintedMaterialTakeoff.Core
 					}
 				}
 			}
+			num += AddEndReturns(wall, env, hostFaces, buckets, inward);
+
 			if (num <= _s.MinFaceAreaSqFt)
 			{
 				return Single(env, loopIndex, segmentIndex, curve, SurfaceKind.Wall, wall.Category?.Name ?? "Walls", wall.Id, TypeNameOf(wall), "No room-facing face found on the clipped wall slab.");
@@ -5974,6 +7121,13 @@ namespace PaintedMaterialTakeoff.Core
 					ElementTypeName = TypeNameOf(wall),
 					LoopIndex = loopIndex,
 					SegmentIndex = segmentIndex,
+					// Distinguishes the rows a split face now produces. Null when the face was
+					// not split, so SegmentKey falls back to "Face 0.6" exactly as before and
+					// no existing schedule changes.
+					RegionIndex = value5.RegionIndex,
+					MergedSegmentLabel = ((value5.RegionIndex >= 0)
+						? $"{loopIndex}.{segmentIndex} R{value5.RegionIndex + 1}"
+						: null),
 					MaterialId = material2.MaterialId,
 					MaterialName = material2.Name,
 					AsPaint = material2.AsPaint,
@@ -5998,7 +7152,181 @@ namespace PaintedMaterialTakeoff.Core
 					Shape = ((value5.Shape.Count > 0) ? value5.Shape : null)
 				});
 			}
+			list5.AddRange(MeasureWallsBehind(env, loopIndex, segmentIndex, wall, solid, baseCurve, inward, num7, nominalAreaSqFt, curve.Length));
 			return list5;
+		}
+
+		/// <summary>
+		/// The host wall's own face above and below a face-aligned patch wall - see
+		/// <see cref="TakeoffSettings.MeasureWallsBehindShortSegments"/> for why nothing else
+		/// measures it.
+		///
+		/// REUSES THIS SEGMENT'S PROBE UNCHANGED. The probe is already built to the room's full
+		/// height and already reaches ProbeWallOvershootFt (0,25 ft) PAST the segment wall's own
+		/// thickness, so for a 4 mm patch it penetrates ~80 mm into the host standing behind it.
+		/// The host's room-facing plane is therefore already inside this volume; it was simply
+		/// never intersected with. Rebuilding a deeper probe would only risk reaching a wall
+		/// that does not face this room.
+		///
+		/// JOINED ELEMENTS ONLY, NOT PROXIMITY. The join is what created the problem - it is the
+		/// operation that carved the patch out of the host and moved the boundary onto the
+		/// patch - so it is also the most precise statement of which wall is behind. A
+		/// proximity search would pick up walls meeting at a corner and credit this room with
+		/// faces pointing into the next one.
+		///
+		/// CONSERVATIVE BY CONSTRUCTION. A face is kept only if IsRoomSideFace agrees it fronts
+		/// this room across this segment's own base curve - the same test the main path uses.
+		/// Anything unresolved is dropped rather than guessed at: under-reporting is recoverable
+		/// from the notes, invented area is not.
+		/// </summary>
+		private List<PaintRecord> MeasureWallsBehind(RoomEnvelope env, int loopIndex, int segmentIndex, Wall segmentWall, Solid probe, Curve baseCurve, XYZ inward, double measuredHeightFt, double nominalAreaSqFt, double segmentLengthFt)
+		{
+			List<PaintRecord> results = new List<PaintRecord>();
+			if (!_s.MeasureWallsBehindShortSegments || (object)probe == null)
+			{
+				return results;
+			}
+			// Only a segment whose wall falls SHORT of the room height can have bare host wall
+			// above or below it. A full-height segment leaves nothing uncovered, and probing
+			// behind it would find the far side of a wall that faces another room.
+			double shortfall = env.ClearHeight - measuredHeightFt;
+			if (shortfall <= 0.05)
+			{
+				return results;
+			}
+			ICollection<ElementId> joined;
+			try
+			{
+				joined = JoinGeometryUtils.GetJoinedElements(_doc, segmentWall);
+			}
+			catch
+			{
+				return results;
+			}
+			if (joined == null || joined.Count == 0)
+			{
+				return results;
+			}
+			foreach (ElementId id in joined)
+			{
+				if (id == segmentWall.Id)
+				{
+					continue;
+				}
+				Wall behind = _doc.GetElement(id) as Wall;
+				if (behind == null || behind.CurtainGrid != null || !RoomBounding.IsRoomBounding(behind))
+				{
+					continue;
+				}
+				List<Solid> behindSolids = GeometryUtil.GetSolids(behind, _s.MinSolidVolumeCuFt);
+				if (behindSolids.Count == 0)
+				{
+					continue;
+				}
+				List<Solid> clipped = new List<Solid>();
+				List<string> trimNotes = new List<string>();
+				foreach (Solid bs in behindSolids)
+				{
+					Solid hit = GeometryUtil.TryBoolean(bs, probe, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt);
+					if ((object)hit == null)
+					{
+						continue;
+					}
+					Solid trimmed = TrimUnderOverhead(hit, env, trimNotes);
+					if ((object)trimmed != null)
+					{
+						clipped.Add(trimmed);
+					}
+				}
+				if (clipped.Count == 0)
+				{
+					continue;
+				}
+				List<Face> behindHostFaces = GeometryUtil.FacesWithRegions(behindSolids).ToList();
+				RoomSideShell behindShell = ResolveShell(behind, baseCurve, env, inward);
+				Dictionary<string, MaterialBucket> behindBuckets = new Dictionary<string, MaterialBucket>();
+				foreach (Face f in GeometryUtil.Faces(clipped))
+				{
+					if (f.Area <= _s.MinFaceAreaSqFt || !IsRoomSideFace(f, baseCurve, inward))
+					{
+						continue;
+					}
+					XYZ centre = GeometryUtil.FaceCenter(f);
+					if (centre == null)
+					{
+						continue;
+					}
+					Face mapped = GeometryUtil.MapToHostFace(behindHostFaces, centre, inward, _s.FaceNormalDot, _s.FacePlaneTolFt);
+					if ((object)mapped == null)
+					{
+						continue;
+					}
+					FaceMaterial fm = _materials.Resolve(behind, mapped);
+					if (!fm.AsPaint)
+					{
+						continue;
+					}
+					string key = $"{fm.MaterialId.Value}";
+					if (!behindBuckets.TryGetValue(key, out MaterialBucket bucket))
+					{
+						bucket = new MaterialBucket(fm)
+						{
+							Layer = behindShell?.Layer
+						};
+						behindBuckets[key] = bucket;
+					}
+					bucket.Area += f.Area;
+					if (_s.CreateSegmentElements)
+					{
+						GeometryObject skin = GeometryUtil.TrySkin(f, -inward, _s.SkinThicknessFt);
+						if ((object)skin != null)
+						{
+							bucket.Shape.Add(skin);
+						}
+					}
+				}
+				foreach (MaterialBucket b in behindBuckets.Values)
+				{
+					if (b.Area <= _s.MinFaceAreaSqFt)
+					{
+						continue;
+					}
+					results.Add(new PaintRecord
+					{
+						RoomName = env.RoomName,
+						RoomNumber = env.RoomNumber,
+						RoomDepartment = env.RoomDepartment,
+						LevelName = env.LevelName,
+						RoomId = env.Room.Id,
+						Kind = SurfaceKind.Wall,
+						Group = SurfaceGroup.Wall,
+						Calculated = true,
+						CategoryName = (behind.Category?.Name ?? "Walls"),
+						ElementId = behind.Id,
+						ElementTypeName = TypeNameOf(behind),
+						LoopIndex = loopIndex,
+						SegmentIndex = segmentIndex,
+						MaterialId = b.Material.MaterialId,
+						MaterialName = b.Material.Name,
+						AsPaint = b.Material.AsPaint,
+						LayerLabel = (b.Layer?.FunctionLabel ?? ""),
+						LayerIndex = (b.Layer?.LayerIndex ?? (-1)),
+						ShellSide = (b.Layer?.ShellLabel ?? ""),
+						ShellFaceAreaSqFt = (behindShell?.ShellTotalAreaSqFt ?? 0.0),
+						NetAreaSqFt = b.Area,
+						OccludedAreaSqFt = 0.0,
+						NominalAreaSqFt = nominalAreaSqFt,
+						ZBottomFt = env.ZBottom,
+						ZTopFt = env.ZTop,
+						MeasuredHeightFt = env.ClearHeight - measuredHeightFt,
+						SegmentLengthFt = segmentLengthFt,
+						TopSource = env.TopSource,
+						Notes = $"Host wall behind {TypeNameOf(segmentWall)} #{segmentWall.Id.Value}: " + $"{GeometryUtil.ToSqM(b.Area):0.##} m² of this wall's own face is exposed above/below that " + "face-aligned patch, which the patch's boundary segment does not measure.",
+						Shape = ((b.Shape.Count > 0) ? b.Shape : null)
+					});
+				}
+			}
+			return results;
 		}
 
 		private XYZ? ResolveInwardNormal(RoomEnvelope env, Curve curve, Wall wall)
@@ -6063,6 +7391,106 @@ namespace PaintedMaterialTakeoff.Core
 				}
 			}
 			return null;
+		}
+
+		/// <summary>
+		/// Adds a wall's EXPOSED END RETURN - the face at a free end of the wall, where no
+		/// other wall abuts - to this room's buckets, when the room actually contains it.
+		///
+		/// WHY THE SEGMENT PASS CANNOT FIND IT
+		///   Every face the main loop sees comes from the wall clipped to the room's boundary
+		///   segment prism, and an end return sits ON that prism's end cap. The boolean returns
+		///   nothing usable and the face is gone before it is ever classified. Widening the
+		///   clip does not help - tried at 6 mm, it caught no end face and instead pulled
+		///   0,012 m² of the neighbouring room's paint into this one, because room-side faces
+		///   never pass through ResolveJambOwner and nothing arbitrated it.
+		///
+		///   So the face is taken from the wall's UNCLIPPED geometry instead, and the room
+		///   decides whether it belongs here.
+		///
+		/// WHAT MAKES A FACE AN END RETURN
+		///   Vertical, normal roughly along the wall run rather than across it, and its centre
+		///   within half a wall thickness of one end of the wall's location line. That last
+		///   test is what separates an end return from a door jamb: a jamb shares the first two
+		///   properties exactly, and sits in the middle of the run.
+		///
+		/// ATTRIBUTION IS BY CONTAINMENT, NOT BY PROXIMITY. A probe just off the face must fall
+		/// inside THIS room, using the same IsPointInRoom test that governs jambs. A free end
+		/// facing a corridor belongs to the corridor, and an end buried in a wall junction
+		/// belongs to nobody and is skipped. Nothing is attributed on a guess.
+		/// </summary>
+		/// <returns>Area added, in square feet, so the caller's total stays honest.</returns>
+		private double AddEndReturns(Wall wall, RoomEnvelope env, List<Face> hostFaces, Dictionary<string, MaterialBucket> buckets, XYZ inward)
+		{
+			double added = 0.0;
+
+			try
+			{
+				if (!(wall.Location is LocationCurve { Curve: not null } location))
+				{
+					return 0.0;
+				}
+
+				Curve run = location.Curve;
+				XYZ a = run.GetEndPoint(0);
+				XYZ b = run.GetEndPoint(1);
+				double reach = Math.Max(wall.Width, _s.ProbeRoomClearanceFt) * 0.75;
+
+				foreach (Face face in hostFaces)
+				{
+					XYZ normal = GeometryUtil.FaceNormal(face);
+					XYZ centre = GeometryUtil.FaceCenter(face);
+
+					if (normal == null || centre == null) continue;
+					if (!GeometryUtil.FaceIsVertical(normal.Z)) continue;
+
+					// Across the wall rather than along it means this is a room-side face.
+					if (Math.Abs(normal.DotProduct(inward)) > _s.JambNormalDot) continue;
+
+					// At an END of the run, not at an opening in the middle of it.
+					XYZ flat = new XYZ(centre.X, centre.Y, a.Z);
+					if (flat.DistanceTo(a) > reach && flat.DistanceTo(b) > reach) continue;
+
+					// Above the floor and below the ceiling this room is measured between.
+					if (centre.Z < env.ZBottom || centre.Z > env.ZTop) continue;
+
+					// Does THIS room contain it? Probe just off the face, along its normal.
+					if (!SafeIsPointInRoom(env, centre + normal * _s.ProbeRoomClearanceFt * 2.0)) continue;
+
+					FaceMaterial material = _materials.Resolve(wall, face);
+					if (_s.PaintedFacesOnly && !material.AsPaint) continue;
+
+					string key = $"{material.MaterialId.Value}|end|{centre.X:0.##}|{centre.Y:0.##}|{centre.Z:0.##}";
+					if (buckets.ContainsKey(key)) continue;
+
+					MaterialBucket bucket = new MaterialBucket(material)
+					{
+						Layer = null,
+						IsJamb = true,
+						JambFaceKey = key,
+						SurfaceLabel = "Wall end return"
+					};
+
+					bucket.Area += face.Area;
+
+					if (_s.CreateSegmentElements)
+					{
+						GeometryObject skin = GeometryUtil.TrySkin(face, normal, _s.SkinThicknessFt);
+						if ((object)skin != null) bucket.Shape.Add(skin);
+					}
+
+					buckets[key] = bucket;
+					added += face.Area;
+				}
+			}
+			catch
+			{
+				// A wall whose end faces cannot be read contributes none. The segment's own
+				// measurement is unaffected - whatever was added before the failure stands,
+				// which is why `added` is returned rather than zeroed.
+			}
+
+			return added;
 		}
 
 		private static bool SafeIsPointInRoom(RoomEnvelope env, XYZ p)
@@ -6322,6 +7750,29 @@ namespace PaintedMaterialTakeoff.Core
 		{
 			double zTop = (env.OverheadIsFlat ? env.ZTop : env.ZTopHighest);
 			Solid solid = FlatCut(slice, env, zTop, notes) ?? slice;
+
+			// CEILING GAP - this room's ceiling does not cover its whole plan (see
+			// RoomEnvelope.ResolveCeilingGap). The flat cut just above truncated the WHOLE
+			// wall slice at the ceiling's own height uniformly, including whatever part of it
+			// stands under the gap - where there is no ceiling to stop it and the wall's own
+			// material genuinely continues up to whatever DOES cap the room there (a slab
+			// above, or the roof). That stretch is restored here, from the wall's OWN
+			// pre-cut geometry, so only material the wall actually has can come back: this
+			// cannot invent area, it can only stop discarding real geometry the flat cut
+			// removed too early.
+			if (env.HasCeilingGap && (object)env.GapFootprint != null)
+			{
+				Solid restored = RestoreCeilingGap(slice, env, notes);
+				if ((object)restored != null)
+				{
+					Solid unioned = GeometryUtil.TryBoolean(solid, restored, BooleanOperationsType.Union, _s.MinSolidVolumeCuFt);
+					if ((object)unioned != null)
+					{
+						solid = unioned;
+					}
+				}
+			}
+
 			if (env.OverheadIsFlat || env.OverheadSolids.Count == 0)
 			{
 				return solid;
@@ -6342,6 +7793,112 @@ namespace PaintedMaterialTakeoff.Core
 				}
 			}
 			return solid;
+		}
+
+		/// <summary>
+		/// The part of a wall's own slice that stands under a ceiling gap and belongs to the
+		/// room up to the real overhead found there - see RoomEnvelope.GapFootprint and
+		/// GapZTop.
+		///
+		/// BUILT AT AN EXACT Z, NOT AT WHATEVER Z A CHOSEN FACE HAPPENED TO SIT AT - CAUGHT
+		/// AFTER SHIPPING, NOT BEFORE. The first version picked one of the wafer's own two
+		/// horizontal faces and extruded from there; whichever face that was sat 0,1 ft (the
+		/// wafer's own thickness) away from env.ZTop, not AT it, leaving a seam neither this
+		/// column nor the base cut covered. Invisible on an ordinary boundary wall, which has
+		/// real material well below ZTop to swallow a 0,1 ft gap in - but the same construction
+		/// in InteriorElementCalculator.GapColumn made a hanging wall whose ENTIRE height
+		/// starts exactly at ZTop vanish outright, because that seam was where all of its
+		/// material was. Fixed there first; ported the same fix here rather than leave two
+		/// copies of a technique now known to be wrong in one place and not the other.
+		///
+		/// The gap footprint's own plan shape is taken from any of its horizontal faces, its
+		/// curve loops LIFTED to exactly env.ZTop via a transform, and extruded from there.
+		/// TryExtrude always goes +Z - no direction to get wrong - so this needs no guess
+		/// about which of the wafer's two faces winds which way, only its shape.
+		///
+		/// INTERSECTED WITH THE WALL'S OWN SLICE, not unioned in on its own - a column shaped
+		/// like the gap says where the room's airspace reaches, not where this wall's material
+		/// actually is. Only their overlap can be real wall surface.
+		///
+		/// A SECOND BUG IN THAT SAME FIX, caught by logging in InteriorElementCalculator's
+		/// twin of this method rather than guessed - see GapColumn's own remarks. Starting
+		/// this column exactly at env.ZTop puts its base flush against the base cut's own top,
+		/// and the caller's Union of the two then meets a coincident plane rather than genuine
+		/// overlap - a degenerate case a boolean kernel can silently mishandle. Starting
+		/// _s.PrismInsetFt below ZTop instead - the same tolerance this file already uses to
+		/// avoid coincident-boundary problems elsewhere - gives the union real material to
+		/// work with on both sides of the seam.
+		/// </summary>
+		private Solid? RestoreCeilingGap(Solid slice, RoomEnvelope env, List<string> notes)
+		{
+			double height = env.GapZTop - env.ZTop + _s.PrismInsetFt;
+			if (height <= 0.05 || (object)env.GapFootprint == null)
+			{
+				return null;
+			}
+			List<CurveLoop> loops = new List<CurveLoop>();
+			double? faceZ = null;
+			foreach (Face face in env.GapFootprint.Faces)
+			{
+				XYZ normal = GeometryUtil.FaceNormal(face);
+				if (normal == null || normal.Z <= 0.99)
+				{
+					continue;
+				}
+				XYZ centre = GeometryUtil.FaceCenter(face);
+				if (centre == null)
+				{
+					continue;
+				}
+				IList<CurveLoop> faceLoops;
+				try
+				{
+					faceLoops = face.GetEdgesAsCurveLoops();
+				}
+				catch
+				{
+					continue;
+				}
+				if (faceLoops == null || faceLoops.Count == 0)
+				{
+					continue;
+				}
+				if (!faceZ.HasValue)
+				{
+					faceZ = centre.Z;
+				}
+				loops.AddRange(faceLoops);
+			}
+			if (loops.Count == 0 || !faceZ.HasValue)
+			{
+				return null;
+			}
+			Autodesk.Revit.DB.Transform lift = Autodesk.Revit.DB.Transform.CreateTranslation(new XYZ(0.0, 0.0, env.ZTop - _s.PrismInsetFt - faceZ.Value));
+			List<CurveLoop> lifted = loops.Select((CurveLoop l) => CurveLoop.CreateViaTransform(l, lift)).ToList();
+
+			// Outset laterally for the same reason as InteriorElementCalculator.GapColumn - see
+			// its remarks for the measured evidence. A gap's own edges are the faces of
+			// whatever stands in it, so an un-outset column's sides land coplanar with those
+			// faces and the intersect below becomes the degenerate case Revit throws on. The
+			// result is still clipped to `slice`, this wall's own material, so a 6 mm wider
+			// search volume cannot pull in area that is not this wall's.
+			if (_s.InteriorClipOutsetFt > 0.0)
+			{
+				lifted = GeometryUtil.OutsetProfile(lifted, _s.InteriorClipOutsetFt);
+			}
+
+			Solid column = GeometryUtil.TryExtrude(lifted, height);
+			if ((object)column == null || column.Volume <= 0.0)
+			{
+				return null;
+			}
+			Solid extra = GeometryUtil.TryBoolean(slice, column, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt);
+			if ((object)extra == null)
+			{
+				return null;
+			}
+			notes.Add($"Extended {GeometryUtil.ToM(height) * 1000.0:0} mm above the ceiling into a gap in it, up to {GeometryUtil.ToM(env.GapZTop):0.###} m.");
+			return extra;
 		}
 
 		private Solid? FlatCut(Solid slice, RoomEnvelope env, double zTop, List<string> notes)
