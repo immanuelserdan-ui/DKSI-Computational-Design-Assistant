@@ -1,0 +1,9 @@
+# This is a Revit shared parameter file.
+# Do not edit manually.
+*META	VERSION	MINVERSION
+META	2	1
+*GROUP	ID	NAME
+GROUP	1	SCRP
+*PARAM	GUID	NAME	DATATYPE	DATACATEGORY	GROUP	VISIBLE	DESCRIPTION	USERMODIFIABLE	HIDEWHENNOVALUE
+PARAM	d3f9aaee-df50-4c73-b730-cc0697d7bed4	06-SCRP Num sub	TEXT		1	1	Room number for the Ext Door schedules: the room opposite an Udvendig side. Written by DKSI Revit Tools.	1	0
+PARAM	fd0231a9-8afa-491e-a538-37c613299c16	07-SCRP Nam sub	TEXT		1	1	Room name for the Ext Door schedules: the room opposite an Udvendig side. Written by DKSI Revit Tools.	1	0
