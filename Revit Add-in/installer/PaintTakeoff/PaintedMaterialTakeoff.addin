@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Manifest override for the repackaged Painted Material Takeoff.
+
+  IT DIFFERS FROM THE 1.0.1 MANIFEST IN ONE WAY: the <AddIn Type="Application"> entry that
+  pointed at PaintedMaterialTakeoff.App is gone. That class is what built the "Revit
+  Automation" tab and its "Paint Takeoff" panel. DKSI Revit Tools now carries those same
+  three tools in its own pull-down, so leaving this in would put every one of them on the
+  ribbon twice, in two tabs, from one install.
+
+  THE ASSEMBLY IS UNCHANGED. PaintedMaterialTakeoff.App is still compiled into the DLL and
+  would still work - it is simply no longer registered as an entry point. Restoring the old
+  behaviour is this file's history plus a rebuild, nothing more.
+
+  THE COMMAND ENTRIES BELOW ARE LOAD-BEARING, so do not "tidy" them away as well. Two
+  separate things depend on them:
+
+    - They keep this folder registered as an add-in with Revit, which is what makes the
+      assembly a known quantity rather than a stray DLL in Program Files.
+    - They put both commands under Add-Ins > External Tools, which is the fallback route to
+      them on a machine that has this product but NOT DKSI Revit Tools. Without the ribbon
+      entries the Application used to build, that menu is the only way in.
+
+  ToggleCarriersCommand deliberately has no entry here, matching 1.0.1 - it was only ever
+  reachable from the ribbon button the Application built. DKSI's pull-down addresses it by
+  assembly path and class name, which needs no manifest entry of its own.
+-->
+
+<RevitAddIns>
+
+  <!-- Direct command entry point, also usable from the External Tools menu. -->
+  <AddIn Type="Command">
+    <Name>Calculate Painted Surface Areas</Name>
+    <Text>Paint Takeoff</Text>
+    <Description>Calculates room-bounded painted surface areas for walls, floors, ceilings and roofs.</Description>
+    <Assembly>PaintedMaterialTakeoff\PaintedMaterialTakeoff.dll</Assembly>
+    <AddInId>7D41E6A0-2C3B-4F19-A6E8-5B92D04F7A66</AddInId>
+    <FullClassName>PaintedMaterialTakeoff.Command</FullClassName>
+    <VendorId>RAPJ</VendorId>
+    <VendorDescription>Revit Automation Project</VendorDescription>
+    <VisibilityMode>NotVisibleWhenNoActiveDocument</VisibilityMode>
+    <LanguageType>Unknown</LanguageType>
+  </AddIn>
+
+  <!-- Project-wide element-centric pass, also usable from the External Tools menu. -->
+  <AddIn Type="Command">
+    <Name>Write Painted Area (project wide)</Name>
+    <Text>Painted Area</Text>
+    <Description>Writes the "Painted Area" shared parameter on every wall, floor, ceiling and roof.</Description>
+    <Assembly>PaintedMaterialTakeoff\PaintedMaterialTakeoff.dll</Assembly>
+    <AddInId>B52C7F38-9D41-4A6E-8C05-6E3F17A9D284</AddInId>
+    <FullClassName>PaintedMaterialTakeoff.ElementPaintAreaCommand</FullClassName>
+    <VendorId>RAPJ</VendorId>
+    <VendorDescription>Revit Automation Project</VendorDescription>
+    <VisibilityMode>NotVisibleWhenNoActiveDocument</VisibilityMode>
+    <LanguageType>Unknown</LanguageType>
+  </AddIn>
+
+</RevitAddIns>

@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- SHIPPING NAME. This must stay "PaintedMaterialTakeoff": the installed manifest and
+         DKSI's ribbon both address the assembly by that file name plus a class name, so a
+         rename silently breaks every button.
+
+         To build a copy that can load ALONGSIDE the installed one - which is how this fix was
+         tested without touching the product - override it on the command line instead:
+
+             dotnet build -c Release -p:AssemblyName=PaintedMaterialTakeoffDiag
+
+         Two assemblies sharing the identity "PaintedMaterialTakeoff, Version=1.0.0.0" would
+         otherwise both resolve to whichever loaded first, and the second entry point would
+         silently run the first one's code. Resource logical names are pinned below, so they
+         are unaffected by either name. -->
+    <AssemblyName>PaintedMaterialTakeoff</AssemblyName>
+    <RootNamespace>PaintedMaterialTakeoff</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <NoWarn>CS0108;CS0114;CS0618;CS1591;CS8524;CS0628</NoWarn>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Logical names must match the originals exactly: the code fetches these by string
+         through GetManifestResourceStream, so a renamed resource is a silent icon failure. -->
+    <EmbeddedResource Include="Resources\*.png">
+      <LogicalName>PaintedMaterialTakeoff.Resources.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>C:\Program Files\Autodesk\Revit 2027\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>C:\Program Files\Autodesk\Revit 2027\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

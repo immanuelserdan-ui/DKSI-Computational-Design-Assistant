@@ -83,7 +83,22 @@ public sealed class MaterialLedger
     public void AddRange(MaterialLedger other)
     {
         foreach (var (key, area) in other._areas) Add(key, area);
+        DroppedRegions += other.DroppedRegions;
     }
+
+    /// <summary>
+    /// Split-face regions that could neither be clipped nor shown to lie wholly inside the
+    /// room, and so contributed no area.
+    ///
+    /// Counted rather than thrown because the alternative was worse: the exact clip used to
+    /// abandon the whole element on the first failure, and a split-face wall runs one boolean
+    /// PER REGION - so the more paint colours a wall carried, the likelier it was to lose all
+    /// of them and be reported as unpainted. A named shortfall beats a silent zero.
+    /// </summary>
+    public int DroppedRegions { get; private set; }
+
+    /// <summary>Records one region that could not be measured.</summary>
+    public void Drop() => DroppedRegions++;
 
     public double Total => _areas.Values.Sum();
 

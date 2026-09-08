@@ -55,6 +55,42 @@ internal static class BuildInfo
         }
     }
 
+    /// <summary>
+    /// The Revit release this assembly was BUILT for, e.g. "2027".
+    ///
+    /// Stamped in by Directory.Build.props from the same RevitVersion property that picks
+    /// the RevitAPI.dll to compile against and the add-ins folder to deploy into. Reading it
+    /// back at runtime is what lets the add-in verify the host it was loaded into is the one
+    /// it was compiled for, without hardcoding the number a second time where it could drift
+    /// away from the build.
+    ///
+    /// Empty if the attribute is missing, which is treated as "cannot verify" rather than as
+    /// a mismatch - an add-in that refuses to load because its own metadata is unreadable
+    /// would be worse than one that loads.
+    /// </summary>
+    public static string TargetRevitVersion
+    {
+        get
+        {
+            if (_targetVersion is not null) return _targetVersion;
+
+            try
+            {
+                _targetVersion = Assembly.GetExecutingAssembly()
+                    .GetCustomAttributes<AssemblyMetadataAttribute>()
+                    .FirstOrDefault(a => a.Key == "RevitVersion")?.Value ?? string.Empty;
+            }
+            catch
+            {
+                _targetVersion = string.Empty;
+            }
+
+            return _targetVersion;
+        }
+    }
+
+    private static string? _targetVersion;
+
     /// <summary>One line for a dialog footer.</summary>
     public static string Describe()
     {

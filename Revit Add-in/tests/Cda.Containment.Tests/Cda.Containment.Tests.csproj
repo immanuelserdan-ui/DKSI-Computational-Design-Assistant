@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NO REVIT REFERENCE, DELIBERATELY - same reasoning as Cda.Heating.Tests.
+
+    It compiles ONE source file from the add-in: ClipRules.cs, which holds every containment
+    rule in the skirting tool and is written in plain arithmetic with no Revit type in it.
+    Locating a room boundary needs Revit and cannot be tested here; deciding what to do about
+    the boundary once found is four numbers, and that is where the bugs have been.
+
+    Testing the real file rather than a copy is what makes these tests worth anything - a
+    copied constant drifts from the shipping one and then passes forever.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cda.Containment.Tests</RootNamespace>
+    <AssemblyName>Cda.Containment.Tests</AssemblyName>
+
+    <UseWPF>false</UseWPF>
+    <DeployToRevit>false</DeployToRevit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Cda.Revit.Addin\Rooms\ClipRules.cs" Link="ClipRules.cs" />
+    <Compile Include="..\..\src\Cda.Revit.Addin\Rooms\RevealRules.cs" Link="RevealRules.cs" />
+  </ItemGroup>
+
+</Project>

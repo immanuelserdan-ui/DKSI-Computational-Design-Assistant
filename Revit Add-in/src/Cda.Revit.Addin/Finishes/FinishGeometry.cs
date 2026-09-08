@@ -217,16 +217,107 @@ public sealed class FinishGeometry
                     total += area;
                     materials.Add(FaceMaterialKey(owner, hostFace), area);
                 }
+                else if (RegionArea(roomFace, hostFace) is { } direct)
+                {
+                    total += direct;
+                    materials.Add(FaceMaterialKey(owner, hostFace), direct);
+                }
+                else
+                {
+                    materials.Drop();
+                }
             }
             catch
             {
-                return null;   // any boolean failure -> fall back entirely
+                // ONE REGION, NOT THE WALL. This used to `return null`, which sent the whole
+                // element to the arithmetic fallback where MaterialKey.Fallback is unpainted
+                // BY DEFINITION - so a wall carrying four paint colours reported none of
+                // them, as a confident zero. A split face presents one coplanar face PER
+                // REGION, so the number of booleans scales with the number of colours: the
+                // more split-face work a wall carried, the likelier it was to lose all of it.
+                //
+                // MeasureInteriorWalls cannot hit this at all - it takes face.Area directly
+                // and runs no boolean - which is the whole reason hanging walls separate
+                // their colours and regular walls did not.
+                if (RegionArea(roomFace, hostFace) is { } recovered)
+                {
+                    total += recovered;
+                    materials.Add(FaceMaterialKey(owner, hostFace), recovered);
+                }
+                else
+                {
+                    materials.Drop();
+                }
             }
         }
 
         if (!matched || total <= 1e-6) return null;
 
         return (total, materials);
+    }
+
+    /// <summary>
+    /// A region's area taken the way <see cref="RoomFinishCalculator"/>'s interior-wall pass
+    /// takes it - <c>face.Area</c>, straight off the face - for use when the boolean clip
+    /// declines to measure it.
+    ///
+    /// WHY THIS IS THE HANGING-WALL PATTERN
+    ///   MeasureInteriorWalls never runs a boolean. It reads face.Area per face, and that is
+    ///   exactly why a bulkhead separates its paint colours reliably: there is no step that
+    ///   can fail and take the other regions with it. The clip exists on the bounding path
+    ///   for one reason only - a wall face can be shared between rooms, and the room's
+    ///   subface is what decides how much of it belongs HERE. Where a region does not
+    ///   straddle that boundary, the clip and face.Area agree, and face.Area cannot fail.
+    ///
+    /// THE GUARD IS THE WHOLE POINT, AND IT IS DELIBERATELY CONSERVATIVE.
+    ///   Every edge vertex of the region must project INSIDE the room's subface. A region
+    ///   with one vertex outside might be shared with the next room, and returning its full
+    ///   area would bill this room for paint the neighbour also gets - double counting, which
+    ///   is worse than the under-count it would be fixing. Such a region is declined and
+    ///   counted in <see cref="MaterialLedger.DroppedRegions"/> instead, so the shortfall is
+    ///   named rather than silently invented.
+    ///
+    ///   A centroid test would be cheaper and wrong: a region straddling the boundary has its
+    ///   centroid inside about half the time.
+    /// </summary>
+    /// <returns>The region's own area, or null when it cannot be shown to lie wholly inside.</returns>
+    private static double? RegionArea(Face roomFace, Face region)
+    {
+        try
+        {
+            var inspected = 0;
+
+            foreach (CurveLoop loop in region.GetEdgesAsCurveLoops())
+            {
+                foreach (var curve in loop)
+                {
+                    // Both endpoints: a loop's start points alone miss a vertex on a
+                    // single-curve loop, and it costs nothing to be exact here.
+                    for (var end = 0; end <= 1; end++)
+                    {
+                        var point = curve.GetEndPoint(end);
+
+                        var hit = roomFace.Project(point);
+                        if (hit is null) return null;
+
+                        if (!roomFace.IsInside(hit.UVPoint)) return null;
+
+                        inspected++;
+                    }
+                }
+            }
+
+            // No vertices means nothing was actually verified; an unbounded or degenerate
+            // face must not pass a containment test by saying nothing.
+            if (inspected == 0) return null;
+
+            var area = region.Area;
+            return area > 1e-9 ? area : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

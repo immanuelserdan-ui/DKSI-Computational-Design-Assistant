@@ -16,10 +16,3 @@ public sealed class ProjectDocumentAvailability : IExternalCommandAvailability
         return uiDoc?.Document is { IsFamilyDocument: false };
     }
 }
-
-/// <summary>Enabled whenever any document is open, family or project.</summary>
-public sealed class AnyDocumentAvailability : IExternalCommandAvailability
-{
-    public bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories)
-        => applicationData.ActiveUIDocument?.Document is not null;
-}

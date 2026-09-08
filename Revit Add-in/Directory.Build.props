@@ -8,7 +8,25 @@
   <PropertyGroup>
     <RevitVersion>2027</RevitVersion>
     <RevitApiDir>$(ProgramW6432)\Autodesk\Revit $(RevitVersion)</RevitApiDir>
-    <RevitAddinsDir>$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)</RevitAddinsDir>
+
+    <!--
+      ALL-USERS, NOT PER-USER (changed 2026-09-08). This used to be %AppData% - correct
+      while DKSI Revit Tools was a per-user install, wrong the moment the office switched to
+      one shared machine-wide copy in Program Files. Left pointed at %AppData%, an ordinary
+      `dotnet build` - from an IDE, from a colleague, from anyone, for any reason - silently
+      recreated a second manifest for the same add-in, and Revit loads one of the two with no
+      way to tell which. That happened for real: a suite deploy correctly went to Program
+      Files, and a plain build run separately (an IDE's build-on-save, most likely - nothing
+      in that session's own command history touched this project) put a Debug DLL back in
+      %AppData% within the hour, undoing a per-user removal that had been done on purpose.
+      See tools\Remove-PerUserInstall.ps1 for why the two manifests cannot coexist.
+
+      THE COST, ACCEPTED ON PURPOSE: an ordinary unelevated `dotnet build` can no longer
+      deploy at all - Program Files needs admin rights. DeployToRevitAddins is WarnAndContinue
+      either way, so the build itself still succeeds; VerifyRevitDeploy's warning below now
+      names both possible causes rather than assuming the old one.
+    -->
+    <RevitAddinsDir>$(ProgramFiles)\Autodesk\Revit\Addins\$(RevitVersion)</RevitAddinsDir>
   </PropertyGroup>
 
   <!--
@@ -33,10 +51,34 @@
     <Copyright>Copyright © $(Company) 2026</Copyright>
   </PropertyGroup>
 
+  <!--
+    Stamp the targeted Revit version INTO the assembly, so the running add-in can check the
+    host it was actually loaded into and refuse anything else. Sourced from the same
+    RevitVersion property as the API references and the deploy path, so a build for one
+    version cannot carry a guard for another - see BuildInfo.TargetRevitVersion.
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadata">
+      <_Parameter1>RevitVersion</_Parameter1>
+      <_Parameter2>$(RevitVersion)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <!-- Fail early and loudly rather than emitting hundreds of "type not found" errors. -->
   <Target Name="VerifyRevitApiDir" BeforeTargets="BeforeBuild">
     <Error Condition="!Exists('$(RevitApiDir)\RevitAPI.dll')"
            Text="RevitAPI.dll not found at '$(RevitApiDir)'. Set RevitApiDir in Directory.Build.props to your Revit $(RevitVersion) install folder." />
+  </Target>
+
+  <!--
+    SINGLE VERSION ONLY. Multi-targeting this add-in would be a mistake rather than a
+    feature: the Revit API is not binary compatible across releases, the host runtime
+    changes with it (2026 is .NET 8, 2027 is .NET 10), and one assembly cannot satisfy both.
+    This fails the build if someone adds a TargetFrameworks list, rather than letting a
+    second, untested target ship quietly.
+  -->
+  <Target Name="ForbidMultiTargeting" BeforeTargets="BeforeBuild" Condition="'$(TargetFrameworks)' != ''">
+    <Error Text="This add-in targets exactly one Revit release ($(RevitVersion), $(TargetFramework)). Remove TargetFrameworks - see the note in Directory.Build.props." />
   </Target>
 
 </Project>

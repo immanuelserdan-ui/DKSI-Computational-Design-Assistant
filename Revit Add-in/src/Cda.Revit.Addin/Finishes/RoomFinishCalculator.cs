@@ -48,6 +48,14 @@ public sealed class FinishResult
 
     /// <summary>Elements carrying finish for more than one room, so their identity is one of several.</summary>
     public required int SharedElements { get; init; }
+
+    /// <summary>
+    /// Ids of the rooms this run actually measured - not every room in the scope it was asked
+    /// for, since a locked, unplaced or geometry-invalid room is skipped without being
+    /// measured. The caller's authority for which rooms are safe to mark clean; see
+    /// FinishAutomation.ClearStale.
+    /// </summary>
+    public required IReadOnlyCollection<long> ProcessedRoomIds { get; init; }
 }
 
 /// <summary>
@@ -79,6 +87,7 @@ public sealed class RoomFinishCalculator
 
     private readonly List<string> _report = [];
     private readonly List<FinishCsvRow> _csvRows = [];
+    private readonly HashSet<long> _processedRoomIds = [];
 
     // Per-ELEMENT finish totals, for wall/floor/ceiling schedules. A wall between two
     // rooms sums both room-side contributions.
@@ -123,6 +132,45 @@ public sealed class RoomFinishCalculator
     private List<Element> _allCasework = [];
     private List<Element> _interiorSlabs = [];
     private List<Element> _interiorWalls = [];
+
+    /// <summary>
+    /// Every floor and wall in the model, Room Bounding status unchecked - the candidate pool
+    /// for the Room-Bounding=Yes half of <see cref="OccludingElements"/>. Room-Bounding=No
+    /// candidates keep using <see cref="_interiorSlabs"/>/<see cref="_interiorWalls"/>
+    /// unconditionally, exactly as before; this list exists only so a Room-Bounding=Yes
+    /// hanging wall or mezzanine - the convention <c>PaintedMaterialTakeoff</c>'s own
+    /// InteriorElementCalculator REQUIRES, since it filters on
+    /// <c>RoomBounding.IsRoomBounding</c> - can still be found. See FloatsWithinRoom for the
+    /// test that keeps this from also catching every ordinary wall corner and every room's
+    /// own floor.
+    /// </summary>
+    private List<Element> _allFloorsAndWalls = [];
+
+    /// <summary>
+    /// Interior slabs and hanging walls whose bounding box is near a given (host, room) pair.
+    /// Keyed by both, not just the host: whether a Room-Bounding=Yes candidate floats clear
+    /// of ITS room's own vertical extent (see <see cref="FloatsWithinRoom"/>) is a
+    /// room-specific question, so the same host wall bounding two different rooms can get two
+    /// different occluder lists. Cached because <see cref="OccludingElements"/> runs once per
+    /// host face and the same pairing recurs across a room's several boundary faces on the
+    /// same host.
+    /// </summary>
+    private readonly Dictionary<(long Host, long Room), List<Element>> _occluderCacheByRoom = [];
+
+    /// <summary>Host wall/ceiling area subtracted because a mezzanine slab or hanging wall
+    /// genuinely stands against it - see <see cref="OccludingElements"/>.</summary>
+    private double _occludedArea;
+
+    /// <summary>Host faces where at least one occluder actually reduced the measured area.</summary>
+    private int _occludedFaces;
+
+    /// <summary>
+    /// An occluder's real solid overlapped the host's bounding box (so it was offered to the
+    /// boolean subtraction) but the subtraction itself failed - left unresolved rather than
+    /// risking the host's own area on a failed boolean, same discipline as every other
+    /// boolean pass in this engine.
+    /// </summary>
+    private int _occlusionBooleanFailures;
 
     /// <summary>
     /// Answers "what is overhead?" for rooms nothing bounds from above. Built with the rest
@@ -237,6 +285,25 @@ public sealed class RoomFinishCalculator
     /// </summary>
     private readonly HashSet<long> _paintedUnmeasured = [];
 
+    /// <summary>
+    /// Elements with at least one split-face REGION that could not be measured - see
+    /// <see cref="MaterialLedger.DroppedRegions"/>, incremented inside
+    /// <see cref="FinishGeometry.ExactSubfaceArea"/> when a region's boolean clip fails and
+    /// cannot be recovered by its planar area either.
+    ///
+    /// THE COUNTER EXISTED BEFORE THE REPORT DID. AddMaterials received every ledger this
+    /// engine builds and merged its Areas into the room's totals, but never read
+    /// DroppedRegions off the same ledger - so a wall that lost one colour out of five kept
+    /// its other four colours (the fix that counter was added for) with no line anywhere
+    /// saying the fifth was missing. The area was no longer silently wrong; the fact that
+    /// some of it was unmeasured was silently invisible instead, and only slightly less so.
+    /// </summary>
+    private readonly HashSet<long> _regionsDropped = [];
+
+    /// <summary>Total dropped regions across every element, since one element can lose more
+    /// than one colour - <see cref="_regionsDropped"/> only counts elements, not regions.</summary>
+    private int _droppedRegionCount;
+
     private readonly ElementId _sepLineCategory = new(BuiltInCategory.OST_RoomSeparationLines);
     private readonly ElementId _ceilingCategory = new(BuiltInCategory.OST_Ceilings);
     private readonly ElementId _roofCategory = new(BuiltInCategory.OST_Roofs);
@@ -258,7 +325,21 @@ public sealed class RoomFinishCalculator
             _slabCategories.Add(new ElementId(BuiltInCategory.OST_StructuralFoundation));
     }
 
-    public FinishResult Run()
+    /// <param name="scopeRoomIds">
+    /// Measure only these rooms, plus whatever their own geometry pulls in. Null means the
+    /// whole model - every direct caller (the two manual commands, and FinishAutomation's own
+    /// forced "run now") passes null on purpose, because a manual run is exactly the moment a
+    /// user wants a whole-model answer regardless of what any dirty-tracking believes.
+    ///
+    /// Scoping is safe here ONLY because the collector below is still a single native query -
+    /// FilteredElementCollector's ICollection&lt;ElementId&gt; constructor is itself a quick
+    /// filter, evaluated in the core before anything crosses into managed memory, not a
+    /// managed Where() over every room. The caller (FinishAutomation.ScopeForPass) is what
+    /// carries the real responsibility: the set it hands in must already include every room
+    /// that shares a wall/floor/ceiling with a dirty one, because WriteElementTotals below
+    /// OVERWRITES each element's parameter with the sum of only the rooms THIS run visits.
+    /// </param>
+    public FinishResult Run(IReadOnlyCollection<ElementId>? scopeRoomIds = null)
     {
         // Boundary corrections first, in the same order as before: volumes on, then the upper
         // limits raised, so the geometry every measurement below reads is already right. Lives
@@ -276,7 +357,11 @@ public sealed class RoomFinishCalculator
         };
         var calculator = new SpatialElementGeometryCalculator(_doc, options);
 
-        var rooms = new FilteredElementCollector(_doc)
+        // Scoped via the collector's own id-set constructor - a native quick filter - rather
+        // than collecting every room and filtering in managed code with .Where().
+        var rooms = (scopeRoomIds is null
+                ? new FilteredElementCollector(_doc)
+                : new FilteredElementCollector(_doc, scopeRoomIds.ToList()))
             .OfCategory(BuiltInCategory.OST_Rooms)
             .WhereElementIsNotElementType()
             .OfType<Room>()
@@ -330,7 +415,11 @@ public sealed class RoomFinishCalculator
                 continue;
             }
 
-            if (MeasureRoom(room, calculator)) processed++;
+            if (MeasureRoom(room, calculator))
+            {
+                processed++;
+                _processedRoomIds.Add(room.Id.Value);
+            }
         }
 
         var elementsWritten = WriteElementTotals();
@@ -363,7 +452,7 @@ public sealed class RoomFinishCalculator
         if (_linkedBoundaryFaces > 0)
         {
             _report.Add(
-                $"LINKED WALLS NOT MEASURED: {_linkedBoundaryFaces} bounding face(s) across " +
+                $"LINKED BOUNDARIES NOT MEASURED: {_linkedBoundaryFaces} bounding face(s) across " +
                 $"{_linkedBoundaryRooms.Count} room(s), totalling " +
                 $"{Measure.ToSquareMetres(_linkedBoundaryArea):0.00} m² of room-facing surface, come " +
                 "from elements in a LINKED model. This engine measures the host document only, so " +
@@ -371,10 +460,13 @@ public sealed class RoomFinishCalculator
                 "and the takeoff - it is not zero paint, it is unmeasured paint, and the two look " +
                 "identical in a schedule. " +
                 "Earlier versions counted this area as room separation-line boundary, which named " +
-                "the wrong cause: the rooms ARE bounded, by real walls in another file. " +
-                "To get these quantities, run the tool in the model that OWNS the walls, or bind " +
-                "the link. A model whose walls are all linked will otherwise report almost no paint " +
-                "at all, entirely silently.");
+                "the wrong cause: the rooms ARE bounded, by real elements in another file. " +
+                "CEILINGS COUNT HERE TOO, not only walls: a linked ceiling used to throw part way " +
+                "through the room instead of being reported, which abandoned that room and left " +
+                "partial areas on the walls it had already measured. " +
+                "To get these quantities, run the tool in the model that OWNS those elements, or " +
+                "bind the link. A model whose walls are all linked will otherwise report almost no " +
+                "paint at all, entirely silently.");
         }
 
         if (_paintedUnmeasured.Count > 0)
@@ -393,6 +485,22 @@ public sealed class RoomFinishCalculator
                 "Element ids: " + string.Join(", ", _paintedUnmeasured.Order().Take(50)) +
                 (_paintedUnmeasured.Count > 50 ? ", ..." : string.Empty) +
                 ". Fix the modelling and the exact path will measure them.");
+        }
+
+        if (_droppedRegionCount > 0)
+        {
+            _report.Add(
+                $"SPLIT-FACE REGION(S) NOT MEASURED: {_droppedRegionCount} region(s) across " +
+                $"{_regionsDropped.Count} element(s) could neither be clipped to the room boundary " +
+                "nor shown to lie wholly inside it, so they contributed no area. Unlike a wall that " +
+                "falls to the arithmetic fallback wholesale, every OTHER region on these elements " +
+                "measured normally - this is one colour missing off a wall that otherwise reports " +
+                "correctly, which is easy to miss precisely because most of the wall looks right. " +
+                "Usual cause: a region whose edges will not extrude into a clean boolean - a " +
+                "curved split line, or a region degenerated by an edited wall profile. " +
+                "Element ids: " + string.Join(", ", _regionsDropped.Order().Take(50)) +
+                (_regionsDropped.Count > 50 ? ", ..." : string.Empty) +
+                ".");
         }
 
         if (_exteriorRooms > 0)
@@ -528,6 +636,23 @@ public sealed class RoomFinishCalculator
                 string.Join(", ", _lockedElements.Take(20)));
         }
 
+        if (_occludedArea > 1e-9 || _occlusionBooleanFailures > 0)
+        {
+            _report.Add(
+                $"OCCLUSION: {Measure.ToSquareMetres(_occludedArea):0.00} m2 subtracted from host " +
+                $"wall/ceiling faces across {_occludedFaces} face(s), where a mezzanine slab or " +
+                "hanging wall genuinely stands against them - see " +
+                "RoomFinishCalculator.OccludingElements. Without this, that area was counted TWICE: " +
+                "once as the host wall or ceiling behind the occluder (which nobody can see or " +
+                "paint), and once again as the occluder's own visible face via MeasureInteriorSlabs " +
+                "or MeasureInteriorWalls. " +
+                (_occlusionBooleanFailures > 0
+                    ? $"{_occlusionBooleanFailures} occluder-host boolean(s) failed and were left " +
+                      "unresolved - those hosts kept their un-occluded area rather than risk it on " +
+                      "a geometry edge case, so this total is a floor, not an exact figure."
+                    : "Every candidate boolean resolved cleanly."));
+        }
+
         if (_multipaintWalls.Count > 0)
         {
             _report.Add($"QC - MULTI-PAINT WALLS: {_multipaintWalls.Count} wall(s) carry more than one " +
@@ -546,6 +671,7 @@ public sealed class RoomFinishCalculator
             ElementsWritten = elementsWritten,
             ElementsTagged = elementsTagged,
             SharedElements = _sharedElements.Count,
+            ProcessedRoomIds = _processedRoomIds,
         };
     }
 
@@ -606,6 +732,16 @@ public sealed class RoomFinishCalculator
         // Non-room-bounding interior WALLS (hanging / partial-height / freestanding
         // partitions inside a room), invisible to the boundary sweep for the same reason.
         _interiorWalls = [.. Collect(BuiltInCategory.OST_Walls).Where(IsNonRoomBounding)];
+
+        // UNFILTERED - both Room Bounding states. PaintedMaterialTakeoff's own
+        // InteriorElementCalculator requires Room Bounding = YES for a hanging wall or
+        // mezzanine to be found at all (RoomBounding.IsRoomBounding in
+        // FindInteriorElements) - the opposite of the convention two lines above. An office
+        // that needs both tools correct on the same element has exactly one setting that
+        // works for both: Room Bounding = Yes. OccludingElements' second pass covers that
+        // case from this list, gated by FloatsWithinRoom so it cannot also catch every
+        // ordinary Room-Bounding=Yes wall corner or floor-to-wall join in the model.
+        _allFloorsAndWalls = [.. Collect(BuiltInCategory.OST_Floors), .. Collect(BuiltInCategory.OST_Walls)];
     }
 
     private static bool IsNonRoomBounding(Element element)
@@ -782,6 +918,16 @@ public sealed class RoomFinishCalculator
             // which belongs to the room rather than to any one element.
             var hostId = host?.Value ?? -1L;
 
+            // READ ALONGSIDE Areas, NOT INSTEAD OF IT. Every ledger this engine builds passes
+            // through here, which is what makes this the one place a dropped region cannot be
+            // merged in without also being counted - see the field doc on _regionsDropped for
+            // why that read was missing until now.
+            if (ledger.DroppedRegions > 0)
+            {
+                _droppedRegionCount += ledger.DroppedRegions;
+                if (host is not null) _regionsDropped.Add(host.Value);
+            }
+
             foreach (var (key, area) in ledger.Areas)
             {
                 var composite = (surface, hostId, key);
@@ -833,7 +979,8 @@ public sealed class RoomFinishCalculator
                                           _slabCategories.Any(c => c == category.Id);
 
                             var measured = _settings.UseGeometric && hasSlab && element is not null
-                                ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.TopFaces(element), element)
+                                ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.TopFaces(element), element,
+                                    OccludingElements(element, room))
                                 : null;
 
                             if (measured is { } floor)
@@ -843,6 +990,7 @@ public sealed class RoomFinishCalculator
                                 netFloorSlab += floor.Total;
                                 AddMaterials(FinishSettings.SurfaceFloor, floor.Materials, element!.Id);
                                 Accumulate(_elemFloorArea, element!.Id, floor.Total);
+                                RecordOcclusion(floor.OccludedArea, floor.OcclusionBooleanFailures);
 
                                 // The finish-material subset, read off the same ledger, so the
                                 // element's two numbers can never disagree with the CSV rows
@@ -881,8 +1029,52 @@ public sealed class RoomFinishCalculator
 
                         case SubfaceType.Top:
                         {
-                            var measured = _settings.UseGeometric && element is not null
-                                ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element)
+                            // NO RESOLVABLE ELEMENT, ANSWERED FIRST - and this is the null the
+                            // two `element!` operators below used to assert away.
+                            //
+                            // A top subface resolves to null for exactly the same two reasons a
+                            // side one does: the ceiling lives in a LINKED document, or the
+                            // boundary is virtual. `!` silences the compiler and does nothing at
+                            // runtime, so the arithmetic-fallback branch - the one a null element
+                            // is guaranteed to take, because `measured` is only computed when the
+                            // element is non-null - dereferenced it and threw. The block three
+                            // lines further down already tested `element is not null`, so the
+                            // null was known about; only these two calls were left asserting the
+                            // opposite.
+                            //
+                            // The throw was swallowed by this method's own catch, which is worse
+                            // than a crash rather than better: the room was abandoned PART WAY
+                            // through its boundary loop, so every wall already measured kept its
+                            // claim in the shared element dictionaries while the walls after it
+                            // got none - and WriteElementTotals then overwrote those elements'
+                            // parameters with the partial sum. The room itself returned false
+                            // before writing any of its own parameters. One linked ceiling
+                            // therefore published wrong areas for a room's walls and no areas for
+                            // the room, reporting only "FAILED <room>: Object reference not set".
+                            //
+                            // Treated exactly as the side case below treats the same two states,
+                            // for the same reasons - and NOT counted into ceilingSource, which is
+                            // load-bearing: boundaryCeiling gates the ceiling fallback chain, so
+                            // booking unattributable area here would suppress the one path that
+                            // can still find a real, element-backed ceiling overhead.
+                            if (element is null)
+                            {
+                                if (IsLinkedBoundary(subface))
+                                {
+                                    linkedSide += area;
+                                    linkedFaces++;
+                                }
+                                else
+                                {
+                                    virtualSide += area;
+                                }
+
+                                continue;
+                            }
+
+                            var measured = _settings.UseGeometric
+                                ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element,
+                                    OccludingElements(element, room))
                                 : null;
 
                             double amount, painted = 0.0;
@@ -890,24 +1082,22 @@ public sealed class RoomFinishCalculator
                             {
                                 amount = ceiling.Total;
                                 painted = ceiling.Materials.PaintedTotal;
-                                AddMaterials(FinishSettings.SurfaceCeiling, ceiling.Materials, element!.Id);
+                                AddMaterials(FinishSettings.SurfaceCeiling, ceiling.Materials, element.Id);
+                                RecordOcclusion(ceiling.OccludedArea, ceiling.OcclusionBooleanFailures);
                             }
                             else
                             {
                                 amount = area;
                                 var ledger = new MaterialLedger();
                                 ledger.Add(MaterialKey.Fallback, area);
-                                AddMaterials(FinishSettings.SurfaceCeiling, ledger, element!.Id);
+                                AddMaterials(FinishSettings.SurfaceCeiling, ledger, element.Id);
                                 ceilingFallback++;
                             }
 
                             ceilingSource[CeilingSourceKey(element)] += amount;
-                            if (element is not null)
-                            {
-                                Accumulate(_elemCeilingArea, element.Id, amount);
-                                AccumulatePaint(_elemCeilingPaint, _elemRoomCeilingPaint, element.Id, room, painted);
-                                Claim(element.Id, room, amount);
-                            }
+                            Accumulate(_elemCeilingArea, element.Id, amount);
+                            AccumulatePaint(_elemCeilingPaint, _elemRoomCeilingPaint, element.Id, room, painted);
+                            Claim(element.Id, room, amount);
                             continue;
                         }
 
@@ -942,7 +1132,8 @@ public sealed class RoomFinishCalculator
                     if (categoryId == _ceilingCategory || categoryId == _roofCategory)
                     {
                         var measured = _settings.UseGeometric
-                            ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element)
+                            ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element,
+                                OccludingElements(element, room))
                             : null;
 
                         double amount, painted = 0.0;
@@ -951,6 +1142,7 @@ public sealed class RoomFinishCalculator
                             amount = sloped.Total;
                             painted = sloped.Materials.PaintedTotal;
                             AddMaterials(FinishSettings.SurfaceCeiling, sloped.Materials, element.Id);
+                            RecordOcclusion(sloped.OccludedArea, sloped.OcclusionBooleanFailures);
                         }
                         else
                         {
@@ -969,7 +1161,8 @@ public sealed class RoomFinishCalculator
                     }
 
                     var wallResult = _settings.UseGeometric && element is Wall
-                        ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.CachedFaces(element), element)
+                        ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.CachedFaces(element), element,
+                            OccludingElements(element, room))
                         : null;
 
                     if (wallResult is { } wall)
@@ -979,6 +1172,7 @@ public sealed class RoomFinishCalculator
                         Accumulate(_elemWallArea, element.Id, wall.Total);
                         AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, element.Id, room, wall.Materials.PaintedTotal);
                         Claim(element.Id, room, wall.Total);
+                        RecordOcclusion(wall.OccludedArea, wall.OcclusionBooleanFailures);
 
                         if (wall.Materials.DistinctPaintedMaterials > 1)
                             _multipaintWalls.Add(element.Id.Value);
@@ -1035,7 +1229,10 @@ public sealed class RoomFinishCalculator
 
         if (_ceilingFallback is not null && boundaryCeiling <= FinishSettings.CeilingFallbackMinimum)
         {
+            // TIMED (2026-09-08). Log.Debug is a no-op unless Log.Verbose is on.
+            var fallbackTimer = System.Diagnostics.Stopwatch.StartNew();
             fallback = _ceilingFallback.Resolve(room, roomBottomFaces);
+            Log.Debug($"CeilingFallback.Resolve room={room.Id.Value}: {fallbackTimer.ElapsedMilliseconds} ms.");
 
             if (fallback is not null)
             {
@@ -1072,9 +1269,20 @@ public sealed class RoomFinishCalculator
             ? CaseworkDeduction(room, phase, exactWalls)
             : (0.0, 0);
 
+        // TIMED (2026-09-08), three discrete per-room phases, so a slow room's cost can be
+        // attributed to a specific phase rather than to "MeasureRoom" as a whole. Log.Debug
+        // is a no-op unless Log.Verbose is on - see Log.cs - so this costs nothing normally.
+        var phaseTimer = System.Diagnostics.Stopwatch.StartNew();
         var (mezzFloor, mezzCeiling, mezzCount) = MeasureInteriorSlabs(room, AddMaterials, ceilingClaimed);
+        Log.Debug($"MeasureInteriorSlabs room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {mezzCount} slab(s).");
+
+        phaseTimer.Restart();
         var (hangingArea, hangingCount) = MeasureInteriorWalls(room, AddMaterials);
+        Log.Debug($"MeasureInteriorWalls room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {hangingCount} wall(s).");
+
+        phaseTimer.Restart();
         var (revealPaint, revealCount) = MeasureReveals(room, phase, AddMaterials);
+        Log.Debug($"MeasureReveals room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {revealCount} reveal(s).");
 
         // Fallback wall area cannot be attributed to a material - record it transparently.
         var fallbackNet = Math.Max(grossWall - openTotal - caseworkTotal, 0.0);
@@ -1138,6 +1346,183 @@ public sealed class RoomFinishCalculator
     }
 
     // ------------------------------------------------------------ interior elements
+
+    /// <summary>
+    /// Interior slabs and hanging walls whose bounding box comes near <paramref name="host"/> -
+    /// the candidates worth testing with a real boolean for "does this actually stand against
+    /// the host's face". A cheap bounding-box overlap first, same shape every blocker test in
+    /// this add-in already uses before paying for <see cref="BooleanOperationsUtils"/>.
+    ///
+    /// WHY THIS IS NEEDED AT ALL. <see cref="MeasureInteriorSlabs"/> and
+    /// <see cref="MeasureInteriorWalls"/> already add a mezzanine's or hanging wall's OWN
+    /// visible face to the room's total - correctly. Nothing, until this, reduced the HOST
+    /// wall or ceiling's own measurement for the part it no longer shows. A hanging wall
+    /// standing flush against a host wall was counted TWICE: once as the hanging wall's own
+    /// face (right), once as the host wall behind it (wrong - nobody can see or paint a
+    /// surface a permanent fixture stands against). <see cref="FinishGeometry.ExactSubfaceArea"/>
+    /// clips the host's face against the ROOM boundary; it has no notion of a third element
+    /// sitting in front of it. This is what gives it one.
+    ///
+    /// SCOPED TO THE ELEMENT'S REAL SOLID, NOT ITS BOUNDING BOX. This filter only narrows the
+    /// candidate list - the actual subtraction in ExactSubfaceArea booleans against
+    /// <see cref="FinishGeometry.ElementSolids"/>, so a diagonal or L-shaped occluder whose
+    /// bounding box merely brushes the host loses only the area its real geometry covers.
+    /// </summary>
+    private List<Element> OccludingElements(Element host, Room room)
+    {
+        var key = (host.Id.Value, room.Id.Value);
+        if (_occluderCacheByRoom.TryGetValue(key, out var cached)) return cached;
+
+        // TIMED (2026-09-08), cache-miss path only - a hit above already returned. Pass 2
+        // below scans _allFloorsAndWalls (every floor and wall in the WHOLE MODEL) per
+        // uncached (host, room) pair, so this is the candidate for cost scaling with model
+        // size rather than with the rooms actually being measured. Log.Debug is a no-op
+        // unless Log.Verbose is on - see Log.cs - so this costs nothing in normal operation.
+        var occlusionTimer = System.Diagnostics.Stopwatch.StartNew();
+
+        var found = new List<Element>();
+
+        try
+        {
+            var hostBox = host.get_BoundingBox(null);
+
+            if (hostBox is not null)
+            {
+                // PASS 1 - Room Bounding = No. Unconditional, exactly as before: this office's
+                // own convention for a mezzanine/hanging wall, and RoomFinishCalculator's own
+                // MeasureInteriorSlabs/MeasureInteriorWalls already trust it with no further
+                // test.
+                foreach (var candidate in _interiorSlabs.Count > 0 || _interiorWalls.Count > 0
+                             ? _interiorSlabs.Concat(_interiorWalls)
+                             : [])
+                {
+                    if (candidate.Id == host.Id) continue;
+
+                    try
+                    {
+                        var box = candidate.get_BoundingBox(null);
+                        if (box is not null && BoxesOverlap(hostBox, box)) found.Add(candidate);
+                    }
+                    catch
+                    {
+                        // One candidate's box failing must not cost the rest of the list.
+                    }
+                }
+
+                // PASS 2 - Room Bounding = Yes, gated by FloatsWithinRoom. This is the
+                // convention PaintedMaterialTakeoff's own InteriorElementCalculator requires
+                // (RoomBounding.IsRoomBounding in FindInteriorElements) - the office needs
+                // both tools correct on the same element, and Room Bounding = Yes is the only
+                // setting that satisfies the vendor tool's hard requirement at all. Without
+                // FloatsWithinRoom this pass would also catch every ordinary Room-Bounding=Yes
+                // wall meeting another at a corner, and every room's own floor touching the
+                // base of its own perimeter walls - both genuinely overlap their neighbour by
+                // a few millimetres at the join, by design, in Revit's own geometry - and
+                // silently start subtracting real paint area at ordinary junctions throughout
+                // the whole model. See FloatsWithinRoom for exactly what makes a candidate
+                // safe to treat as an occluder instead.
+                var roomBox = SafeBoundingBox(room);
+
+                if (roomBox is not null)
+                {
+                    foreach (var candidate in _allFloorsAndWalls)
+                    {
+                        if (candidate.Id == host.Id) continue;
+                        if (IsNonRoomBounding(candidate)) continue;   // Pass 1 already covers it
+
+                        try
+                        {
+                            var box = candidate.get_BoundingBox(null);
+                            if (box is not null && BoxesOverlap(hostBox, box) &&
+                                FloatsWithinRoom(candidate, roomBox, box))
+                            {
+                                found.Add(candidate);
+                            }
+                        }
+                        catch
+                        {
+                            // One candidate's box failing must not cost the rest of the list.
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // No box on the host itself - nothing to filter against, so no candidates.
+        }
+
+        _occluderCacheByRoom[key] = found;
+
+        Log.Debug($"OccludingElements MISS host={host.Id.Value} room={room.Id.Value}: " +
+                  $"{occlusionTimer.ElapsedMilliseconds} ms, {found.Count} occluder(s), " +
+                  $"scanned {_allFloorsAndWalls.Count} floor/wall candidate(s) in pass 2.");
+
+        return found;
+    }
+
+    private static BoundingBoxXYZ? SafeBoundingBox(Element element)
+    {
+        try { return element.get_BoundingBox(null); }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Does this Room-Bounding=Yes candidate stand clear of the room's OWN vertical extent,
+    /// in the direction that actually distinguishes it from the room's own boundary? Only
+    /// then is it safe to treat as an occluder rather than mistake it for the room's own
+    /// perimeter wall or its own floor.
+    ///
+    /// WALLS - EITHER DIRECTION IS MEANINGFUL. A normal perimeter wall spans (almost
+    /// exactly) from the room's own base to its own upper limit, touching both. A genuine
+    /// hanging wall does not: it is suspended from above with a gap below ("hanging" in the
+    /// literal sense) or stands up without reaching the ceiling. Either leaves a real gap on
+    /// at least one side, which is why OR is correct here.
+    ///
+    /// FLOORS NEED BOTH DIRECTIONS, NOT EITHER - and this took two attempts to get right.
+    /// A floor is inherently thin, so ONE side always has huge clearance no matter what the
+    /// floor is: the room's own BASE floor has enormous clearance to the ceiling above it,
+    /// and a floor SERVING AS THE ROOM'S OWN CEILING - a structural slab whose underside
+    /// caps the room, genuinely overlapping the tops of the walls it joins, by design, the
+    /// same way a floor-to-wall base join does - has enormous clearance to the base below
+    /// it. OR would accept both as "occluders", the second one silently cutting real paint
+    /// off the top of every perimeter wall in every room with a slab ceiling. Only a floor
+    /// with real air on BOTH sides - below it down to the room's own base, above it up to
+    /// the room's own ceiling - is actually floating inside the room rather than being an
+    /// edge of it.
+    ///
+    /// THE MARGIN IS GENEROUS ON PURPOSE - 1 ft (≈300 mm), far past the millimetre-scale
+    /// overlap an ordinary Revit wall/floor join produces at a corner, and far short of a
+    /// real storey height, so ordinary construction geometry cannot cross it in either
+    /// direction by accident.
+    /// </summary>
+    private static bool FloatsWithinRoom(Element candidate, BoundingBoxXYZ roomBox, BoundingBoxXYZ candidateBox)
+    {
+        const double margin = 1.0;   // feet
+
+        var clearBelow = candidateBox.Min.Z - roomBox.Min.Z > margin;
+        var clearAbove = roomBox.Max.Z - candidateBox.Max.Z > margin;
+
+        return candidate is Floor ? clearBelow && clearAbove : clearBelow || clearAbove;
+    }
+
+    /// <summary>Folds one host face's occlusion result into the run-wide totals. Called from
+    /// every <see cref="FinishGeometry.ExactSubfaceArea"/> call site that passes occluders.</summary>
+    private void RecordOcclusion(double occludedArea, int occlusionBooleanFailures)
+    {
+        if (occludedArea > 1e-9)
+        {
+            _occludedArea += occludedArea;
+            _occludedFaces++;
+        }
+
+        _occlusionBooleanFailures += occlusionBooleanFailures;
+    }
+
+    private static bool BoxesOverlap(BoundingBoxXYZ a, BoundingBoxXYZ b) =>
+        a.Min.X <= b.Max.X && a.Max.X >= b.Min.X &&
+        a.Min.Y <= b.Max.Y && a.Max.Y >= b.Min.Y &&
+        a.Min.Z <= b.Max.Z && a.Max.Z >= b.Min.Z;
 
     /// <summary>
     /// Mezzanine slabs inside this room's volume. Probe a point just above the slab's top
@@ -1252,12 +1637,24 @@ public sealed class RoomFinishCalculator
     /// on the visible side(s) only, its back concealed behind casework, so: if any side
     /// face is painted, count ONLY painted faces; otherwise count the single face whose
     /// normal points most toward the room centre. Never both - that doubles the quantity.
+    ///
+    /// CLIPPED TO THE ROOM'S OWN VERTICAL EXTENT, not the wall's. A hanging wall's face
+    /// area used to be taken whole - <c>face.Area</c>, the wall's real height end to end -
+    /// on the reasoning that this method exists specifically for partitions that stand
+    /// inside a room, so the whole visible face belongs to it. That reasoning holds only
+    /// while the wall's own height matches the room's: a wall drawn taller than the room it
+    /// stands in - reaching up through where a ceiling would normally stop it, exactly the
+    /// case a mis-joined or over-height hanging wall produces - was counting the slice above
+    /// the room as this room's paint too. Nothing bounds a freestanding wall the way a
+    /// ceiling bounds a room-bounding one, so nothing was catching it.
     /// </summary>
     private (double Area, int Count) MeasureInteriorWalls(
         Room room, Action<string, MaterialLedger, ElementId?> addMaterials)
     {
         var total = 0.0;
         var count = 0;
+
+        var roomBox = SafeBoundingBox(room);
 
         foreach (var wall in _interiorWalls)
         {
@@ -1373,12 +1770,14 @@ public sealed class RoomFinishCalculator
 
                 foreach (var face in use)
                 {
-                    area += face.Area;
+                    var faceArea = ClippedToRoomHeight(face, box, roomBox);
+
+                    area += faceArea;
                     var key = _geometry.FaceMaterialKey(wall, face);
-                    ledger.Add(key, face.Area);
-                    Accumulate(_elemWallArea, wall.Id, face.Area);
-                    Claim(wall.Id, room, face.Area);
-                    if (key.Painted) AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, wall.Id, room, face.Area);
+                    ledger.Add(key, faceArea);
+                    Accumulate(_elemWallArea, wall.Id, faceArea);
+                    Claim(wall.Id, room, faceArea);
+                    if (key.Painted) AccumulatePaint(_elemWallPaint, _elemRoomWallPaint, wall.Id, room, faceArea);
                 }
 
                 if (area <= 0) continue;
@@ -1394,6 +1793,109 @@ public sealed class RoomFinishCalculator
         }
 
         return (total, count);
+    }
+
+    /// <summary>
+    /// The portion of <paramref name="face"/>'s area that actually sits within the room's
+    /// own vertical extent - <paramref name="roomBox"/> - rather than above or below it.
+    ///
+    /// CHEAP IN THE COMMON CASE. Most interior walls are no taller than the room they stand
+    /// in, so the first check below - the wall's own bounding box already fits inside the
+    /// room's, Z-wise - answers "nothing to clip" without touching geometry. The boolean
+    /// path only runs for the genuinely over- or under-height case this method exists for.
+    ///
+    /// EXACT, NOT A LINEAR SCALE. A face is only guaranteed rectangular for the common
+    /// straight extrusion; scaling face.Area by a height fraction would be wrong the moment
+    /// it is not. Extruding the face into a thin solid (<see cref="SplitFaceRegions.SolidOf"/>,
+    /// the same helper Split Face regions use to become carrier geometry) and
+    /// boolean-intersecting it against a box spanning the room's real Z-range, then reading
+    /// the area back off the matching face of the result, answers the same way
+    /// <see cref="FinishGeometry.ExactSubfaceArea"/> already does for host occlusion - the
+    /// boolean IS the measurement, not an approximation of one.
+    ///
+    /// ZERO WHEN THERE IS NO OVERLAP AT ALL, checked explicitly before the boolean is even
+    /// attempted - Revit's own boolean engine refuses a pair whose solids do not intersect
+    /// (see <see cref="Casework.CaseworkVoidCutter"/>), which would otherwise be caught by
+    /// the same try/catch as a genuine computation failure and answer the wrong way: a wall
+    /// standing entirely above a room is zero of that room's paint, not all of it.
+    ///
+    /// FALLS BACK TO THE WHOLE FACE only once genuine partial overlap is already established
+    /// and the boolean itself fails - an unclipped area is the number this method replaces,
+    /// so that failure path is strictly no worse than before this fix existed.
+    /// </summary>
+    private static double ClippedToRoomHeight(Face face, BoundingBoxXYZ wallBox, BoundingBoxXYZ? roomBox)
+    {
+        if (roomBox is null) return face.Area;
+
+        var margin = FinishSettings.LimitMargin;
+
+        // Already fits inside the room's height - the overwhelmingly common case - so skip
+        // geometry entirely.
+        if (wallBox.Min.Z >= roomBox.Min.Z - margin && wallBox.Max.Z <= roomBox.Max.Z + margin)
+            return face.Area;
+
+        // No overlap at all: the room's Z-range and the wall's do not even touch.
+        if (wallBox.Max.Z <= roomBox.Min.Z + margin || wallBox.Min.Z >= roomBox.Max.Z - margin)
+            return 0.0;
+
+        try
+        {
+            var solid = SplitFaceRegions.SolidOf(face, Measure.FromMillimetres(5.0));
+            if (solid is null) return face.Area;
+
+            var normal = face is PlanarFace planar ? planar.FaceNormal : face.ComputeNormal(new UV(0.5, 0.5));
+            if (normal.IsZeroLength()) return face.Area;
+
+            var clipHeight = roomBox.Max.Z - roomBox.Min.Z;
+            if (clipHeight <= 0) return face.Area;
+
+            // A generous horizontal box around the WALL's own footprint - not the room's -
+            // because all that needs clipping here is Z; the wall's own bounding box is
+            // already a safe superset of the face's horizontal extent.
+            var padding = Measure.FromMillimetres(500.0);
+            var z0 = roomBox.Min.Z;
+
+            CurveLoop clipLoop = new();
+            XYZ[] corners =
+            [
+                new XYZ(wallBox.Min.X - padding, wallBox.Min.Y - padding, z0),
+                new XYZ(wallBox.Max.X + padding, wallBox.Min.Y - padding, z0),
+                new XYZ(wallBox.Max.X + padding, wallBox.Max.Y + padding, z0),
+                new XYZ(wallBox.Min.X - padding, wallBox.Max.Y + padding, z0),
+            ];
+
+            for (var i = 0; i < corners.Length; i++)
+                clipLoop.Append(Line.CreateBound(corners[i], corners[(i + 1) % corners.Length]));
+
+            var clipSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
+                [clipLoop], XYZ.BasisZ, clipHeight);
+
+            var clipped = BooleanOperationsUtils.ExecuteBooleanOperation(
+                solid, clipSolid, BooleanOperationsType.Intersect);
+
+            if (clipped is null || clipped.Volume <= 1e-9) return 0.0;
+
+            // The face that shares the ORIGINAL face's own plane and outward direction -
+            // not the one offset into the wall by the extrusion thickness, and not a cut
+            // face the clip itself introduced.
+            foreach (Face candidate in clipped.Faces)
+            {
+                var candidateNormal = candidate is PlanarFace cp
+                    ? cp.FaceNormal
+                    : candidate.ComputeNormal(new UV(0.5, 0.5));
+
+                if (candidateNormal.IsZeroLength()) continue;
+                if (candidateNormal.DotProduct(normal) < 0.99) continue;
+
+                return candidate.Area;
+            }
+
+            return face.Area;
+        }
+        catch
+        {
+            return face.Area;
+        }
     }
 
     /// <summary>

@@ -25,6 +25,25 @@ namespace Cda.Revit.Addin.Commands;
 ///   No parameters are created or bound. No areas are measured. No CSV is written. If neither
 ///   correction applies, this command changes nothing at all and says so.
 ///
+/// WHAT IT DELIBERATELY DOES NOT DO: TOUCH ROOM BOUNDING
+///   A mezzanine slab or hanging wall clips the room it stands inside, and no upper limit can
+///   undo that - Revit stops a room's volume at the NEAREST bounding element, so the mezzanine
+///   wins over the ceiling however high the limit goes. The only lever is the element's own
+///   Room Bounding flag, and this command does not pull it.
+///
+///   That was tried, on 2026-09-08, both as a hand-typed marker and as a geometric detector.
+///   The detector unchecked NINE elements on the first real model, of which four were the
+///   walls of the structure one storey up: their base is naturally clear of the room below,
+///   and the room's own limit envelope reached high enough to contain them, so they read as
+///   hanging walls. A containment guard written against measured bounding boxes did not catch
+///   it.
+///
+///   It should not be tried a third time without a different idea, because the office
+///   convention makes the whole feature unnecessary: mezzanines and hanging walls are modelled
+///   Room Bounding = YES, which is what PaintedMaterialTakeoff's InteriorElementCalculator
+///   requires to find them at all (see RoomFinishCalculator.FindInteriorElements). A room
+///   clipped at a mezzanine is the accepted cost of the takeoff seeing that mezzanine.
+///
 /// ONE TRANSACTION, so a single Ctrl+Z reverts the whole thing including the volumes setting.
 /// </summary>
 [Transaction(TransactionMode.Manual)]

@@ -25,10 +25,6 @@ public readonly record struct Span(double Start, double End)
 public static class SkirtingRun
 {
     /// <summary>
-    /// Everything left of <paramref name="whole"/> once every blocked span is removed.
-    /// Blocked spans may overlap, nest, or fall outside; all are handled.
-    /// </summary>
-    /// <summary>
     /// Merges blocked spans that overlap or are separated by less than
     /// <paramref name="bridge"/>, so a row of adjacent units reads as one obstruction.
     ///
@@ -61,6 +57,10 @@ public static class SkirtingRun
         return merged;
     }
 
+    /// <summary>
+    /// Everything left of <paramref name="whole"/> once every blocked span is removed.
+    /// Blocked spans may overlap, nest, or fall outside; all are handled.
+    /// </summary>
     public static List<Span> Subtract(Span whole, IEnumerable<Span> blocked)
     {
         var surviving = new List<Span> { whole };
@@ -178,6 +178,47 @@ public static class SkirtingRun
     }
 
     /// <summary>
+    /// Is this insert actually cut into THIS stretch of wall?
+    ///
+    /// THE GUARD THAT WAS MISSING, AND WHY IT COST REVEAL BOARDS.
+    ///   Inserts are found per WALL, but measured against a RUN - one room's stretch of that
+    ///   wall. A wall almost always runs past the room it bounds, so most of its inserts
+    ///   belong to somebody else's stretch.
+    ///
+    ///   <c>Curve.Project</c> on a BOUND curve clamps to the nearest endpoint, so a door
+    ///   thirty metres down the corridor projects silently onto this run's end and reports a
+    ///   perfectly plausible parameter. Nothing downstream can tell that apart from a real
+    ///   opening at the corner. The observable damage was in the reveal pass: the far door
+    ///   was claimed by the wrong room, its two jambs collapsed onto one point, and the room
+    ///   that actually contains the door never got a board - so reveals went missing at the
+    ///   openings that needed them and appeared at corners that had none.
+    ///
+    /// The test is the distance from the insert's own centre to the projected point, in plan.
+    /// An insert genuinely on this run sits half a wall thickness away - the run is on the
+    /// face, the insert on the centreline. One elsewhere sits its true distance away, which
+    /// is metres. An insert straddling the run's end reads about half its own width, which is
+    /// why the width is part of the reach: it does breach this stretch and must be kept.
+    /// </summary>
+    public static bool OnRun(Curve axis, Element insert, Document doc, double hostThickness, double margin)
+    {
+        var centre = LocationOf(insert) ?? BoxCentre(insert);
+
+        // Undecidable. Keep the insert rather than silently suppress a real opening.
+        if (centre is null) return true;
+
+        XYZ? nearest;
+        try { nearest = axis.Project(centre)?.XYZPoint; }
+        catch { return true; }
+
+        if (nearest is null) return true;
+
+        var reach = hostThickness + (WidthOf(insert, doc) / 2.0) + margin;
+        var flat = new XYZ(nearest.X - centre.X, nearest.Y - centre.Y, 0);
+
+        return flat.GetLength() <= reach;
+    }
+
+    /// <summary>
     /// The span a door's JAMB occupies, measured from the door's real geometry at skirting
     /// height rather than from any width parameter.
     ///
@@ -235,6 +276,23 @@ public static class SkirtingRun
     {
         try { return (element.Location as LocationPoint)?.Point; }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// Centre of the element's bounding box. The fallback anchor for inserts with no
+    /// LocationPoint - a wall Opening is the case that matters, and its box IS the hole.
+    /// </summary>
+    private static XYZ? BoxCentre(Element element)
+    {
+        try
+        {
+            var box = element.get_BoundingBox(null);
+            return box is null ? null : (box.Min + box.Max) / 2.0;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

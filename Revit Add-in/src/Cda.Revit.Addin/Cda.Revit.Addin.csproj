@@ -48,8 +48,11 @@
   </ItemGroup>
 
   <!--
-    Opt-out auto-deploy. Revit locks the DLL while running, so this warns instead of
-    failing the build; if you see the warning, close Revit and rebuild.
+    Opt-out auto-deploy, to the ALL-USERS folder (RevitAddinsDir, Directory.Build.props) -
+    Program Files, not %AppData%. Two things can now make the copy fail, where only one
+    could before: Revit locking the DLL while running, same as always, and this build not
+    being elevated, since Program Files needs admin rights. Either way this warns instead of
+    failing the build - close Revit, or re-run elevated, and rebuild.
     Disable entirely with:  dotnet build -p:DeployToRevit=false
   -->
   <PropertyGroup>
@@ -89,7 +92,7 @@
     </PropertyGroup>
 
     <Warning Condition="'$(_BuiltStamp)' != '$(_DeployedStamp)'"
-             Text="DEPLOY DID NOT LAND. Revit is holding the DLL, so it is still running the OLD add-in. Built $(_BuiltStamp), deployed copy is $(_DeployedStamp). Close Revit and rebuild." />
+             Text="DEPLOY DID NOT LAND - Revit is still running the OLD add-in. Built $(_BuiltStamp), deployed copy is $(_DeployedStamp). Either Revit is holding the DLL (close it and rebuild), or this build was not elevated (Program Files needs admin rights - re-run as admin and rebuild)." />
 
     <Message Condition="'$(_BuiltStamp)' == '$(_DeployedStamp)'" Importance="high"
              Text="Deploy verified - Revit will load build $(_BuiltStamp) from $(RevitDeployDir)" />

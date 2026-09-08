@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  DKSI Revit Tools - MACHINE-WIDE variant, for IT mass deployment.
+
+  THIS IS A SECOND PACKAGE, NOT A REPLACEMENT. DKSI-Revit-Tools.wxs stays exactly as it is
+  and is still the right answer for a user installing it themselves: no admin, no UAC, no
+  ticket. This one exists because "deployed silently to every workstation by IT" and "installs
+  into %AppData%" cannot both be true, and asking for both is the most common way an add-in
+  rollout fails without anyone noticing.
+
+  WHY %AppData% CANNOT BE MASS DEPLOYED
+    SCCM, Intune and GPO software installation run as SYSTEM or as a local admin, not as the
+    person who will use Revit. AppDataFolder resolves against the INSTALLING account, so a
+    silent per-machine run of the per-user package writes the add-in to
+
+        C:\Windows\System32\config\systemprofile\AppData\Roaming\Autodesk\Revit\Addins\2027
+
+    Windows Installer reports success. Every file is written. No user's Revit ever sees it,
+    and there is no error anywhere to explain why. The per-user package must be deployed in
+    USER context - Intune's "user" install behaviour, a GPO user policy, or a logon script -
+    or not deployed centrally at all.
+
+  SO THIS ONE GOES WHERE REVIT ACTUALLY LOOKS FOR ALL-USERS ADD-INS
+
+        C:\Program Files\Autodesk\Revit\Addins\2027\
+
+    NOT C:\ProgramData\Autodesk\Revit\Addins\2027. That was the all-users folder up to Revit
+    2026 and Revit 2027 refuses manifests found there, silently, with one line in the journal
+    and an empty ribbon. This is not theory: PaintTakeoff 1.0.1 shipped against the old folder
+    and never loaded once. See "installer/PaintTakeoff/README.md" for the whole account.
+
+  DO NOT INSTALL BOTH VARIANTS ON ONE MACHINE. They carry the same AddInId, and Revit does not
+  support reading one add-in from two manifests - it loads neither predictably. The UpgradeCode
+  below is deliberately DIFFERENT from the per-user package's, because a per-machine installer
+  cannot uninstall another user's per-user install and pretending otherwise with a shared
+  UpgradeCode produces an upgrade that silently half-works. Before rolling this out, have IT
+  remove the per-user copies, or accept that early adopters must uninstall theirs by hand.
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+      Name="DKSI Revit Tools (all users)"
+      Manufacturer="DKSI"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="c4e81f6a-5d73-4a92-b0e8-71f39c2a4d6b"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <SummaryInformation
+        Description="DKSI Revit Tools for Revit 2027 - machine-wide install for IT deployment"
+        Manufacturer="DKSI" />
+
+    <!-- Same reasoning as the per-user package: during evaluation the same version number is
+         rebuilt several times a day, and without this a reinstall silently keeps the old files
+         while reporting success. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      NO "IS REVIT 2027 INSTALLED?" LAUNCH CONDITION, for the reason set out at length in
+      DKSI-Revit-Tools.wxs. Note that the ProgramFiles redirection which broke that check does
+      NOT apply here - this package is per-machine, so ProgramFiles64Folder is the real one.
+      The guard is still omitted, because Revit's registry layout varies by product, language
+      and deployment, and a guard that blocks a correct machine is worse than no guard.
+    -->
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.NoticeRtf)" />
+
+    <!--
+      C:\Program Files\Autodesk\Revit\Addins\2027 - and note it is "Revit\Addins", NOT
+      "Revit 2027\AddIns". Those are two different folders on a 2027 machine and only this one
+      is the all-users add-in location; the other belongs to Revit's own installation.
+
+      The manifest sits in 2027\ and the payload in the Cda subfolder beside it, because the
+      <Assembly> path inside the manifest is relative to the manifest's own folder. That
+      relative layout is identical to the per-user package, which is exactly why the same
+      unmodified .addin file works for both.
+    -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="AutodeskFolder" Name="Autodesk">
+        <Directory Id="RevitFolder" Name="Revit">
+          <Directory Id="AddinsFolder" Name="Addins">
+            <Directory Id="Addins2027Folder" Name="2027">
+              <Directory Id="INSTALLFOLDER" Name="Cda" />
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="DKSI Revit Tools" Level="1">
+      <ComponentGroupRef Id="AllUsersAddinFiles" />
+      <ComponentRef Id="AllUsersTimeTrackingOff" />
+      <ComponentRef Id="AllUsersTimeTrackingOn" />
+    </Feature>
+
+  </Package>
+
+  <Fragment>
+
+    <ComponentGroup Id="AllUsersAddinFiles">
+
+      <!--
+        ONE COMPONENT FOR THE WHOLE ASSEMBLY AND ITS COMPANION FILES, for the reason the
+        per-user package gives in full: Windows Installer protects an unversioned file that
+        differs from what it remembers, on the assumption it holds user edits. The .pdb, the
+        two .json files and the .addin manifest all have no version resource, so without
+        CompanionFile an upgrade reports success and skips four of six files.
+      -->
+      <Component Id="AllUsersAddinPayload" Directory="INSTALLFOLDER"
+                 Guid="0298b920-ece7-4387-bf9d-7ec4a77e9a7a">
+        <File Id="AuAddinDll" Source="$(var.PayloadDir)\Cda.Revit.Addin.dll" KeyPath="yes" />
+
+        <!-- The .pdb ships on purpose: without it a stack trace in the log has no line
+             numbers, and a problem reported from a workstation has to be reproducible. -->
+        <File Id="AuAddinPdb" Source="$(var.PayloadDir)\Cda.Revit.Addin.pdb" CompanionFile="AuAddinDll" />
+        <File Id="AuDepsJson" Source="$(var.PayloadDir)\Cda.Revit.Addin.deps.json" CompanionFile="AuAddinDll" />
+        <File Id="AuRuntimeConfigJson" Source="$(var.PayloadDir)\Cda.Revit.Addin.runtimeconfig.json" CompanionFile="AuAddinDll" />
+
+        <RemoveFolder Id="AuRemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+
+      <!--
+        The manifest lives one folder up, so it cannot share the component above - a
+        component's files must all sit in one directory.
+
+        The key path is a registry value rather than the manifest itself, because a file cannot
+        be both a component's key path and a companion of another file, and the companion
+        behaviour is the point. HKLM, not HKCU: this is a per-machine package and an HKCU key
+        path would make the product look absent to every user except the one who installed it.
+
+        The 2027, Addins, Revit and Autodesk folders are deliberately NOT removed on uninstall -
+        other add-ins live there, Autodesk's own among them.
+      -->
+      <Component Id="AllUsersAddinManifest" Directory="Addins2027Folder"
+                 Guid="0a3c7e58-9146-4bd2-a7f0-2e6519c8b4d3">
+        <File Id="AuManifestFile" Source="$(var.PayloadDir)\..\Cda.Revit.Addin.addin"
+              CompanionFile="AuAddinDll" KeyPath="no" />
+        <RegistryValue Root="HKLM" Key="Software\DKSI\RevitTools"
+                       Name="ManifestInstalled" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!--
+      TIME TRACKING DEFAULTS TO OFF, and that matters more here than in the per-user package.
+      A user installing this on their own machine has at least chosen to. A machine-wide silent
+      rollout has not been chosen by any of the people it lands on, so switching on time
+      recording by default would be recording people without asking them.
+
+      An office that wants it on everywhere deploys with:
+          msiexec /i DKSI-Revit-Tools-AllUsers.msi TIMETRACKING=1 /qn
+    -->
+    <Component Id="AllUsersTimeTrackingOff" Directory="INSTALLFOLDER"
+               Guid="b7148e0d-3fa2-45c6-91e7-58d0c2f6a39b"
+               Condition="NOT TIMETRACKING">
+      <!-- ShortName by hand on both variants: they share one long name because only one is
+           ever installed, but WiX would generate the same 8.3 name twice and collide. -->
+      <File Id="AuTimeTrackingOffJson"
+            Source="$(var.InstallerDir)\time-tracking.off.json"
+            Name="time-tracking.defaults.json" ShortName="attoff.jso" KeyPath="yes" />
+    </Component>
+
+    <Component Id="AllUsersTimeTrackingOn" Directory="INSTALLFOLDER"
+               Guid="e93b06c7-2d5f-4180-ac34-7b6198e05f2a"
+               Condition="TIMETRACKING">
+      <File Id="AuTimeTrackingOnJson"
+            Source="$(var.InstallerDir)\time-tracking.on.json"
+            Name="time-tracking.defaults.json" ShortName="atton.jso" KeyPath="yes" />
+    </Component>
+
+  </Fragment>
+
+</Wix>

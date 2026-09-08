@@ -19,12 +19,23 @@ public sealed class SkirtingSettings
 
     /// <summary>
     /// Rooms whose Name OR Department contains any of these (case-insensitive) get no
-    /// skirting. Substring rather than equality, so "Bad" catches "Badeværelse" and
-    /// "Toilet" catches "Toilet 2" - which is the point, but it also means a room called
-    /// "Badminton" would be excluded. Deliberate: a missing board gets noticed, skirting
-    /// glued into a wet room does not.
+    /// skirting. Substring rather than equality, so "Toilet" catches "Toilet 2" - which is
+    /// the point, but it also means a room whose name merely contains the word is excluded
+    /// too. Deliberate: a missing board gets noticed, skirting glued into a wet room does not.
+    ///
+    /// EMPTY AS OF 2026-08-14, at the office's instruction: wet rooms are skirted like any
+    /// other room, and Bad and Toilet are treated the same.
+    ///
+    /// It previously held ["Bad", "Toilet"], and that rule was excluding 'Bad 4' in T05 - a
+    /// real 4.8 m2 bathroom, placed and enclosed - together with every wall face bounding it.
+    /// The symptom was 2.4 m of a partition with no board, which reads as missing skirting
+    /// rather than as a rule being applied, and cost a long time to trace back to a setting.
+    ///
+    /// The mechanism is kept rather than deleted because it is the right shape for the
+    /// question: some project will want a room type left bare, and this is where that goes.
+    /// An empty list excludes nothing, which is the current brief.
     /// </summary>
-    public string[] ExcludedRoomKeywords { get; init; } = ["Bad", "Toilet"];
+    public string[] ExcludedRoomKeywords { get; init; } = [];
 
     /// <summary>
     /// Rooms whose name STARTS with this are outdoors, and get no skirting on any wall.
@@ -59,11 +70,124 @@ public sealed class SkirtingSettings
     public bool WrapIntoReveals { get; init; } = true;
 
     /// <summary>
-    /// Whether ordinary DOORS get reveal boards too. Off by default: a door's frame and
-    /// architrave already cover the reveal, so skirting there would be modelled through the
-    /// lining. Cased openings are handled regardless - see <see cref="CasedOpeningHints"/>.
+    /// Whether ordinary DOORS get reveal boards too. ON, and that is a deliberate reversal.
+    ///
+    /// It was off on the argument that a door's frame and architrave already cover the
+    /// reveal, so a board there is modelled through the lining. That argument holds for a
+    /// door with a full lining and fails for everything else in a real model - a door set
+    /// into a thick wall leaves reveal either side of the frame, and a frame modelled as a
+    /// thin plane leaves the whole thickness on show. The brief now asks for door jambs
+    /// explicitly, both as geometry and as quantity.
+    ///
+    /// Turning this on does NOT mean every door gets a board. What each door actually gets is
+    /// decided against its own geometry by <see cref="SkipLinedReveals"/>: a fully lined door
+    /// leaves nothing bare and gets nothing. This setting only decides whether doors are
+    /// CONSIDERED; the family decides what happens next.
     /// </summary>
-    public bool WrapIntoDoorReveals { get; init; }
+    public bool WrapIntoDoorReveals { get; init; } = true;
+
+    /// <summary>
+    /// Subtract the door family's own solids from the reveal before placing a board, and
+    /// place boards only on what is left bare.
+    ///
+    /// THIS IS WHAT STOPS A LINED DOOR DOUBLING UP, AND WHY IT IS MEASURED RATHER THAN
+    /// CONFIGURED. Whether a reveal is already covered is a property of the individual
+    /// FAMILY, not of the project: one door type carries a full lining through the wall, the
+    /// next carries a thin frame at one face, the next is a bare cased opening. A single
+    /// switch is wrong for two of those three whichever way it is set, and a name heuristic
+    /// is wrong whenever somebody renames a type.
+    ///
+    /// So the reveal run is intersected with the door's real solids and the board is placed
+    /// on the remainder:
+    ///
+    ///   full lining     -> nothing bare, no board, nothing to double up
+    ///   frame one side  -> a board on the uncovered depth only
+    ///   cased opening   -> no solids in the reveal, the whole run gets a board
+    ///
+    /// It also delivers the harder half of the brief for free. Nothing this tool places can
+    /// overlap the door model, because the door model is subtracted before anything is
+    /// placed - the board is never created in that space rather than created and cleaned up.
+    /// </summary>
+    public bool SkipLinedReveals { get; init; } = true;
+
+    /// <summary>
+    /// Subtract the real solids of any nearby door, window or opening family from a WALL RUN,
+    /// not just from a jamb board.
+    ///
+    /// THE HOLE IN THE OPENING LOGIC, AND WHY IT SHOWS UP AT PARTITION ENDS. Openings are
+    /// found with <c>Wall.FindInserts</c>, which is by definition the list of things cut into
+    /// THAT wall. It is the right authority for "where is the hole in this wall", and it is no
+    /// authority at all for "is there a door frame standing in the way".
+    ///
+    /// A door hosted in wall B has architrave and lining that project onto the face of wall A
+    /// wherever the two meet - which is every wall junction and every partition end next to a
+    /// doorway. The board on wall A never sees that door, because the door is not one of wall
+    /// A's inserts, so it runs straight into the lining. That is the collision in the corner
+    /// screenshots, and no amount of tuning the jamb measurement reaches it: the fault is that
+    /// the door was never considered for this run in the first place.
+    ///
+    /// So the door's own geometry is subtracted, from whichever wall hosts it, exactly as it
+    /// is for a jamb board. Solids, not bounding boxes: a swung leaf's box covers a metre of
+    /// wall the door merely passes over, while its solids occupy only where it actually is.
+    /// </summary>
+    public bool AvoidOpeningGeometry { get; init; } = true;
+
+    /// <summary>
+    /// How far from the run an opening family's geometry must be to be ignored, ~30 mm past
+    /// the board's own depth. Anything further away cannot be in the board's way.
+    /// </summary>
+    public double OpeningGeometryReach { get; init; } = 0.164;
+
+    /// <summary>
+    /// Shift each board into the room by however far its profile hangs behind its own
+    /// insertion line, so the back face lands on the wall instead of inside it.
+    ///
+    /// MEASURED IN THE MODEL, NOT ASSUMED. A placed board's centre was found sitting exactly
+    /// on its wall's finish face: the profile is centred on its insertion line, so half the
+    /// board - 20 mm of a 40 mm section - was buried in the wall and half showed.
+    ///
+    /// That single fact invalidated every corner calculation in this engine. The old
+    /// measurement returned the largest offset from the insertion line, which for a centred
+    /// profile is the HALF width, and the corner trim then used it as though it were the
+    /// board's full depth. Every corner was therefore under-trimmed by the other half, which
+    /// is precisely the 20 mm square measured overlapping at a corner in the model.
+    ///
+    /// The proper fix is for the family to carry its profile proud of the insertion line, and
+    /// this is written so that fix costs nothing: the shift is the MEASURED overhang, so a
+    /// re-authored family measures zero and nothing moves.
+    /// </summary>
+    public bool SeatProfileAgainstWall { get; init; } = true;
+
+    /// <summary>
+    /// Place jamb and reveal boards UNHOSTED, rather than face-hosted onto the wall.
+    ///
+    /// A wall sweep is a wall-hosted thing and belongs on a wall face. A jamb board is not:
+    /// it runs perpendicular INTO the wall, across a face that belongs to the opening rather
+    /// than to either side of the wall. Face-hosting it means asking for the nearest wall
+    /// side face and getting one of the two the board is perpendicular to - the board is then
+    /// hosted on a plane it crosses at right angles, which is at best arbitrary and at worst
+    /// refused outright by the family.
+    ///
+    /// Keeping the two placements distinct is also what keeps this out of the door family's
+    /// own lining logic: a jamb board sits in the opening as an independent component and has
+    /// no host relationship with the wall the door is cut into.
+    /// </summary>
+    public bool HostRevealsOnWall { get; init; }
+
+    /// <summary>
+    /// Insert categories whose jambs get reveal boards.
+    ///
+    /// Wall openings are matched by CLASS rather than by category - see RevealOpenings - so
+    /// they need no entry here. This list is what widens the net beyond doors: a floor-height
+    /// window or a glazed door reaching the floor leaves exactly the same reveal, and the
+    /// height gate below is what keeps ordinary windows out of it.
+    /// </summary>
+    public BuiltInCategory[] RevealCategories { get; init; } =
+    [
+        BuiltInCategory.OST_Doors,
+        BuiltInCategory.OST_Windows,
+        BuiltInCategory.OST_GenericModel,
+    ];
 
     /// <summary>
     /// A door-category insert whose family or type name contains one of these is treated as
@@ -99,20 +223,7 @@ public sealed class SkirtingSettings
 
     /// <summary>
     /// Never place a board on the OUTSIDE face of a wall whose type Function is Exterior,
-    /// Foundation or Retaining.
-    ///
-    /// This is the structural backstop to the <see cref="ExteriorRoomPrefix"/> name test,
-    /// and it exists because that test can only catch outdoor areas someone remembered to
-    /// name 'Udvendig'. A terrace modelled as a room called 'Altan', or a covered entrance
-    /// called 'Indgang', is just as outdoors and just as invisible to a name match - but its
-    /// boundary still lies on the exterior face of an exterior wall, and that is a fact
-    /// about geometry rather than about naming discipline.
-    ///
-    /// Note what this deliberately does NOT do: an exterior wall's INTERIOR face still gets
-    /// skirting. Every perimeter room in the building would otherwise lose its boards.
-    /// </summary>
-    /// <summary>
-    /// OFF by default, and that is a deliberate reversal.
+    /// Foundation or Retaining. OFF by default, and that is a deliberate reversal.
     ///
     /// It skipped a boundary segment when the wall type's Function said Exterior and the run
     /// lay on the orientation side. The flaw is that it trusts the Function parameter, which
@@ -208,10 +319,140 @@ public sealed class SkirtingSettings
 
     /// <summary>
     /// Ceiling on the computed mitre run, as a multiple of <see cref="BoardDepth"/>. A very
-    /// shallow angle sends <c>depth / tan(interior / 2)</c> toward infinity; clamping keeps
-    /// a near-straight join from growing a board by a metre.
+    /// shallow angle sends <c>depth / sin(interior)</c> toward infinity; clamping keeps a
+    /// near-straight join from trimming a board by a metre.
+    ///
+    /// RAISED FROM 3.0, because at 3.0 the clamp was itself producing overlaps. The true
+    /// clearance is depth / sin(interior), which passes 3d at about 19 degrees and 5.8d at
+    /// 10 degrees - so every corner sharper than 19 degrees was being under-trimmed, and the
+    /// two boards shared material by exactly the shortfall. 6.0 covers everything down to
+    /// about 9.6 degrees, which is sharper than any wall junction in a dwelling.
+    ///
+    /// It doubles as the corner allowance for containment - see ClipToRoom. A board is
+    /// forgiven up to this much apparent excursion at an end that is a genuine corner,
+    /// because at a sharp corner the board legitimately occupies space the ROOM does not:
+    /// the boundary is a line and a board has thickness.
     /// </summary>
-    public double MaxMitreFactor { get; init; } = 3.0;
+    public double MaxMitreFactor { get; init; } = 6.0;
+
+    /// <summary>
+    /// Skirt room boundaries that are bounded by something other than a wall.
+    ///
+    /// A room is not bounded only by walls. A column standing in a room, a structural pier,
+    /// a shaft wall modelled as a generic host - all of them present a face to the room at
+    /// floor level and all of them are skirted on site. Every one of them used to be
+    /// discarded by a hard <c>as Wall</c> cast, which is the single largest source of the
+    /// "sweep skipped part of the room" symptom: the boundary segment resolved to a real
+    /// element, failed the cast, and vanished into a counter.
+    ///
+    /// What must still be refused is a boundary with no physical face behind it. Those are
+    /// listed in <see cref="NonSkirtableBoundaryCategories"/>.
+    /// </summary>
+    public bool SkirtNonWallBoundaries { get; init; } = true;
+
+    /// <summary>
+    /// Boundary elements that get no board however <see cref="SkirtNonWallBoundaries"/> is
+    /// set, because there is no face to fix one to.
+    ///
+    /// A room separation line is the case that matters: it is a real element with a real
+    /// boundary curve and nothing physical behind it. Skirting it would put a board across
+    /// the open side of a room.
+    /// </summary>
+    public BuiltInCategory[] NonSkirtableBoundaryCategories { get; init; } =
+    [
+        BuiltInCategory.OST_RoomSeparationLines,
+        BuiltInCategory.OST_Lines,
+        BuiltInCategory.OST_Rooms,
+        BuiltInCategory.OST_MEPSpaces,
+        BuiltInCategory.OST_Areas,
+
+        // Horizontal construction. It can bound a room, but its boundary is the edge of a
+        // slab or a ceiling, and a skirting board does not run along either.
+        BuiltInCategory.OST_Floors,
+        BuiltInCategory.OST_Ceilings,
+        BuiltInCategory.OST_Roofs,
+    ];
+
+    /// <summary>
+    /// Cut the ends of each board to the corner angle, so corners are MITRED rather than
+    /// butted. Requires the family to expose writable end-angle parameters - see
+    /// <see cref="MitreStartParameterNames"/>.
+    ///
+    /// WHY THIS IS THE ONLY THING THAT CLOSES A CORNER PROPERLY, VERIFIED RATHER THAN
+    /// ASSUMED. Two square-ended boards butt cleanly at 90 degrees and at no other angle, and
+    /// even at 90 the joint shows a step one board deep where the second board's square end
+    /// meets the first board's face. That step is what reads as a gap. It cannot be closed by
+    /// moving the boards: it is a property of their END FACES.
+    ///
+    /// Revit's own mitring API - LocationCurve.JoinType with JoinType.Miter - applies to
+    /// walls and concrete beams only; a FamilyInstance has no equivalent. JoinGeometry was
+    /// tried against this family and refused every time. GeometryCreationUtilities documents
+    /// that swept solids "may not meet smoothly" at path corners. So the cut has to be in the
+    /// family.
+    ///
+    /// THE CONVENTION, which the family must match: the angle is measured from the plane
+    /// PERPENDICULAR to the board's axis, and equals <c>90 - interior/2</c> degrees. At a 90
+    /// degree corner that is 45 degrees - an ordinary mitre. At 135 degrees interior it is
+    /// 22.5. At an external corner (interior over 180) it goes negative, which is the same
+    /// formula producing the opposite hand, so internal and external need no special case.
+    /// Both boards at a corner receive the same value; the family mirrors it by which end it
+    /// is applied to.
+    /// </summary>
+    public bool MitreCorners { get; init; } = true;
+
+    /// <summary>
+    /// Candidate names for the end-angle parameter at the board's START, in order of
+    /// preference. English and Danish, because the family may be authored in either.
+    /// </summary>
+    public string[] MitreStartParameterNames { get; init; } =
+        ["Angle Start", "Start Angle", "Mitre Start", "Miter Start", "Vinkel Start", "Gering Start"];
+
+    /// <summary>Candidate names for the end-angle parameter at the board's END.</summary>
+    public string[] MitreEndParameterNames { get; init; } =
+        ["Angle End", "End Angle", "Mitre End", "Miter End", "Vinkel Slut", "Gering Slut"];
+
+    /// <summary>
+    /// Fill every corner and let Revit resolve the shared volume with JoinGeometry.
+    ///
+    /// THE ONLY WAY BOTH CORNER RULES CAN HOLD AT ONCE. Two square-ended boards butt cleanly
+    /// at 90 degrees and at no other angle - that was measured, not argued: at any other
+    /// angle the interface between them is a slanted line and a square cut cannot follow it,
+    /// so the pair must either show a gap or share material. There is no trim value that
+    /// avoids both.
+    ///
+    /// Sharing material is the half that Revit can fix. JoinGeometry resolves an intersection
+    /// so exactly ONE element owns the shared volume: the boards read as one continuous
+    /// mitred run, the edge between them disappears, and the volume is counted once rather
+    /// than twice. So the corner is filled to the apex - no gap - and the overlap that
+    /// creates is handed to the join.
+    ///
+    /// Square corners keep the trim, because there the butt is exact and needs no join.
+    /// </summary>
+    public bool JoinAtCorners { get; init; } = true;
+
+    /// <summary>
+    /// How far from a right angle a corner may be and still be treated as square, ~1 degree.
+    ///
+    /// Inside this band the trim is exact and produces a clean butt with no gap and no shared
+    /// material. Outside it, no trim can do both and the corner is filled and joined instead.
+    /// </summary>
+    public double SquareCornerTolerance { get; init; } = 0.0175;
+
+    /// <summary>
+    /// Refuse a candidate board wherever another board already occupies the same line.
+    ///
+    /// The office standard is that no two sweeps may overlap, and the corner trim alone
+    /// cannot deliver that: it settles corners, not the case where the SAME face is reached
+    /// twice. That happens on a wall shared by two boundary loops, on a wall a room touches
+    /// in two places, and against boards left behind by a previous run that could not be
+    /// deleted because another user owns them.
+    ///
+    /// So the check is made against everything already standing - placed this run or found
+    /// in the model - and the candidate is cut back to the part nothing covers rather than
+    /// refused outright. Cutting back is what lets a partially-covered face still contribute
+    /// its missing stretch.
+    /// </summary>
+    public bool PreventOverlaps { get; init; } = true;
 
     /// <summary>
     /// Rooms with no Department value are excluded entirely.

@@ -16,10 +16,16 @@ namespace Cda.Revit.Addin.Finishes;
 /// ceiling, and let the ceiling do the clipping inside it. That is why a corrected room
 /// still draws a tall box in section — the box is a search envelope, not the volume.
 ///
-/// This is the same rule <see cref="RoomFinishCalculator"/> applies during a full pass.
-/// It lives here separately so it can run against a handful of rooms the moment they
-/// change, instead of waiting for a whole-model recalculation. Both read their numbers
-/// from <see cref="FinishSettings"/> so the two cannot drift apart.
+/// This is the same rule <see cref="RoomBoundaryAdjuster"/> applies during a full pass,
+/// and it is literally the same code: <see cref="RoomBoundaryAdjuster.HighestCapTop"/> and
+/// <see cref="RoomBoundaryAdjuster.RaiseUpperOffset"/>. What lives here is only the narrow
+/// SCOPE - a bounding-box query per room, so correcting three rooms the moment they change
+/// costs three small queries instead of a full-model sweep. That is what makes it cheap
+/// enough to run while the user is still working.
+///
+/// The rule was previously written out again here. Sharing it is not tidiness: the two
+/// copies had already drifted over whether the write is raise-only. See the remarks on
+/// <see cref="RoomBoundaryAdjuster.RaiseUpperOffset"/>.
 /// </summary>
 internal static class RoomLimitAdjuster
 {
@@ -63,49 +69,30 @@ internal static class RoomLimitAdjuster
         var roomBox = room.get_BoundingBox(null);
         if (roomBox is null) return false;
 
-        var baseZ = roomBox.Min.Z;
-
-        var neededTop = HighestCapAbove(doc, roomBox, baseZ);
+        var neededTop = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, roomBox), roomBox);
         if (neededTop is null) return false;
 
-        // Already high enough. The half-margin slack stops the tool nudging the same room
-        // by a millimetre on every pass, which would mark the model changed forever.
-        if (roomBox.Max.Z >= neededTop - (FinishSettings.LimitMargin * 0.5)) return false;
-
-        var parameter = room.get_Parameter(BuiltInParameter.ROOM_UPPER_OFFSET);
-        if (parameter is null || parameter.IsReadOnly) return false;
-
-        // The offset is measured from the Upper Limit level, which is not necessarily the
-        // room's own level. Measuring from the wrong datum is how a room ends up a storey
-        // too tall.
-        var referenceZ = baseZ;
-        try
-        {
-            if (room.UpperLimit is not null) referenceZ = room.UpperLimit.Elevation;
-        }
-        catch
-        {
-            // Upper Limit unreadable on some room states; the base level is the safe datum.
-        }
-
-        parameter.Set(neededTop.Value - referenceZ);
-        return true;
+        return RoomBoundaryAdjuster.RaiseUpperOffset(room, roomBox, neededTop.Value);
     }
 
     /// <summary>
-    /// Finds the top of the highest ceiling, slab or roof sitting over this room.
+    /// The bounding boxes of every ceiling, slab and roof near enough to this room to
+    /// matter, found with a bounding-box query rather than a full-model collection.
     ///
-    /// Scoped by bounding box rather than collecting every cap in the model, so adjusting
-    /// three rooms costs three small queries instead of a full-model sweep. That is what
-    /// makes this cheap enough to run while the user is still working.
+    /// This narrowing is the whole reason this class exists; deciding what the boxes MEAN
+    /// is <see cref="RoomBoundaryAdjuster.HighestCapTop"/>'s job, and is not repeated here.
+    /// The query's own band matches the one that rule applies, so it rejects early what
+    /// would be rejected later anyway.
     /// </summary>
-    private static double? HighestCapAbove(Document doc, BoundingBoxXYZ roomBox, double baseZ)
+    private static List<BoundingBoxXYZ> CapBoxesAbove(Document doc, BoundingBoxXYZ roomBox)
     {
+        var baseZ = roomBox.Min.Z;
+
         var search = new Outline(
             new XYZ(roomBox.Min.X, roomBox.Min.Y, baseZ),
             new XYZ(roomBox.Max.X, roomBox.Max.Y, baseZ + FinishSettings.ScanBand));
 
-        double? neededTop = null;
+        var boxes = new List<BoundingBoxXYZ>();
 
         foreach (var category in CappingCategories)
         {
@@ -118,20 +105,11 @@ internal static class RoomLimitAdjuster
             foreach (var cap in caps)
             {
                 var box = cap.get_BoundingBox(null);
-                if (box is null) continue;
-
-                // Only things starting clearly ABOVE the room's base. Without this the
-                // room's own floor slab qualifies as its ceiling, and the band cap stops
-                // a storey three levels up from ballooning the room upward.
-                if (box.Min.Z < baseZ + 1.0) continue;
-                if (box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
-
-                var top = box.Max.Z + FinishSettings.LimitMargin;
-                if (neededTop is null || top > neededTop) neededTop = top;
+                if (box is not null) boxes.Add(box);
             }
         }
 
-        return neededTop;
+        return boxes;
     }
 
     private const double FeetToMm = 304.8;
@@ -139,10 +117,10 @@ internal static class RoomLimitAdjuster
     /// <summary>
     /// Explains, for one room, exactly what this adjuster sees and what it would do.
     ///
-    /// It deliberately calls the same <see cref="HighestCapAbove"/> the fix uses, so the
-    /// report cannot disagree with the behaviour. A diagnostic that re-derives the answer
-    /// separately eventually tells you the code is fine while the code does something
-    /// else.
+    /// It deliberately calls the same <see cref="RoomBoundaryAdjuster.HighestCapTop"/> the
+    /// fix uses, so the report cannot disagree with the behaviour. A diagnostic that
+    /// re-derives the answer separately eventually tells you the code is fine while the
+    /// code does something else.
     /// </summary>
     public static string Explain(Document doc, Room room)
     {
@@ -182,7 +160,7 @@ internal static class RoomLimitAdjuster
         lines.Add($"  Envelope top: {box.Max.Z * FeetToMm:0} mm");
         lines.Add(string.Empty);
 
-        var needed = HighestCapAbove(doc, box, box.Min.Z);
+        var needed = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, box), box);
 
         if (needed is null)
         {
@@ -204,7 +182,19 @@ internal static class RoomLimitAdjuster
         else
         {
             var referenceZ = upper?.Elevation ?? box.Min.Z;
-            lines.Add($"-> WOULD RAISE Limit Offset to {(needed.Value - referenceZ) * FeetToMm:0} mm.");
+            var wanted = needed.Value - referenceZ;
+
+            // Mirrors the raise-only guard in RoomBoundaryAdjuster.RaiseUpperOffset, so the
+            // report cannot promise a change the adjuster would decline to make.
+            if (offset is not null && wanted <= offset.AsDouble())
+            {
+                lines.Add($"-> Computes a Limit Offset of {wanted * FeetToMm:0} mm, which is NOT higher");
+                lines.Add("   than the current one, so the raise-only rule leaves the room alone.");
+            }
+            else
+            {
+                lines.Add($"-> WOULD RAISE Limit Offset to {wanted * FeetToMm:0} mm.");
+            }
         }
 
         var notBounding = CapsNotRoomBounding(doc, [room]);

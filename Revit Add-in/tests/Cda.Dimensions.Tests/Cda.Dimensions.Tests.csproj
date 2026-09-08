@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NO REVIT REFERENCE, DELIBERATELY - same reason as Cda.Heating.Tests.
+
+    RevitAPI.dll is a managed wrapper over native code that will not load outside the Revit
+    host, so a test project referencing it can compile and still be unrunnable. This project
+    compiles ONE source file from the add-in: DimensionMath.cs, which holds every sign
+    convention in the room dimensioner and mentions no Revit type.
+
+    Testing the real file rather than a copy is what makes these worth anything. A copied
+    constant drifts from the shipping one and then passes forever.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cda.Dimensions.Tests</RootNamespace>
+    <AssemblyName>Cda.Dimensions.Tests</AssemblyName>
+
+    <UseWPF>false</UseWPF>
+    <DeployToRevit>false</DeployToRevit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Cda.Revit.Addin\Dimensions\DimensionMath.cs" Link="DimensionMath.cs" />
+
+    <!--
+      The shipped numbers, compiled in alongside the arithmetic. Without this the suite tests
+      the FORMULA and never the VALUE - which is how a stated 100 mm offset stayed at 50 with
+      81 assertions passing.
+    -->
+    <Compile Include="..\..\src\Cda.Revit.Addin\Dimensions\RoomDimensionDefaults.cs" Link="RoomDimensionDefaults.cs" />
+  </ItemGroup>
+
+</Project>
