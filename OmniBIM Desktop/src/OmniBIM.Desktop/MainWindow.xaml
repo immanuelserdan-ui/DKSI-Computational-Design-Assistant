@@ -61,6 +61,35 @@
             <ScrollViewer Visibility="{Binding CurrentPage, Converter={StaticResource PageToVisibility}, ConverterParameter=Home}">
                 <StackPanel Margin="24">
                     <TextBlock Text="Home" FontSize="22" FontWeight="Bold" Foreground="#111827" />
+
+                    <UniformGrid Columns="4" Margin="0,16,0,0" MaxWidth="720" HorizontalAlignment="Left">
+                        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,12,0" BorderBrush="#E5E7EB" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Active Projects" FontSize="11" Foreground="#6B7280" />
+                                <TextBlock Text="{Binding Dashboard.ProjectStatus.ActiveCount}" FontSize="26" FontWeight="Bold" Foreground="#111827" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,12,0" BorderBrush="#E5E7EB" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="On-going" FontSize="11" Foreground="#6B7280" />
+                                <TextBlock Text="{Binding Dashboard.ProjectStatus.OnGoingCount}" FontSize="26" FontWeight="Bold" Foreground="#111827" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,12,0" BorderBrush="#E5E7EB" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Team Members" FontSize="11" Foreground="#6B7280" />
+                                <TextBlock Text="{Binding Dashboard.TimeManagement.TeamMemberCount}" FontSize="26" FontWeight="Bold" Foreground="#111827" Margin="0,4,0,0" />
+                                <TextBlock Text="active this week" FontSize="10" Foreground="#9CA3AF" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="White" CornerRadius="12" Padding="16" BorderBrush="#E5E7EB" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="This Week's Hours" FontSize="11" Foreground="#6B7280" />
+                                <TextBlock Text="{Binding Dashboard.TimeManagement.TotalThisWeek, StringFormat={}{0:0.0}h}" FontSize="26" FontWeight="Bold" Foreground="#111827" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
                     <views:TimeManagementView DataContext="{Binding Dashboard.TimeManagement}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
                     <views:ProjectStatusView DataContext="{Binding Dashboard.ProjectStatus}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
                 </StackPanel>

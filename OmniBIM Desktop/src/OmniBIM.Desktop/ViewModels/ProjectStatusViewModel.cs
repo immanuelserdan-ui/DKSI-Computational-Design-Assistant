@@ -42,6 +42,10 @@ public sealed class ProjectStatusViewModel : ObservableObject
     private int _activeCount;
     public int ActiveCount { get => _activeCount; private set => SetField(ref _activeCount, value); }
 
+    /// <summary>Projects whose status is exactly "On-going" - the Home stat tile's "In Progress" figure.</summary>
+    private int _onGoingCount;
+    public int OnGoingCount { get => _onGoingCount; private set => SetField(ref _onGoingCount, value); }
+
     private bool _isTeamWide;
 
     /// <summary>
@@ -63,5 +67,6 @@ public sealed class ProjectStatusViewModel : ObservableObject
         foreach (var status in statuses) Projects.Add(new ProjectStatusRowViewModel(status));
 
         ActiveCount = TimeTrackingAggregator.ActiveProjectCount(statuses);
+        OnGoingCount = statuses.Count(s => s.Status == "On-going");
     }
 }

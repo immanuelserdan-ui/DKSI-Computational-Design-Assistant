@@ -49,6 +49,15 @@ public sealed class TimeManagementViewModel : ObservableObject
     private double _approxIdleHoursToday;
     public double ApproxIdleHoursToday { get => _approxIdleHoursToday; private set => SetField(ref _approxIdleHoursToday, value); }
 
+    /// <summary>
+    /// Distinct usernames with at least one segment this week - the Home stat tile's "Team
+    /// Members" figure. An activity count, not a headcount: only as team-wide as the shared
+    /// folder is configured (see TimeTrackingRepository.SharedFolder), and invisible to anyone
+    /// on leave the whole week.
+    /// </summary>
+    private int _teamMemberCount;
+    public int TeamMemberCount { get => _teamMemberCount; private set => SetField(ref _teamMemberCount, value); }
+
     public void Load(TimeTrackingRepository repository, DateTime todayLocal)
     {
         var weekStart = todayLocal.Date.AddDays(-(int)((7 + (todayLocal.DayOfWeek - DayOfWeek.Monday)) % 7));
@@ -85,5 +94,7 @@ public sealed class TimeManagementViewModel : ObservableObject
         ProjectBreakdown.Clear();
         foreach (var project in TimeTrackingAggregator.HoursByProject(thisWeekSegments, todayLocal))
             ProjectBreakdown.Add(project);
+
+        TeamMemberCount = TimeTrackingAggregator.ActiveUserCount(thisWeekSegments);
     }
 }
