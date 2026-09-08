@@ -56,6 +56,18 @@ public sealed class FractionToHeightConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>A 0-1 share into a pixel width against the horizontal bar track used in TimeBreakdownView.</summary>
+public sealed class ShareToWidthConverter : IValueConverter
+{
+    private const double TrackWidth = 160;
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is double share ? Math.Max(2, share * TrackWidth) : 2.0;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public sealed class TodayToBrushConverter : IValueConverter
 {
     private static readonly SolidColorBrush Today = new(Color.FromRgb(0x25, 0x63, 0xEB));

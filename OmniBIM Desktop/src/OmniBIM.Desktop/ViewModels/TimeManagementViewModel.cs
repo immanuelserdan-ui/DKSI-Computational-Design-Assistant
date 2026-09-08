@@ -22,6 +22,12 @@ public sealed class TimeManagementViewModel : ObservableObject
 {
     public ObservableCollection<DayBarViewModel> Days { get; } = [];
 
+    /// <summary>This week's billable hours grouped by TaskPhase, largest first. Real aggregation, not shown on the compact Home widget - see TimeBreakdownView.</summary>
+    public ObservableCollection<TaskPhaseHours> TaskPhaseBreakdown { get; } = [];
+
+    /// <summary>This week's (and today's) hours per project, largest week-total first.</summary>
+    public ObservableCollection<ProjectHours> ProjectBreakdown { get; } = [];
+
     private double _totalThisWeek;
     public double TotalThisWeek { get => _totalThisWeek; private set => SetField(ref _totalThisWeek, value); }
 
@@ -71,5 +77,13 @@ public sealed class TimeManagementViewModel : ObservableObject
         var todaySessions = repository.ReadSessions(todayLocal, todayLocal);
         var (_, idleMinutes) = TimeTrackingAggregator.ActiveVsIdle(todaySegments, todaySessions);
         ApproxIdleHoursToday = idleMinutes / 60.0;
+
+        TaskPhaseBreakdown.Clear();
+        foreach (var phase in TimeTrackingAggregator.HoursByTaskPhase(thisWeekSegments))
+            TaskPhaseBreakdown.Add(phase);
+
+        ProjectBreakdown.Clear();
+        foreach (var project in TimeTrackingAggregator.HoursByProject(thisWeekSegments, todayLocal))
+            ProjectBreakdown.Add(project);
     }
 }

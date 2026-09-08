@@ -70,6 +70,7 @@
                 <StackPanel Margin="24">
                     <TextBlock Text="Time Management" FontSize="22" FontWeight="Bold" Foreground="#111827" />
                     <views:TimeManagementView DataContext="{Binding Dashboard.TimeManagement}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
+                    <views:TimeBreakdownView DataContext="{Binding Dashboard.TimeManagement}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
                 </StackPanel>
             </ScrollViewer>
 
