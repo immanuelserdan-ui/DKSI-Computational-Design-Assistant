@@ -87,10 +87,44 @@ public sealed class CdaApplication : IExternalApplication
             // selection that is not a Generic Model costs one category check.
             Overlay.CarrierRevealService.Register(application);
 
+            // The reverse of the reveal above: selecting a real model element selects every
+            // carrier measured on it, so an open schedule scrolls to and highlights the
+            // matching row(s) the way Revit natively does for any selected element that
+            // appears in an open schedule. No ribbon toggle, same reasoning as the reveal -
+            // a selection that is not a takeoff host costs one cached lookup.
+            Overlay.ModelToScheduleSync.Register(application);
+
+            // Watches DocumentChanged for the vendor takeoff's own "Painted Surface Area
+            // takeoff" transaction, and re-stamps any recorded paint room overrides back onto
+            // the fresh carriers it just created - see the class doc for why this is not
+            // reached through the vendor's command directly.
+            Finishes.PaintRoomOverrideAutoReapply.Register(application);
+
+            // Same DocumentChanged trigger, and registered beside the reapply for that reason:
+            // both react to the vendor takeoff placing fresh carriers. This one fills in the
+            // host's TYPE name, which the vendor never writes, so the surface schedules can
+            // show a Type column beside the quantity.
+            Finishes.PaintHostTypeStamp.Register(application);
+
+            // Same trigger again, registered beside both of the above: fills in the constant
+            // unit label ("m²") the office reference schedule shows beside the quantity - a
+            // stand-in for a Calculated Value field, which the API cannot create. See the
+            // class doc for why.
+            Finishes.PaintUnitStamp.Register(application);
+
+            // Same trigger as the reapply above: after the vendor recreates its own three
+            // schedules, this deletes them (unless one is on a sheet) so the office's "@V03"
+            // schedules are the only ones a person finds in the Project Browser.
+            Schedules.LegacySurfaceScheduleCleanup.Register(application);
+
             // Same reasoning, and last of all: time tracking is the only feature here that
             // subscribes to Idling, so a fault in it would otherwise be felt on every tick.
             // It swallows its own failures for the same reason.
             TimeTracking.TimeTrackingService.Register(application);
+
+            // Alongside it: marks Revit-session start/end per document (open-to-close),
+            // separately from the view-level segments TimeTrackingService records.
+            TimeTracking.SessionTrackingService.Register(application);
 
             // LAST, and only if there is something to say. Shown after registration so a
             // duplicate install never costs the user the tools themselves - the ribbon is
@@ -117,11 +151,18 @@ public sealed class CdaApplication : IExternalApplication
         // segment can be written to disk; a failure further down this method would
         // otherwise cost the user the stretch of work they just finished.
         TimeTracking.TimeTrackingService.Unregister(application);
+        TimeTracking.SessionTrackingService.Unregister(application);
 
         Overlay.PaintHighlightService.Unregister(application);
         Overlay.CarrierRevealService.Unregister(application);
+        Overlay.ModelToScheduleSync.Unregister(application);
+        Finishes.PaintRoomOverrideAutoReapply.Unregister(application);
+        Finishes.PaintHostTypeStamp.Unregister(application);
+        Finishes.PaintUnitStamp.Unregister(application);
+        Schedules.LegacySurfaceScheduleCleanup.Unregister(application);
         Finishes.FinishAutomation.Unregister(application);
         Log.Info("Shutdown");
+        Log.Shutdown();
         return Result.Succeeded;
     }
 }

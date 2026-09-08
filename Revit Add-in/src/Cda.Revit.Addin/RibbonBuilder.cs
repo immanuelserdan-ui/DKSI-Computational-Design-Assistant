@@ -308,12 +308,14 @@ internal static class RibbonBuilder
             name: "CdaDimensionRooms",
             text: "Dimension\nRooms",
             command: typeof(Commands.DimensionRoomsCommand),
-            tooltip: "Interior wall-to-wall dimensions for every placed room, 50 mm off the wall face.",
-            longDescription: "Two chained dimension strings per room - along and across - with a " +
-                             "witness line at every bounding face square to the run, so recesses read " +
-                             "as separate figures instead of one overall. Placed with the project's " +
-                             "own linear dimension style; text that will not fit between its ticks at " +
-                             "the view's scale is moved clear with a leader.\n\n" +
+            tooltip: "Interior corner-to-corner dimensions for every placed room, 50 mm off the wall face.",
+            longDescription: "One dimension per wall face, measured continuously from the interior " +
+                             "corner where it starts to the corner where it ends - not wall-to-wall " +
+                             "chaining, which can span a gap no wall in the building actually spans. " +
+                             "Room-bounding faces are detected per face so every face keeps its own " +
+                             "run. Placed with the project's own linear dimension style; text that " +
+                             "will not fit between its ticks at the view's scale is moved clear with " +
+                             "a leader.\n\n" +
                              "Asks which plan views to work in, because a dimension belongs to a " +
                              "drawing and not to the model - then sweeps every placed room on the " +
                              "levels those views cover. Offers a dry run whose counts come from Revit " +
