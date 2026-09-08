@@ -205,7 +205,7 @@ public static partial class XlsxWriter
 
                 var reference = $"{ColumnLetter(c)}{r + 1}";
 
-                if (numericCells && PlainNumber().IsMatch(value.Trim()))
+                if (numericCells && IsLosslessNumber(value.Trim()))
                     cells.Append($"<c r=\"{reference}\"{style}><v>{value.Trim()}</v></c>");
                 else
                     cells.Append($"<c r=\"{reference}\"{style} t=\"inlineStr\"><is>" +
@@ -224,6 +224,37 @@ public static partial class XlsxWriter
     // ----------------------------------------------------------------------- helpers
 
     /// <summary>0 -> A, 25 -> Z, 26 -> AA.</summary>
+    /// <summary>
+    /// Is this text safe to write as a NUMBER rather than as text - i.e. would Excel show
+    /// exactly the same characters back?
+    ///
+    /// THE BUG THIS REPLACES. The test was the <see cref="PlainNumber"/> pattern alone, which
+    /// asks only "does this look numeric". It has no idea which schedule column a cell came
+    /// from, and room numbers are what it damaged: "001" was written as &lt;v&gt;001&lt;/v&gt;
+    /// and rendered by Excel as 1, "1.10" as 1.1, "2.00" as 2. The identifier that ties every
+    /// exported row back to a room in the model was silently altered by the export, and this
+    /// data feeds a digital twin - a room number that does not round-trip is worse than a
+    /// missing column, because nothing about it looks wrong.
+    ///
+    /// The rule is a round-trip rather than a longer regex: parse it, format it back, and
+    /// require the characters to match. That keeps genuine quantities ("12.5", "-3", "0")
+    /// numeric so they still total and sort as numbers, and leaves anything whose written form
+    /// carries meaning - leading zeros, trailing decimal zeros - as text, exactly as it appears
+    /// in the schedule.
+    /// </summary>
+    private static bool IsLosslessNumber(string trimmed)
+    {
+        if (!PlainNumber().IsMatch(trimmed)) return false;
+
+        // "R" round-trips the value; comparing against the original catches every form whose
+        // characters carry information the double does not.
+        return double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+               && string.Equals(
+                   parsed.ToString("R", CultureInfo.InvariantCulture),
+                   trimmed,
+                   StringComparison.Ordinal);
+    }
+
     public static string ColumnLetter(int index)
     {
         var name = string.Empty;

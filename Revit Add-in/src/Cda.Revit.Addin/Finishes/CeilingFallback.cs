@@ -120,7 +120,14 @@ public sealed class CeilingFallbackResolver
         {
             if (remaining.Count == 0) break;   // fully covered by a higher-priority tier
 
-            var (hits, covered) = Measure(_candidates[source], remaining, roomBox, baseZ);
+            // THE STAIR ACCESS RULE. A stair this room can walk onto is its stair, not its
+            // ceiling, so it is struck out of the candidate list for THIS room only - the same
+            // stair remains a perfectly good ceiling source for the store room a storey below.
+            var pool = source == FinishSettings.SourceStair
+                ? _candidates[source].Where(s => !HasAccessTo(s, baseZ)).ToList()
+                : _candidates[source];
+
+            var (hits, covered) = Measure(pool, remaining, roomBox, baseZ);
             var total = hits.Sum(h => h.Area);
 
             // Below the threshold the tier is treated as having found nothing at all, so its
@@ -132,6 +139,41 @@ public sealed class CeilingFallbackResolver
         }
 
         return tiers.Count == 0 ? null : new CeilingFallbackResult { Tiers = tiers };
+    }
+
+    // --------------------------------------------------------------- stair access
+
+    /// <summary>
+    /// Whether a room whose floor is at <paramref name="roomFloorZ"/> can walk onto this stair.
+    ///
+    /// True when the stair STARTS at that floor - its bottom tread is within a step of it, so
+    /// you step on and go up - or FINISHES at it, arriving from the storey below. Either way
+    /// the flight belongs to this room and its underside is not this room's ceiling.
+    ///
+    /// ANSWERED FROM THE GEOMETRY, NOT FROM A ROOM API. Room.IsPointInRoom and GetRoomAtPoint
+    /// give opposite answers on this model - see the note in RadiatorGenerator.SeatOnRoomSide,
+    /// where one of them refused 37 of 51 windows that were correctly placed. "Does this flight
+    /// meet this floor" is a question about two elevations, and both are already in hand.
+    ///
+    /// NO PLAN TEST, deliberately. A stair on the far side of the building starting at the same
+    /// elevation is struck out of this room's candidates too, and that costs nothing: it does
+    /// not overlap the room's footprint, so it could never have been measured for this room
+    /// anyway. Adding a plan test would buy no accuracy and one more thing to be wrong.
+    /// </summary>
+    private static bool HasAccessTo(Element stair, double roomFloorZ)
+    {
+        BoundingBoxXYZ? box;
+        try { box = stair.get_BoundingBox(null); }
+        catch { return false; }
+
+        if (box is null) return false;
+
+        var band = FinishSettings.StairAccessBand;
+
+        var startsHere = Math.Abs(box.Min.Z - roomFloorZ) <= band;
+        var arrivesHere = Math.Abs(box.Max.Z - roomFloorZ) <= band;
+
+        return startsHere || arrivesHere;
     }
 
     // ------------------------------------------------------------------ footprint
@@ -269,7 +311,8 @@ public sealed class CeilingFallbackResolver
                 // fix scans. The 1 ft skirt is what stops a room's own floor slab from being
                 // counted as its own ceiling, and the band stops a storey three levels up
                 // from being dragged in.
-                if (box.Min.Z < baseZ + 1.0 || box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
+                if (box.Min.Z < baseZ + FinishSettings.CeilingFallbackFloorSkirt ||
+                    box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
 
                 // Cheap plan rejection before the expensive boolean.
                 if (roomBox is not null &&

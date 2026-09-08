@@ -11,9 +11,25 @@ namespace Cda.Revit.Addin.Commands;
 
 /// <summary>
 /// Port of ExportSchedulesToExcel.dyn. Exports every schedule in the model to one .xlsx,
-/// one worksheet per schedule. Read-only - opens no transaction.
+/// one worksheet per schedule. Writes nothing to the model and opens no transaction.
+///
+/// MANUAL, NOT ReadOnly, AND THAT IS NOT AN OVERSIGHT - DO NOT "CORRECT" IT BACK.
+/// The command genuinely writes nothing, so ReadOnly reads like the honest declaration. It is
+/// not: ReadOnly does more than promise not to write, it puts the document into a
+/// changes-disabled state for the whole command. ViewSchedule.GetTableData() LAZILY REGENERATES
+/// a stale schedule before handing back its table, and that regeneration is a document change,
+/// so under ReadOnly it throws ModificationForbiddenException - "Changes are disabled for the
+/// active document".
+///
+/// Measured 2026-09-02: 73 of the model's schedules failed that way in a single run, every one
+/// of them reported as "could not read table data" and skipped, producing a workbook that was
+/// silently missing most of its worksheets.
+///
+/// Manual mode does NOT make the command able to write. Without an open transaction it still
+/// cannot modify anything - Manual only means "this command manages its own transactions", and
+/// it opens none. What it stops doing is forbidding Revit's own internal regeneration.
 /// </summary>
-[Transaction(TransactionMode.ReadOnly)]
+[Transaction(TransactionMode.Manual)]
 public sealed class ExportSchedulesCommand : CommandBase
 {
     protected override string CommandName => "Export Schedules";

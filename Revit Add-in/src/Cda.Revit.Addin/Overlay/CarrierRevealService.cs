@@ -20,15 +20,20 @@ namespace Cda.Revit.Addin.Overlay;
 ///   UnhideElements on it does nothing at all, which is the trap this class exists to avoid.
 ///
 /// WHY NOT JUST LEAVE "SHOW / HIDE PAINT AREAS" ON
-///   Because then every carrier in the model draws at once - a wall of translucent slabs over
-///   the whole storey - which is exactly why the filter defaults to off. What is wanted is one
-///   surface, the one being read, for as long as it is being read.
+///   Because then every carrier in the model draws at once, all in the same solid debug
+///   colour and full opacity - a wall of slabs over the whole storey with no way to tell which
+///   one the schedule row is about. What is wanted is one surface that reads as THE surface
+///   being read, with the rest still present for context but visibly out of focus.
 ///
 /// WHAT THIS DOES
-///   On every selection change: if the selection is a single Generic Model that some filter in
-///   the active view is hiding, that filter is switched on and the view zoomed to the element.
-///   When the selection moves to anything else, the filter is switched back off. The user sees
-///   the surface for their row and the view returns to how they left it.
+///   On every selection change: whichever selected elements are Generic Models the active
+///   view's filters are hiding have those filters switched on - one row selected or several,
+///   a schedule's multi-select works exactly like its single-select. Every OTHER carrier the
+///   same filters match is then pushed to halftone and high transparency - see
+///   <see cref="DimSiblings"/> - and every selected one is emphasised, together. The camera is
+///   left alone; this only changes what is visible, never where the view is looking. When the
+///   selection moves to something with no carriers in it, the filters and every dimmed sibling
+///   are put back exactly as found.
 ///
 /// WHY IT IS SAFE TO RUN ALWAYS, UNLIKE <see cref="PaintHighlightService"/>
 ///   That one rebuilds room geometry per click and must be armed from the ribbon first. This
@@ -51,33 +56,46 @@ internal static class CarrierRevealService
     private static readonly List<(ElementId View, ElementId Filter)> _revealed = [];
 
     /// <summary>
-    /// The element the current reveal was performed for. Revit re-raises SelectionChanged for
-    /// selections that did not actually change, and re-running the transaction each time would
-    /// put an entry in the undo stack per redundant event.
+    /// The document every id in <see cref="_revealed"/>, <see cref="_dimmed"/> and
+    /// <see cref="_highlighted"/> belongs to. Empty when nothing is revealed.
+    ///
+    /// WHY THIS HAD TO EXIST. All three of those are ElementIds, and an ElementId means nothing
+    /// outside the document that minted it. <see cref="Apply"/> takes its document from
+    /// UIApplication.ActiveUIDocument, and <see cref="OnViewActivated"/> fires a restore on ANY
+    /// view activation - INCLUDING activating a view in another open project. So a reveal made
+    /// in project A was restored against project B: an id that happened to resolve to a View in
+    /// B passed the type test, and SetElementOverrides then reset the graphic overrides of
+    /// whatever unrelated elements carried those ids, inside a committed transaction. The empty
+    /// catch blocks around those calls are there for deleted elements and cannot tell "gone"
+    /// from "belongs to another file", so it failed silently in both directions - B quietly
+    /// altered, A left with its filter on and its carriers still painted orange.
     /// </summary>
-    private static long _revealedFor = -1;
+    private static string _stateDocumentKey = string.Empty;
 
     /// <summary>
-    /// The view this class put into temporary hide mode, or null.
-    ///
-    /// Tracked separately from <see cref="_revealed"/> because temporary hide/isolate is a
-    /// MODE on the view, not a per-element flag, and leaving someone else's isolate switched
-    /// off would be a worse bug than the one this fixes. Only a mode this class turned on is
-    /// ever turned off.
+    /// True while a reveal is in effect for the current selection - one carrier or several.
+    /// Distinct from <see cref="_revealed"/> being non-empty: a carrier that needed no filter
+    /// switched on (already visible) is still "revealed" for <see cref="Restore"/>'s purposes.
     /// </summary>
-    private static ElementId? _hidOthersIn;
+    private static bool _hasActiveReveal;
 
     /// <summary>
-    /// The camera as it was before this class first moved it, and the view it belongs to.
+    /// Carriers this class pushed to halftone and high transparency, and the view they belong
+    /// to, so the dimming can be put back.
     ///
-    /// Captured only when an orientation is actually CHANGED, never when the check decides the
-    /// view was already facing the paint - otherwise browsing a schedule would slowly overwrite
-    /// the saved viewpoint with ones this class chose.
+    /// Tracked as a list of elements rather than a view mode, unlike the temporary hide/isolate
+    /// this replaced: SetElementOverrides is per-element, so there is no single flag to switch
+    /// off and each dimmed sibling has to be cleared individually.
     /// </summary>
-    private static (ElementId View, ViewOrientation3D Orientation)? _cameraWas;
+    private static (ElementId View, List<ElementId> Elements)? _dimmed;
 
-    /// <summary>The element currently carrying this class's emphasis override, and its view.</summary>
-    private static (ElementId View, ElementId Element)? _highlighted;
+    /// <summary>How transparent a dimmed sibling is, 0-100. High enough to read as "not the
+    /// row being inspected" at a glance without erasing it entirely - halftone alone already
+    /// desaturates it, this pushes it back as well.</summary>
+    private const int DimTransparencyPercent = 75;
+
+    /// <summary>The elements currently carrying this class's emphasis override, and their view.</summary>
+    private static (ElementId View, List<ElementId> Elements)? _highlighted;
 
     /// <summary>
     /// True while this class is calling SetElementIds, so the SelectionChanged that raises can
@@ -89,19 +107,38 @@ internal static class CarrierRevealService
     private static bool _selfSelecting;
 
     /// <summary>
-    /// Last element handled and when. Revit re-raises SelectionChanged for selections that did
-    /// not change, and every one of those would otherwise cost a transaction.
+    /// Last selection handled and when, sorted so two selections with the same elements in a
+    /// different order still compare equal. Revit re-raises SelectionChanged for selections
+    /// that did not change, and every one of those would otherwise cost a transaction.
     ///
-    /// Time-based rather than "is it the same id", so clicking the SAME row again after looking
-    /// around still re-frames it - which is what someone who has rotated the view away and
-    /// wants it back would expect.
+    /// Time-based rather than "is it the same set", so clicking the SAME row (or rows) again
+    /// after looking around still re-frames it - which is what someone who has rotated the
+    /// view away and wants it back would expect.
     /// </summary>
-    private static long _lastHandledId = -1;
+    private static List<long> _lastHandledIds = [];
 
     private static DateTime _lastHandledAt = DateTime.MinValue;
 
     /// <summary>How long an identical selection is treated as an echo rather than a new click.</summary>
     private static readonly TimeSpan EchoWindow = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>
+    /// True when the current reveal was made with a schedule open somewhere in the document -
+    /// the only case <see cref="OnIdling"/> should ever act on. A carrier selected directly in
+    /// the model (no schedule involved at all, e.g. after toggling "Show / Hide Paint Areas" on
+    /// and clicking one by hand) must not have its highlight yanked away the instant Idling
+    /// next fires just because no schedule happens to be open - there was never one to close.
+    /// </summary>
+    private static bool _revealedWithScheduleOpen;
+
+    /// <summary>When the idle check for "is a schedule still open" last ran.</summary>
+    private static DateTime _lastIdleCheck = DateTime.MinValue;
+
+    /// <summary>
+    /// How often the idle check runs. Idling can fire many times a second while the mouse
+    /// moves, and the check - real as it is cheap - still has no reason to run on every tick.
+    /// </summary>
+    private static readonly TimeSpan IdleCheckInterval = TimeSpan.FromMilliseconds(500);
 
     public static void Register(UIControlledApplication application)
     {
@@ -122,6 +159,33 @@ internal static class CarrierRevealService
 
             application.SelectionChanged += OnSelectionChanged;
 
+            // LEAVING THE VIEW RESTORES IT, and this is what stops a reveal outliving the
+            // session that made it.
+            //
+            // DocumentClosing cannot restore anything - a closing document may not be modified
+            // - so a reveal still active when Revit closes leaves its filter switched ON, and
+            // filter visibility is SAVED WITH THE VIEW. Measured: after one such close the
+            // "Paint Takeoff Carriers" filter stayed on for an entire working day, and 2.721
+            // consecutive clicks reported revealed=0 because there was never anything left to
+            // reveal. The feature looked broken when it was simply already switched on.
+            //
+            // Switching views is the last moment the document is still modifiable, so the
+            // restore happens there instead.
+            application.ViewActivated += OnViewActivated;
+
+            // CLOSING THE SCHEDULE TAB DOES NOT ALWAYS RAISE ViewActivated. It only does when
+            // the closed tab was the active one and Revit falls back to another open view - if
+            // the graphical view (the 3D view carrying the reveal) was already the active tab
+            // and the schedule sat in the background, closing it changes nothing about which
+            // view is active, so no event fires at all and the reveal would otherwise sit
+            // there until something else clears it.
+            //
+            // Revit's API has no view-closed event to catch that directly, so Idling is what is
+            // left: it runs in a valid API context on every idle tick, and OnIdling below asks
+            // the one question that matters - is any ViewSchedule still open - cheaply enough
+            // to afford asking it repeatedly.
+            application.Idling += OnIdling;
+
             // State is per-document: a filter id, a view id and a camera from the model being
             // closed mean nothing in the next one, and acting on them would either fail or -
             // worse - match something unrelated by id. Cleared rather than restored, because
@@ -139,6 +203,8 @@ internal static class CarrierRevealService
         try
         {
             application.SelectionChanged -= OnSelectionChanged;
+            application.ViewActivated -= OnViewActivated;
+            application.Idling -= OnIdling;
             application.ControlledApplication.DocumentClosing -= OnDocumentClosing;
         }
         catch (Exception ex)
@@ -148,18 +214,97 @@ internal static class CarrierRevealService
     }
 
     /// <summary>
-    /// Drops every piece of per-document state. NOT a restore: the document is closing and
-    /// cannot be modified, and anything left switched on goes with it.
+    /// Puts a reveal back when the user navigates to another view.
+    ///
+    /// The reveal only makes sense in the view it was made in, and this is the last point at
+    /// which the document can still be modified before a close. Without it a filter switched
+    /// on here is saved into the view and stays on indefinitely.
+    /// </summary>
+    private static void OnViewActivated(object? sender, ViewActivatedEventArgs e)
+    {
+        try
+        {
+            if (_revealed.Count == 0 && _dimmed is null && _highlighted is null) return;
+
+            // The reveal belongs to the view being LEFT. Restoring while arriving somewhere
+            // else is exactly right - Apply targets the remembered view ids, not the new one.
+            Restore();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Carrier reveal could not be restored on view change: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Catches the case <see cref="OnViewActivated"/> cannot: the schedule tab closing while
+    /// the graphical view holding the reveal was already the active one, so no view-activation
+    /// event fires at all.
+    ///
+    /// Throttled to <see cref="IdleCheckInterval"/> and short-circuited immediately when there
+    /// is nothing to restore, which is the overwhelming majority of idle ticks in a normal
+    /// session - most of the cost of this handler is the two field reads that let it return.
+    /// </summary>
+    private static void OnIdling(object? sender, IdlingEventArgs e)
+    {
+        try
+        {
+            if (!_revealedWithScheduleOpen) return;
+
+            if (_revealed.Count == 0 && _dimmed is null && _highlighted is null) return;
+
+            if (DateTime.UtcNow - _lastIdleCheck < IdleCheckInterval) return;
+            _lastIdleCheck = DateTime.UtcNow;
+
+            var uiDoc = (sender as UIApplication)?.ActiveUIDocument;
+            if (uiDoc is null) return;
+
+            var doc = uiDoc.Document;
+
+            var scheduleStillOpen = uiDoc.GetOpenUIViews()
+                .Any(v => doc.GetElement(v.ViewId) is ViewSchedule);
+
+            if (scheduleStillOpen) return;
+
+            // No schedule is open any more, so whatever is revealed, dimmed or highlighted was
+            // being read for one and nothing is reading it now.
+            Restore();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Carrier reveal idle check failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Drops the banked state when the document it belongs to is the one closing. NOT a
+    /// restore: the document is closing and cannot be modified, and anything left switched on
+    /// goes with it.
+    ///
+    /// ONLY WHEN IT IS THAT DOCUMENT. Clearing unconditionally meant closing a second, unrelated
+    /// project threw away the record of a reveal still standing in the first - leaving its
+    /// filter switched on and its siblings dimmed with nothing left that knew how to put them
+    /// back. The echo-window fields are session-wide rather than document-scoped and are reset
+    /// either way, since a stale "already handled this selection" entry is only ever a missed
+    /// redraw.
     /// </summary>
     private static void OnDocumentClosing(object? sender, Autodesk.Revit.DB.Events.DocumentClosingEventArgs e)
     {
-        _revealed.Clear();
-        _hidOthersIn = null;
-        _cameraWas = null;
-        _highlighted = null;
-        _revealedFor = -1;
-        _lastHandledId = -1;
+        _lastHandledIds = [];
         _lastHandledAt = DateTime.MinValue;
+
+        var closingKey = DocumentIdentity.KeyOf(e.Document);
+
+        if (_stateDocumentKey.Length > 0 &&
+            !string.Equals(_stateDocumentKey, closingKey, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _revealed.Clear();
+        _dimmed = null;
+        _highlighted = null;
+        _hasActiveReveal = false;
+        _revealedWithScheduleOpen = false;
+        _stateDocumentKey = string.Empty;
     }
 
     // ------------------------------------------------------------------ the event
@@ -177,32 +322,39 @@ internal static class CarrierRevealService
             Log.Debug($"Selection changed: {(ids is null ? "null" : ids.Count.ToString())} element(s)" +
                       (ids is { Count: 1 } ? $", id {ids.First().Value}" : string.Empty));
 
-            // ONE element only. A multi-select is someone doing something else - revealing a
-            // filter because a rubber-band happened to catch a carrier would be a surprise.
-            if (ids is null || ids.Count != 1)
+            // EMPTY ONLY bails out early. A multi-select used to be treated the same as
+            // "clicked away" - revealing a filter because a rubber-band happened to catch a
+            // carrier would be a surprise - but selecting several schedule rows at once is a
+            // deliberate multi-select, not a rubber-band, and Apply already only acts on
+            // whichever of the selected elements are actually carriers. A selection with none
+            // degrades to exactly the old single-element behaviour: nothing to reveal, restore
+            // the last one.
+            if (ids is null || ids.Count == 0)
             {
                 Restore();
                 return;
             }
 
-            var id = ids.First();
+            var idList = ids.ToList();
 
             if (_selfSelecting)
             {
-                Log.Debug($"Selection {id.Value} is our own re-select; ignored.");
+                Log.Debug($"Selection ({idList.Count}) is our own re-select; ignored.");
                 return;
             }
 
-            if (id.Value == _lastHandledId && DateTime.UtcNow - _lastHandledAt < EchoWindow)
+            var sorted = idList.Select(i => i.Value).OrderBy(v => v).ToList();
+
+            if (sorted.SequenceEqual(_lastHandledIds) && DateTime.UtcNow - _lastHandledAt < EchoWindow)
             {
-                Log.Debug($"Selection {id.Value} repeated within the echo window; ignored.");
+                Log.Debug($"Selection ({idList.Count}) repeated within the echo window; ignored.");
                 return;
             }
 
-            _lastHandledId = id.Value;
+            _lastHandledIds = sorted;
             _lastHandledAt = DateTime.UtcNow;
 
-            RevitTaskQueue.Post("Reveal takeoff carrier", app => Apply(app, id));
+            RevitTaskQueue.Post("Reveal takeoff carrier", app => Apply(app, idList));
         }
         catch (Exception ex)
         {
@@ -223,29 +375,76 @@ internal static class CarrierRevealService
     ///   experienced as reading a schedule. One entry per click is the least this can cost
     ///   while still using the filter mechanism at all.
     ///
-    /// <paramref name="id"/> may be anything, including a wall or InvalidElementId. Whatever
-    /// is not a filtered-out Generic Model simply results in the previous reveal being put
-    /// back and nothing new shown, which is what "the user clicked away" should do.
+    /// <paramref name="ids"/> may be empty, or contain anything including a wall - a
+    /// multi-select is not required to be all carriers. Whichever ones are filtered-out
+    /// Generic Models are revealed together; the rest just ride along in the reselect at the
+    /// end. A selection with no carriers at all simply results in the previous reveal being
+    /// put back and nothing new shown, which is what "the user clicked away" should do.
     /// </summary>
-    private static void Apply(UIApplication app, ElementId id)
+    private static void Apply(UIApplication app, List<ElementId> ids)
     {
         var uidoc = app.ActiveUIDocument;
         var doc = uidoc?.Document;
         if (doc is null || uidoc is null) return;
 
+        // THE STATE BELONGS TO A DOCUMENT, AND THIS IS WHERE THAT IS ENFORCED.
+        //
+        // Everything banked in _revealed / _dimmed / _highlighted is an ElementId from the
+        // document that was active when the reveal was made. If the active document has since
+        // changed - which OnViewActivated reacts to by queueing a restore - those ids address
+        // nothing meaningful here, and acting on them silently rewrites view overrides on
+        // unrelated elements in the file the user has just switched to.
+        //
+        // The banked state is DROPPED rather than restored, because it cannot be restored: the
+        // document that owns it is no longer the one this callback was handed, and Revit offers
+        // no way to open a transaction on a document that is not active. What is left behind in
+        // that file is a switched-on filter and some emphasis overrides - visible, undoable, and
+        // cleared the next time a carrier is clicked there, since every Apply begins by putting
+        // the previous reveal back. That is a cosmetic remnant in the right file, against
+        // silently corrupting graphics in the wrong one.
+        var documentKey = DocumentIdentity.KeyOf(doc);
+
+        if (_stateDocumentKey.Length > 0 &&
+            !string.Equals(_stateDocumentKey, documentKey, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Debug($"Carrier reveal: state belongs to another document ('{_stateDocumentKey}'), " +
+                      $"the active one is '{documentKey}'. Dropped rather than restored against " +
+                      "the wrong file; the overlay there is cleared by the next reveal in it.");
+
+            _revealed.Clear();
+            _dimmed = null;
+            _highlighted = null;
+            _hasActiveReveal = false;
+            _revealedWithScheduleOpen = false;
+            _stateDocumentKey = string.Empty;
+        }
+
         var view = TargetView(uidoc, doc);
-        var element = doc.GetElement(id);
 
         // Carriers are Generic Models in both products. Anything else is a normal selection
         // and none of this class's business - but the restore below still has to happen.
-        var carrier = element?.Category?.Id.Value == (long)BuiltInCategory.OST_GenericModel;
+        // A multi-select is filtered down to just its carriers: a rubber-band that happens to
+        // catch one carrier among a hundred walls still means "spotlight that one carrier",
+        // the same as it always has for a single click.
+        var carrierIds = ids
+            .Where(candidate => doc.GetElement(candidate)?.Category?.Id.Value
+                                 == (long)BuiltInCategory.OST_GenericModel)
+            .ToList();
 
-        var revealable = carrier && view is not null && !view.IsTemplate;
+        var revealable = carrierIds.Count > 0 && view is not null && !view.IsTemplate;
 
         // Filled inside the transaction, not before it - see the note at the computation.
         var toReveal = new List<ElementId>();
 
-        if (_revealed.Count > 0 || _hidOthersIn is not null || revealable)
+        // _highlighted BELONGS IN THIS CONDITION, and leaving it out was a bug.
+        //
+        // ClearHighlight only runs inside the transaction below. Clicking a carrier and then
+        // a wall left revealable false, _revealed empty and _dimmed null - so no
+        // transaction ran, the orange override was never removed, and it stayed on the element
+        // indefinitely. A stuck override with solid fill and zero transparency makes Revit's
+        // own selection highlight look broken on that element, which is exactly how it was
+        // reported: highlights that "stop working after a few instances".
+        if (_revealed.Count > 0 || _dimmed is not null || _highlighted is not null || revealable)
         {
             try
             {
@@ -266,34 +465,24 @@ internal static class CarrierRevealService
 
                     _revealed.Clear();
 
-                    // Put back any temporary hide THIS class applied, before deciding about a
-                    // new one. Never touches a mode someone else switched on.
-                    if (_hidOthersIn is not null
-                        && doc.GetElement(_hidOthersIn) is View previouslyHidden)
+                    // Put back any dimming THIS class applied, before deciding about a new
+                    // one. Each sibling is cleared individually - there is no single view flag
+                    // to switch off the way temporary hide/isolate had.
+                    if (_dimmed is { } previouslyDimmed
+                        && doc.GetElement(previouslyDimmed.View) is View dimmedView)
                     {
-                        try { previouslyHidden.DisableTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate); }
-                        catch { /* mode already gone */ }
+                        foreach (var dimmedId in previouslyDimmed.Elements)
+                        {
+                            try { dimmedView.SetElementOverrides(dimmedId, new OverrideGraphicSettings()); }
+                            catch { /* element or view gone */ }
+                        }
                     }
 
-                    _hidOthersIn = null;
+                    _dimmed = null;
 
                     // Always drop the previous emphasis - a row that is no longer the one being
                     // read must not stay painted orange.
                     ClearHighlight(doc);
-
-                    // Put the camera back too, whenever this is not another carrier. Clicking
-                    // a wall, or clearing the selection, returns the view to where it was
-                    // before the first row was ever clicked.
-                    if (!revealable
-                        && _cameraWas is { } saved
-                        && doc.GetElement(saved.View) is View3D cameraView
-                        && !cameraView.IsLocked)
-                    {
-                        try { cameraView.SetOrientation(saved.Orientation); }
-                        catch { /* view changed under us; nothing to restore to */ }
-                    }
-
-                    if (!revealable) _cameraWas = null;
 
                     // WORK OUT WHAT HIDES THIS ELEMENT ONLY NOW, AFTER THE RESTORE ABOVE.
                     //
@@ -310,9 +499,18 @@ internal static class CarrierRevealService
                     // Reading the view AFTER it has been put back means the question asked is
                     // "what hides this element in a clean view", which is the only version of
                     // the question with a stable answer.
-                    if (revealable) toReveal.AddRange(HidingFilters(view!, element!));
+                    //
+                    // UNIONED ACROSS EVERY SELECTED CARRIER, then de-duplicated - two rows
+                    // hidden by the same filter must only switch it on and record it once, or
+                    // the second SetFilterVisibility(true) is a harmless no-op but the second
+                    // _revealed entry would try to switch the same filter off twice on restore.
+                    if (revealable)
+                    {
+                        foreach (var carrierId in carrierIds)
+                            toReveal.AddRange(HidingFilters(view!, doc.GetElement(carrierId)!));
+                    }
 
-                    foreach (var filterId in toReveal)
+                    foreach (var filterId in toReveal.Distinct())
                     {
                         view!.SetFilterVisibility(filterId, true);
                         _revealed.Add((view.Id, filterId));
@@ -323,46 +521,79 @@ internal static class CarrierRevealService
                     // SetFilterVisibility switches on EVERY element the filter covers, so
                     // revealing one carrier reveals all of them - the whole storey's worth of
                     // painted regions at once, which is not what "highlight this row" means.
-                    // Revit offers no way to except a single element from a filter, so the
-                    // siblings are hidden instead and only the row's own region is left drawn.
-                    if (toReveal.Count > 0) HideSiblings(doc, view!, id, toReveal);
+                    // Revit offers no way to except a single element from a filter, so every
+                    // sibling is dimmed instead and only the selected rows' own regions are
+                    // left at full strength.
+                    //
+                    // MATCHED REGARDLESS OF WHETHER A FILTER NEEDED SWITCHING ON. A carrier
+                    // that was already visible before this click - "Show / Hide Paint Areas"
+                    // left on, say - still has to yield the spotlight to whichever row was just
+                    // selected, so this is not restricted to the filters found above. Also
+                    // unioned across every selected carrier, same reason as toReveal.
+                    if (revealable)
+                    {
+                        var carrierFilters = carrierIds
+                            .SelectMany(carrierId => AllMatchingFilters(view!, doc.GetElement(carrierId)!))
+                            .Distinct()
+                            .ToList();
+
+                        if (carrierFilters.Count > 0) DimSiblings(doc, view!, carrierIds, carrierFilters);
+                    }
 
                     // Emphasise whenever this is a carrier - NOT only when a filter had to be
                     // switched on. A region that was already visible still needs to stand out
                     // from the wall it lies on, and that is the case a "reveal only" rule
-                    // silently skips.
-                    if (revealable) Highlight(doc, view!, id);
-
-                    // Turn the camera to face the paint. In the same transaction as everything
-                    // else so a click stays one undo entry, and before the re-select below,
-                    // which is what puts the highlight back after this clears it.
-                    if (revealable && view is View3D three) Orient(three, element!, doc);
+                    // silently skips. Every selected carrier is emphasised, not just one - that
+                    // is the whole point of allowing a multi-select through at all.
+                    if (revealable) Highlight(doc, view!, carrierIds);
                 });
             }
             catch (Exception ex)
             {
                 Log.Warn($"Carrier visibility could not be changed: {ex.Message}");
                 _revealed.Clear();
-                _revealedFor = -1;
+                _hasActiveReveal = false;
+                _stateDocumentKey = string.Empty;
                 return;
             }
         }
 
         // Logged AFTER the transaction, because before it the filter counts describe the
         // previous row's leftovers rather than this one.
-        Log.Debug($"Reveal {id.Value}: carrier={carrier} " +
-                  $"category={element?.Category?.Name ?? "none"} " +
-                  $"view={view?.Name ?? "none"} revealed={toReveal.Count}");
+        Log.Debug($"Reveal {(carrierIds.Count == 1 ? carrierIds[0].Value.ToString() : $"{carrierIds.Count} carrier(s)")}: " +
+                  $"selected={ids.Count} view={view?.Name ?? "none"} revealed={toReveal.Distinct().Count()}");
 
-        _revealedFor = carrier ? id.Value : -1;
+        _hasActiveReveal = carrierIds.Count > 0;
 
-        if (!carrier || view is null) return;
+        // Stamped alongside _hasActiveReveal, from the document this pass actually wrote to.
+        // Cleared when nothing is left banked, so the guard at the top of Apply only fires
+        // while there is genuinely state belonging to some other file.
+        _stateDocumentKey =
+            _revealed.Count > 0 || _dimmed is not null || _highlighted is not null || _hasActiveReveal
+                ? documentKey
+                : string.Empty;
 
-        if (view is View3D sectioned) WarnIfOutsideSectionBox(sectioned, element!);
+        // Recorded here, not guessed at in OnIdling: a schedule open NOW, at the moment this
+        // reveal was made, is the only thing that justifies auto-restoring later when one
+        // closes. Checked regardless of whether toReveal/DimSiblings actually ran, because a
+        // carrier that needed no filter change can still have been selected from a schedule row.
+        _revealedWithScheduleOpen = revealable
+            && uidoc.GetOpenUIViews().Any(v => doc.GetElement(v.ViewId) is ViewSchedule);
+
+        if (carrierIds.Count == 0 || view is null) return;
+
+        if (view is View3D sectioned)
+        {
+            foreach (var carrierId in carrierIds)
+            {
+                if (doc.GetElement(carrierId) is { } carrierElement)
+                    WarnIfOutsideSectionBox(sectioned, carrierElement);
+            }
+        }
 
         // RE-ASSERT THE SELECTION, because the transaction above almost certainly cleared it.
         //
-        // Revit selects the row's element when a schedule row is clicked, and then a
+        // Revit selects the row's element(s) when a schedule row is clicked, and then a
         // transaction that modifies the VIEW - which switching a filter on and hiding siblings
         // both are - drops that selection. The element is revealed and the camera moves to it,
         // and it is not highlighted, because nothing is selected any more.
@@ -372,103 +603,24 @@ internal static class CarrierRevealService
         // normally, while a row that needed revealing loses it. Which rows misbehave therefore
         // depends on what the view happened to be showing, not on the row.
         //
-        // Set AFTER _revealedFor so the SelectionChanged this raises returns immediately
+        // THE FULL ORIGINAL SELECTION, not just the carriers - any wall or other element that
+        // rode along in a multi-select is put back too, so this never narrows what the user
+        // had selected.
+        //
+        // Set AFTER _hasActiveReveal so the SelectionChanged this raises returns immediately
         // instead of re-entering the whole reveal.
         try
         {
             _selfSelecting = true;
-            uidoc.Selection.SetElementIds(new List<ElementId> { id });
+            uidoc.Selection.SetElementIds(ids);
         }
         catch (Exception ex)
         {
-            Log.Warn($"Could not re-select {id.Value} after revealing it: {ex.Message}");
+            Log.Warn($"Could not re-select after revealing: {ex.Message}");
         }
         finally
         {
             _selfSelecting = false;
-        }
-
-        Zoom(uidoc, view, element!, id);
-    }
-
-    /// <summary>
-    /// Zooms the view to the carrier - WITHOUT UIDocument.ShowElements.
-    ///
-    /// WHY NOT ShowElements
-    ///   When the element cannot be drawn anywhere, ShowElements puts up a modal Revit dialog:
-    ///   "There is no open view that shows any of the highlighted elements. Searching through
-    ///   the closed views could take a long time. Continue?" - on every click, for a feature
-    ///   whose whole job is to be unobtrusive while someone reads a schedule.
-    ///
-    ///   And "cannot be drawn anywhere" is not an edge case here. A carrier with an empty
-    ///   Shape has no geometry in any view by construction, and this model contains two kinds:
-    ///   rows the unfixed takeoff left without carrier geometry (its own summary calls them
-    ///   "in the CSV only"), and every row this add-in's PaintTakeoffBuilder places, which
-    ///   never calls SetShape at all - deliberately, because those rows are data.
-    ///
-    /// SO THE BOUNDING BOX IS THE TEST. A null box in this view means there is nothing to look
-    /// at, and the correct response is to leave the camera alone and say why in the log, not to
-    /// ask the user whether Revit should go hunting through closed views.
-    /// </summary>
-    private static void Zoom(UIDocument uidoc, View view, Element element, ElementId id)
-    {
-        try
-        {
-            var box = element.get_BoundingBox(view);
-
-            if (box is null)
-            {
-                // NOTHING TO LOOK AT - so show the WALL the row measured instead of nothing.
-                //
-                // A shapeless carrier still knows its host: the takeoff writes it into "Paint
-                // Segment" as the text the schedule shows in 'Vægflade / flade', which carries
-                // the element id after a '#'. Zooming there answers "which surface is this
-                // row?" approximately, which beats a click that appears to do nothing at all.
-                //
-                // Deliberately NOT selected - only zoomed. Replacing the user's selection
-                // would break the schedule's own row highlight and lose the exact row they
-                // clicked, trading a precise selection for an imprecise one.
-                var host = HostOf(element, view);
-
-                if (host is not null)
-                {
-                    var ui2 = uidoc.GetOpenUIViews().FirstOrDefault(v => v.ViewId == view.Id);
-                    ui2?.ZoomAndCenterRectangle(host.Min, host.Max);
-
-                    Log.Info($"Carrier {id.Value} has no geometry, so its host wall was framed " +
-                             "instead. Re-run the takeoff to give this row its own region.");
-                    return;
-                }
-
-                Log.Info($"Carrier {id.Value} has no geometry in '{view.Name}' and no host could " +
-                         "be read from 'Paint Segment', so there is nothing to zoom to. The row " +
-                         "is selected and its area is correct; the takeoff placed it without a " +
-                         "shape.");
-                return;
-            }
-
-            // PAD THE BOX, OR THE ZOOM UNDOES THE CAMERA WORK.
-            //
-            // ZoomAndCenterRectangle fits exactly what it is given, so handing it the region's
-            // own box crops straight back to that region - the careful stand-off distance is
-            // thrown away and the result is the flat close-up again. A jamb strip 0,24 m²
-            // becomes the entire screen.
-            //
-            // The padding is the region's own size or 2 m, whichever is larger, so a small
-            // patch gains real surroundings while a whole wall face is not zoomed out to
-            // nothing.
-            // Internal units are FEET, so the 2 m minimum has to be converted - a bare 2.0
-            // here would be 2 feet and the padding would barely register.
-            var minimum = UnitUtils.ConvertToInternalUnits(2.0, UnitTypeId.Meters);
-            var pad = Math.Max((box.Max - box.Min).GetLength(), minimum);
-            var padding = new XYZ(pad, pad, pad);
-
-            var ui = uidoc.GetOpenUIViews().FirstOrDefault(v => v.ViewId == view.Id);
-            ui?.ZoomAndCenterRectangle(box.Min - padding, box.Max + padding);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"Could not zoom to {id.Value}: {ex.Message}");
         }
     }
 
@@ -491,7 +643,12 @@ internal static class CarrierRevealService
     /// this template is Danish - so it is located by IsSolidFill instead, which is the same in
     /// every language.
     /// </summary>
-    private static void Highlight(Document doc, View view, ElementId id)
+    /// <summary>
+    /// Emphasises every carrier in <paramref name="ids"/> - one for a single click, several
+    /// for a multi-select. Each is overridden individually because SetElementOverrides is
+    /// per-element; there is no "highlight this set" call.
+    /// </summary>
+    private static void Highlight(Document doc, View view, IReadOnlyList<ElementId> ids)
     {
         try
         {
@@ -515,33 +672,51 @@ internal static class CarrierRevealService
                 settings.SetSurfaceForegroundPatternColor(colour);
             }
 
-            view.SetElementOverrides(id, settings);
-            _highlighted = (view.Id, id);
+            var applied = new List<ElementId>();
+
+            foreach (var id in ids)
+            {
+                try
+                {
+                    view.SetElementOverrides(id, settings);
+                    applied.Add(id);
+                }
+                catch (Exception ex)
+                {
+                    // The reveal and the camera still worked for this one; only its own
+                    // emphasis is missing. The rest of the selection still gets its highlight.
+                    Log.Warn($"Could not emphasise carrier {id.Value}: {ex.Message}");
+                }
+            }
+
+            if (applied.Count > 0) _highlighted = (view.Id, applied);
         }
         catch (Exception ex)
         {
-            // The reveal and the camera still worked; only the emphasis is missing.
-            Log.Warn($"Could not emphasise carrier {id.Value}: {ex.Message}");
+            Log.Warn($"Could not emphasise carriers: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Removes the emphasis. An empty OverrideGraphicSettings is Revit's own "no overrides",
-    /// so this restores the element to whatever the view would draw anyway - it does not
-    /// assume the element had no overrides of its own before.
+    /// Removes the emphasis from every element it was applied to. An empty
+    /// OverrideGraphicSettings is Revit's own "no overrides", so this restores each element to
+    /// whatever the view would draw anyway - it does not assume the element had no overrides
+    /// of its own before.
     /// </summary>
     private static void ClearHighlight(Document doc)
     {
         if (_highlighted is not { } previous) return;
 
-        try
+        if (doc.GetElement(previous.View) is View view)
         {
-            if (doc.GetElement(previous.View) is View view)
-                view.SetElementOverrides(previous.Element, new OverrideGraphicSettings());
-        }
-        catch
-        {
-            // View or element gone; nothing to clear.
+            foreach (var id in previous.Elements)
+            {
+                try { view.SetElementOverrides(id, new OverrideGraphicSettings()); }
+                catch
+                {
+                    // View or element gone; nothing to clear.
+                }
+            }
         }
 
         _highlighted = null;
@@ -604,248 +779,30 @@ internal static class CarrierRevealService
     }
 
     /// <summary>
-    /// Turns the 3D view to look straight at the painted region, instead of leaving the camera
-    /// wherever it was - which is usually behind the wall, with the paint facing away.
+    /// Pushes every OTHER carrier in the view to halftone and high transparency, so the
+    /// selected row's region reads as the one being inspected against a dimmed but still
+    /// visible model, rather than the only thing left on screen.
     ///
-    /// WHY A ZOOM ALONE CANNOT DO THIS
-    ///   ZoomAndCenterRectangle pans and scales; it never rotates. Framing a face while the
-    ///   camera points at its back gives a confident view of blank plaster.
+    /// GRAPHIC OVERRIDE, NOT TEMPORARY HIDE. This used to call View.HideElementsTemporary,
+    /// which removed every sibling from the view entirely - useful for isolating one shape,
+    /// useless for a QA pass that needs to see where it sits among the room's other painted
+    /// faces. SetElementOverrides keeps siblings drawn, just visually pushed back, which is
+    /// what "identify, track and audit" a row against its neighbours actually needs.
     ///
-    /// THE HARD PART IS WHICH WAY IS "FRONT"
-    ///   A carrier is a thin plate, so its two largest faces are equal in area and exactly
-    ///   opposite: one looks into the room, one into the wall. Choosing by area alone is a coin
-    ///   toss, and losing it puts the camera inside the wall - the very symptom this fixes.
+    /// ONLY CARRIERS, NEVER THE WHOLE CATEGORY. <paramref name="filters"/> is the same set of
+    /// parameter filters that classify this element as a carrier, so a sibling is anything
+    /// those filters match. Generic Models is also where a real project keeps furniture,
+    /// equipment and bespoke joinery, and none of that dims because a schedule row was
+    /// clicked.
     ///
-    ///   The host wall settles it. The region sits on the wall's surface, so the vector from
-    ///   the wall's centre to the region points OUT of the wall, and the correct normal is
-    ///   whichever of the pair agrees with it.
-    ///
-    ///   With no host to compare against, the view is left alone rather than turned to a
-    ///   guess: an unchanged camera is merely unhelpful, while a wrong one is actively
-    ///   confusing and costs the user their viewpoint.
+    /// <paramref name="keep"/> IS EVERY SELECTED CARRIER, not just one - a multi-select dims
+    /// every carrier that is neither of the selected rows, so two selected rows read against
+    /// a dimmed model together instead of each one dimming the other.
     /// </summary>
-    private static void Orient(View3D view, Element carrier, Document doc)
+    private static void DimSiblings(Document doc, View view, IReadOnlyCollection<ElementId> keep, List<ElementId> filters)
     {
         try
         {
-            // A locked 3D view refuses SetOrientation, and that lock is usually deliberate -
-            // a view placed on a sheet at a fixed angle.
-            if (view.IsLocked) return;
-
-            var box = carrier.get_BoundingBox(null);
-            if (box is null) return;
-
-            var normal = FrontNormal(carrier, doc);
-            if (normal is null) return;
-
-            // LEAVE A GOOD VIEW ALONE - BUT DEAD-ON IS NOT A GOOD VIEW.
-            //
-            // Reorienting on every click takes the 3D view away from someone reading down a
-            // schedule, so an angle that already shows the face is left untouched. The band
-            // matters though: between about 70 and 20 degrees off square reads as a useful
-            // three-quarter view, while closer than that is the flat, contextless elevation
-            // this method exists to avoid - a wall filling the frame with nothing around it to
-            // locate it by. That case is re-framed rather than kept.
-            if (view.GetOrientation()?.ForwardDirection is { } facing)
-            {
-                var squareness = facing.DotProduct(normal);
-                if (squareness < -0.35 && squareness > -0.94) return;
-            }
-
-            // Remember where the camera was, ONCE, before the first move - so clicking away
-            // can put it back exactly. Overwriting it on later rows would save a viewpoint
-            // this class chose rather than the one the user had.
-            _cameraWas ??= (view.Id, view.GetOrientation());
-
-            var centre = (box.Min + box.Max) / 2.0;
-
-            var eyeDirection = ObliqueFrom(normal);
-
-            // PULLED BACK OFF THE REGION, NOT OFF ITS OWN SIZE.
-            //
-            // Sizing the distance from the region alone frames a 0,24 m² jamb strip from
-            // inches away - technically correct and useless, because nothing around it is in
-            // shot. The host wall is what gives the region a place, so its diagonal sets the
-            // distance and the region only sets a floor for very large walls.
-            var span = (box.Max - box.Min).GetLength();
-            var host = HostBox(carrier, doc);
-            if (host is not null) span = Math.Max(span, (host.Max - host.Min).GetLength() * 0.6);
-
-            var distance = Math.Max(span, 3.0) * 1.6;
-
-            var forward = -eyeDirection;
-
-            // Up must not be parallel to forward, or the orientation is degenerate and Revit
-            // rejects it. Floor and soffit carriers are exactly that case.
-            var up = Math.Abs(forward.Z) > 0.9 ? XYZ.BasisY : XYZ.BasisZ;
-            up = (up - forward * up.DotProduct(forward)).Normalize();
-
-            view.SetOrientation(new ViewOrientation3D(centre + eyeDirection * distance, up, forward));
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"Could not orient '{view.Name}' to the painted face: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Swings the eye direction off the face normal into a three-quarter view.
-    ///
-    /// WHY NOT LOOK STRAIGHT AT IT
-    ///   Standing exactly on the normal produces an elevation: the wall fills the frame, every
-    ///   edge is perpendicular, and there is no depth cue to say which room you are in or what
-    ///   the surface adjoins. It is the least informative angle available, and it was what the
-    ///   first version did.
-    ///
-    ///   Swinging 32 degrees around vertical and lifting the eye brings the return walls,
-    ///   floor and ceiling into shot, which is what makes a region legible AS part of a room.
-    ///
-    /// HORIZONTAL FACES NEED THE OPPOSITE TREATMENT. A floor or soffit carrier has a vertical
-    /// normal, and swinging that around the vertical axis changes nothing at all. Those are
-    /// tilted sideways instead, so the view comes in across the surface rather than straight
-    /// down onto it.
-    /// </summary>
-    private static XYZ ObliqueFrom(XYZ normal)
-    {
-        try
-        {
-            if (Math.Abs(normal.Z) > 0.9)
-            {
-                // Floor or soffit: lean the eye out sideways to get a raking view.
-                return (normal + new XYZ(0.55, 0.35, 0.0)).Normalize();
-            }
-
-            var swung = Transform
-                .CreateRotation(XYZ.BasisZ, 32.0 * Math.PI / 180.0)
-                .OfVector(normal);
-
-            // Raise the eye so the camera looks slightly DOWN at the surface, the angle every
-            // architectural 3D view is read at.
-            return (swung + XYZ.BasisZ * 0.42).Normalize();
-        }
-        catch
-        {
-            return normal;
-        }
-    }
-
-    /// <summary>
-    /// The carrier's room-facing normal: the largest planar face's normal, flipped if it
-    /// points into the host wall rather than out of it.
-    /// </summary>
-    private static XYZ? FrontNormal(Element carrier, Document doc)
-    {
-        try
-        {
-            var options = new Options
-            {
-                ComputeReferences = false,
-                IncludeNonVisibleObjects = false,
-                DetailLevel = ViewDetailLevel.Fine,
-            };
-
-            var geometry = carrier.get_Geometry(options);
-            if (geometry is null) return null;
-
-            PlanarFace? largest = null;
-
-            foreach (var obj in geometry)
-            {
-                if (obj is not Solid solid) continue;
-
-                foreach (Face face in solid.Faces)
-                {
-                    if (face is PlanarFace planar && (largest is null || planar.Area > largest.Area))
-                        largest = planar;
-                }
-            }
-
-            if (largest is null) return null;
-
-            var normal = largest.FaceNormal.Normalize();
-
-            var host = HostBox(carrier, doc);
-            if (host is null) return null;   // cannot tell front from back - see Orient
-
-            var box = carrier.get_BoundingBox(null);
-            if (box is null) return null;
-
-            var outward = (box.Min + box.Max) / 2.0 - (host.Min + host.Max) / 2.0;
-
-            return normal.DotProduct(outward) < 0 ? -normal : normal;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// The bounding box of the wall a shapeless carrier measured, read out of its
-    /// "Paint Segment" parameter.
-    ///
-    /// THE ID IS PARSED OUT OF DISPLAY TEXT, which is not something to do lightly - but that
-    /// parameter is the only link a carrier keeps to its host, and its shape is fixed by the
-    /// takeoff: "IV_Mål - 100mm #29307987 · Face 0.1". The id is the digits after '#'. Anything
-    /// that does not match returns null and the caller says so rather than guessing.
-    /// </summary>
-    private static BoundingBoxXYZ? HostOf(Element carrier, View view)
-        => HostElement(carrier, view.Document)?.get_BoundingBox(view);
-
-    /// <summary>The host wall's box in MODEL space - independent of any view's visibility.</summary>
-    private static BoundingBoxXYZ? HostBox(Element carrier, Document doc)
-        => HostElement(carrier, doc)?.get_BoundingBox(null);
-
-    /// <summary>
-    /// The wall a carrier measured, from the id embedded in its "Paint Segment" text.
-    /// </summary>
-    private static Element? HostElement(Element carrier, Document doc)
-    {
-        try
-        {
-            var text = ParameterHelper.Find(carrier, "Paint Segment")?.AsString();
-            if (string.IsNullOrWhiteSpace(text)) return null;
-
-            var match = System.Text.RegularExpressions.Regex.Match(text, @"#(\d+)");
-            if (!match.Success) return null;
-
-            if (!long.TryParse(match.Groups[1].Value, out var hostId)) return null;
-
-            return doc.GetElement(new ElementId(hostId));
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Temporarily hides every OTHER carrier in the view, so the revealed filter shows one
-    /// painted region rather than all of them.
-    ///
-    /// TEMPORARY HIDE, NOT ISOLATE. Isolate would hide the walls too and leave the region
-    /// floating in space with nothing to read it against - the point is to see which surface
-    /// on which wall the row measured.
-    ///
-    /// SKIPPED ENTIRELY if the view is already in temporary hide/isolate mode. That is
-    /// someone's own working state, and quietly replacing it - then switching it off on the
-    /// next click - would lose work that has nothing to do with this feature.
-    /// </summary>
-    private static void HideSiblings(Document doc, View view, ElementId keep, List<ElementId> filters)
-    {
-        try
-        {
-            if (view.IsInTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate)) return;
-
-            // ONLY CARRIERS, NEVER THE WHOLE CATEGORY.
-            //
-            // This used to hide every Generic Model in the document. In this test model that
-            // is 43 carriers and nothing else, so it looked correct - but Generic Models are
-            // where real projects keep furniture, equipment and bespoke joinery, and clicking
-            // a schedule row would have made all of it disappear.
-            //
-            // The filters just switched on are the definition of "is a carrier", so a sibling
-            // is anything those same filters match. Nothing outside them is touched.
             var rules = filters
                 .Select(doc.GetElement)
                 .OfType<ParameterFilterElement>()
@@ -855,26 +812,80 @@ internal static class CarrierRevealService
 
             if (rules.Count == 0) return;
 
+            var keepSet = keep as HashSet<ElementId> ?? new HashSet<ElementId>(keep);
+
             var siblings = new FilteredElementCollector(doc)
                 .OfCategory(BuiltInCategory.OST_GenericModel)
                 .WhereElementIsNotElementType()
-                .Where(e => e.Id != keep
-                            && e.CanBeHidden(view)
-                            && rules.Any(r => Passes(r!, e)))
+                .Where(e => !keepSet.Contains(e.Id) && rules.Any(r => Passes(r!, e)))
                 .Select(e => e.Id)
                 .ToList();
 
             if (siblings.Count == 0) return;
 
-            view.HideElementsTemporary(siblings);
-            _hidOthersIn = view.Id;
+            var overrides = new OverrideGraphicSettings()
+                .SetHalftone(true)
+                .SetSurfaceTransparency(DimTransparencyPercent);
+
+            var dimmed = new List<ElementId>();
+
+            foreach (var siblingId in siblings)
+            {
+                try
+                {
+                    view.SetElementOverrides(siblingId, overrides);
+                    dimmed.Add(siblingId);
+                }
+                catch
+                {
+                    // An element that will not take overrides in this view is left as it was;
+                    // the selected row's own highlight still reads against everything else.
+                }
+            }
+
+            if (dimmed.Count > 0) _dimmed = (view.Id, dimmed);
         }
         catch (Exception ex)
         {
-            // Worst case the siblings stay visible - the row's region is still revealed and
-            // still selected, so the feature degrades rather than fails.
-            Log.Warn($"Could not hide sibling carriers in '{view.Name}': {ex.Message}");
+            // Worst case the siblings stay at full strength - the row's region is still
+            // revealed and still selected, so the feature degrades rather than fails.
+            Log.Warn($"Could not dim sibling carriers in '{view.Name}': {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Every parameter filter on the view - visible or not - that <paramref name="element"/>
+    /// passes. Used to define "sibling carrier" for dimming, which must include a carrier that
+    /// was already visible before this click; <see cref="HidingFilters"/> only reports filters
+    /// currently switched off and is the wrong list for that.
+    /// </summary>
+    private static List<ElementId> AllMatchingFilters(View view, Element element)
+    {
+        var matching = new List<ElementId>();
+
+        try
+        {
+            foreach (var filterId in view.GetFilters())
+            {
+                if (view.Document.GetElement(filterId) is not ParameterFilterElement filter) continue;
+
+                try
+                {
+                    if (filter.GetElementFilter()?.PassesFilter(element) == true) matching.Add(filterId);
+                }
+                catch
+                {
+                    // A filter whose rules cannot be evaluated against this element is not one
+                    // that classifies it.
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not read the filters on '{view.Name}': {ex.Message}");
+        }
+
+        return matching;
     }
 
     /// <summary>
@@ -963,14 +974,15 @@ internal static class CarrierRevealService
     /// <summary>
     /// Queues a restore-only pass. For the event handler, which has no API context.
     ///
-    /// Routed through <see cref="Apply"/> with an invalid id rather than a separate method:
-    /// restoring IS the "clicked away" case, and one code path means the two cannot drift.
+    /// Routed through <see cref="Apply"/> with an empty list rather than a separate method:
+    /// restoring IS the "clicked away" case (or "selected only non-carriers"), and one code
+    /// path means the two cannot drift.
     /// </summary>
     private static void Restore()
     {
-        if (_revealed.Count == 0 && _revealedFor < 0) return;
+        if (_revealed.Count == 0 && !_hasActiveReveal) return;
 
         RevitTaskQueue.Post("Restore takeoff carrier visibility",
-            app => Apply(app, ElementId.InvalidElementId));
+            app => Apply(app, []));
     }
 }

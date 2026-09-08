@@ -144,9 +144,15 @@ public sealed class RoomBoundaryAdjuster
                 if (roomBox is null) continue;
 
                 var neededTop = HighestCapTop(topBoxes, roomBox);
-                if (neededTop is null) continue;
 
-                if (RaiseUpperOffset(room, roomBox, neededTop.Value)) adjusted++;
+                // A FLAGGED ROOM STILL GOES THROUGH, even with no cap to raise for. The
+                // raise-only path has nothing to do when HighestCapTop finds nothing, but the
+                // FFL branch inside RaiseUpperOffset does - it looks the slab up itself - and
+                // returning early here would skip it, ignoring the user's marker with no log
+                // line to show for it.
+                if (neededTop is null && !RoomFfsCap.IsFlagged(room)) continue;
+
+                if (RaiseUpperOffset(room, roomBox, neededTop ?? 0.0)) adjusted++;
             }
             catch
             {
@@ -226,6 +232,18 @@ public sealed class RoomBoundaryAdjuster
     /// </summary>
     internal static bool RaiseUpperOffset(Room room, BoundingBoxXYZ roomBox, double neededTop)
     {
+        // THE ONE CASE WHERE LOWERING IS CORRECT, checked here because this is the single
+        // place a room's upper offset is written - both the full pass and the per-room
+        // adjuster come through it, so the exemption cannot be applied to one and missed on
+        // the other.
+        //
+        // A room whose Comments carry the FFS marker has been declared, by hand, to stop at
+        // the slab above rather than leak through the hole in it. Raise-only exists so the
+        // tool never overrules a modelling decision it cannot see the reason for; this room
+        // states the reason, so the guard does not apply to it. Without this branch the
+        // automation would raise the cap straight back on the next model change.
+        if (RoomFfsCap.IsFlagged(room)) return RoomFfsCap.Apply(room, roomBox);
+
         // Already high enough. The half-margin slack stops the tool nudging the same room
         // by a millimetre on every pass, which would mark the model changed forever.
         if (roomBox.Max.Z >= neededTop - FinishSettings.LimitMargin * 0.5) return false;

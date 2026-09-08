@@ -165,7 +165,7 @@ public sealed class PaintSurfaceExtractor
 
                 var before = result.Regions.Count;
 
-                Intersect(subfaceGeometry, owner, kind, result, ref booleanFailures);
+                Intersect(subfaceGeometry, owner, kind, room, result, ref booleanFailures);
 
                 if (result.Regions.Count == before) unpaintedHosts++;
             }
@@ -204,7 +204,7 @@ public sealed class PaintSurfaceExtractor
     /// so the geometry drawn is the geometry that was measured.
     /// </summary>
     private void Intersect(
-        Face roomFace, Element owner, SurfaceKind kind, PaintExtractResult result, ref int failures)
+        Face roomFace, Element owner, SurfaceKind kind, Room room, PaintExtractResult result, ref int failures)
     {
         var (roomOrigin, roomNormal) = FinishGeometry.PlanarData(roomFace);
         if (roomOrigin is null || roomNormal is null) return;
@@ -251,6 +251,51 @@ public sealed class PaintSurfaceExtractor
                     continue;
                 }
 
+                // OCCLUSION - the QA-overlay half of the same fix FinishGeometry.ExactSubfaceArea
+                // already carries. Kept as its own copy rather than a shared call for the exact
+                // reason the rest of this file duplicates that method: this overlay must draw
+                // the same shape the finish engine measured, but the engine's signature is not
+                // this class's to change. A mezzanine or hanging wall standing against this face
+                // means the highlighted region would otherwise be drawn INSIDE that element's own
+                // solid - visually exactly what the reference screenshots show as wrong - even
+                // once the engine's own number is already correct.
+                foreach (var occluder in OccludingElements(owner, room))
+                {
+                    List<Solid> occluderSolids;
+                    try { occluderSolids = _geometry.ElementSolids(occluder); }
+                    catch { continue; }
+
+                    foreach (var solid in occluderSolids)
+                    {
+                        if (solid.Volume <= 1e-9) continue;
+
+                        try
+                        {
+                            var reduced = BooleanOperationsUtils.ExecuteBooleanOperation(
+                                intersection, solid, BooleanOperationsType.Difference);
+
+                            // A FAILED CUT LEAVES THE SHAPE UNCHANGED, same discipline as the
+                            // engine's own copy: an overlay that occasionally draws slightly too
+                            // much is honest about a geometry edge case; one that vanishes on a
+                            // boolean failure looks like the tool is broken.
+                            if (reduced is not null) intersection = reduced;
+                        }
+                        catch
+                        {
+                            // Left unresolved; this occluder simply does not reduce the shape.
+                        }
+
+                        if (intersection.Volume <= 1e-9) break;
+                    }
+
+                    if (intersection.Volume <= 1e-9) break;
+                }
+
+                // FULLY OCCLUDED: nothing left to draw here, and unlike a genuinely failed
+                // boolean above, this is not counted as a clip failure - the paint IS behind
+                // the occluder, which is exactly the case this fix exists to stop showing.
+                if (intersection.Volume <= 1e-9) continue;
+
                 var area = intersection.Volume / FinishSettings.ExtrudeThickness;
 
                 // The sliver is built INSIDE the host, because both extrusions run along the
@@ -276,6 +321,106 @@ public sealed class PaintSurfaceExtractor
             }
         }
     }
+
+    /// <summary>
+    /// Interior slabs and hanging walls near <paramref name="host"/> - the same candidate
+    /// shape as <c>RoomFinishCalculator.OccludingElements</c>, queried live rather than from
+    /// a whole-model cache. This overlay runs on demand for one element at a time, not across
+    /// every room in the model, so the collector this method pays for is a live query - see
+    /// the class doc for why this is its own copy rather than a shared call.
+    /// </summary>
+    private List<Element> OccludingElements(Element host, Room room)
+    {
+        var found = new List<Element>();
+
+        try
+        {
+            var hostBox = host.get_BoundingBox(null);
+            if (hostBox is null) return found;
+
+            var roomBox = SafeBoundingBox(room);
+
+            // UNFILTERED BY ROOM BOUNDING, DELIBERATELY - see RoomFinishCalculator's copy of
+            // this method for the full reasoning. Room Bounding = No is this office's own
+            // convention for a mezzanine/hanging wall and is accepted unconditionally, exactly
+            // as before. Room Bounding = Yes is the convention PaintedMaterialTakeoff's own
+            // InteriorElementCalculator REQUIRES, and is accepted only when FloatsWithinRoom
+            // confirms the candidate stands clear of the room's own vertical extent - without
+            // that test this would also catch every ordinary wall corner and every room's own
+            // floor touching its own walls' base.
+            var candidates = new FilteredElementCollector(_doc)
+                .WherePasses(new LogicalOrFilter(
+                    new ElementCategoryFilter(BuiltInCategory.OST_Floors),
+                    new ElementCategoryFilter(BuiltInCategory.OST_Walls)))
+                .WhereElementIsNotElementType();
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.Id == host.Id) continue;
+
+                try
+                {
+                    var box = candidate.get_BoundingBox(null);
+                    if (box is null || !BoxesOverlap(hostBox, box)) continue;
+
+                    var eligible = IsNonRoomBounding(candidate) ||
+                                   (roomBox is not null && FloatsWithinRoom(candidate, roomBox, box));
+
+                    if (eligible) found.Add(candidate);
+                }
+                catch
+                {
+                    // One candidate's box failing must not cost the rest of the list.
+                }
+            }
+        }
+        catch
+        {
+            // No box on the host itself - nothing to filter against.
+        }
+
+        return found;
+    }
+
+    private static BoundingBoxXYZ? SafeBoundingBox(Element element)
+    {
+        try { return element.get_BoundingBox(null); }
+        catch { return null; }
+    }
+
+    private static bool IsNonRoomBounding(Element element)
+    {
+        try
+        {
+            var parameter = element.get_Parameter(BuiltInParameter.WALL_ATTR_ROOM_BOUNDING);
+            return parameter is not null && parameter.AsInteger() == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Same test as RoomFinishCalculator.FloatsWithinRoom - see that copy for the
+    /// full reasoning. In short: walls need clearance on EITHER side (OR); floors need it on
+    /// BOTH (AND), because a floor is inherently thin and one side always has huge
+    /// clearance regardless - the room's own base floor is clear of the ceiling, and a floor
+    /// serving as the room's own ceiling (overlapping the wall-tops it joins, by design) is
+    /// clear of the base. Only real air on both sides is a genuine floating mezzanine.</summary>
+    private static bool FloatsWithinRoom(Element candidate, BoundingBoxXYZ roomBox, BoundingBoxXYZ candidateBox)
+    {
+        const double margin = 1.0;   // feet
+
+        var clearBelow = candidateBox.Min.Z - roomBox.Min.Z > margin;
+        var clearAbove = roomBox.Max.Z - candidateBox.Max.Z > margin;
+
+        return candidate is Floor ? clearBelow && clearAbove : clearBelow || clearAbove;
+    }
+
+    private static bool BoxesOverlap(BoundingBoxXYZ a, BoundingBoxXYZ b) =>
+        a.Min.X <= b.Max.X && a.Max.X >= b.Min.X &&
+        a.Min.Y <= b.Max.Y && a.Max.Y >= b.Min.Y &&
+        a.Min.Z <= b.Max.Z && a.Max.Z >= b.Min.Z;
 
     /// <summary>
     /// Which paint parameter a room face feeds, from its normal.

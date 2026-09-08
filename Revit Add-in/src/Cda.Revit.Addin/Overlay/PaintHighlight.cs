@@ -322,7 +322,22 @@ internal static class PaintHighlight
 
             // Room recorded by UniqueId, not ElementId, for the same reason the skirting engine
             // does it: ids are reassigned by copy/paste, e-transmit and upgrade.
-            ElementStamp.Write(shape, Stamp, kind.ToString(), room.UniqueId);
+            //
+            // WriteOrFallback, and refused if neither path takes. Clear finds this overlay by
+            // exactly this stamp, so an unstamped shape can never be removed - by the toggle, by
+            // a later session, or by anything else - and the overlay is real Generic Model
+            // geometry that would then be saved into the model permanently. Drawing nothing is
+            // the better failure for a tool whose whole job is to be looked at and then taken
+            // away again.
+            if (!ElementStamp.WriteOrFallback(shape, Stamp, kind.ToString(), Stamp, room.UniqueId))
+            {
+                Log.Warn($"Paint highlight: {kind} shape could not be stamped, so Clear would " +
+                         "never find it. Removed rather than left in the model.");
+
+                try { doc.Delete(shape.Id); } catch { /* the warning above stands */ }
+
+                return null;
+            }
 
             return shape.Id;
         }

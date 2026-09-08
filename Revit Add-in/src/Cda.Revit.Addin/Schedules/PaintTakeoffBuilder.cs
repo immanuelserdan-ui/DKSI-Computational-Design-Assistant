@@ -198,7 +198,25 @@ internal static class PaintTakeoffBuilder
             WriteArea(shape, paintName, row.RoomSurfacePaintSqM, unwritable);
             WriteArea(shape, finishName, row.RoomSurfaceFinishSqM, unwritable);
 
-            ElementStamp.Write(shape, Stamp, row.Surface);
+            // WriteOrFallback, and the result decides whether the row counts as placed.
+            //
+            // Every run of this builder deletes its own previous rows and rebuilds - DeleteExisting
+            // finds them by exactly this stamp. A row placed unstamped is invisible to that
+            // search, so the NEXT run leaves it standing and places its replacement beside it,
+            // and the takeoff then reports that surface twice. Double-counted paint area is the
+            // one failure this schedule exists to prevent, so an unstampable row is refused
+            // rather than placed: the caller already reports "N row(s) could not be placed", and
+            // a short takeoff that says so beats a long one that is quietly wrong.
+            if (!ElementStamp.WriteOrFallback(shape, Stamp, row.Surface, Stamp))
+            {
+                Log.Warn($"Paint takeoff: row {row.RoomNumber}/{row.Surface}/{row.Material} could " +
+                         "not be stamped, so it would be orphaned and double-counted on the next " +
+                         "run. The row was removed rather than placed.");
+
+                try { doc.Delete(shape.Id); } catch { /* leave it; the warning above stands */ }
+
+                return false;
+            }
 
             return true;
         }

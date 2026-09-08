@@ -70,9 +70,15 @@ internal static class RoomLimitAdjuster
         if (roomBox is null) return false;
 
         var neededTop = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, roomBox), roomBox);
-        if (neededTop is null) return false;
 
-        return RoomBoundaryAdjuster.RaiseUpperOffset(room, roomBox, neededTop.Value);
+        // Mirrors the guard in RoomBoundaryAdjuster's full pass: a room carrying the FFL
+        // marker must reach RaiseUpperOffset even when there is no cap to raise for, because
+        // the marker's branch finds its own slab. Skipping it here would make the incremental
+        // path ignore a marker the full pass honours - the exact divergence the shared-rule
+        // note above this class warns about.
+        if (neededTop is null && !RoomFfsCap.IsFlagged(room)) return false;
+
+        return RoomBoundaryAdjuster.RaiseUpperOffset(room, roomBox, neededTop ?? 0.0);
     }
 
     /// <summary>

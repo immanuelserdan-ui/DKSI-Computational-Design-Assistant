@@ -60,9 +60,28 @@ internal static class SurfaceScheduleVisibility
         Ceiling = 1 << 2,
     }
 
-    public const string WallScheduleName = "Wall Surface Area by Room and Face";
-    public const string FloorScheduleName = "Floor Surface Area by Room and Face";
-    public const string CeilingScheduleName = "Ceiling Surface Area by Room and Face";
+    /// <summary>
+    /// The office's own schedule views, and what this add-in now treats as the real ones.
+    ///
+    /// THESE ARE NOT THE VENDOR'S. PaintedMaterialTakeoff.dll hardcodes the three
+    /// <see cref="LegacyWallScheduleName"/>-style names and creates views under them on every
+    /// run, which is what this class used to target. But the views the office actually reads -
+    /// and the ones carrying "Selskab", "Afdeling", "Type" and "enh", which are template
+    /// parameters absent from PaintedMaterialTakeoff-SharedParameters.txt entirely - are these.
+    /// Both sets exist in a model where the takeoff has run.
+    /// </summary>
+    public const string WallScheduleName = "Walls surface area @V03";
+    public const string FloorScheduleName = "Floor surface area @V03";
+    public const string CeilingScheduleName = "Ceiling surface area @V03";
+
+    /// <summary>
+    /// The vendor's own names, kept as a FALLBACK so a model that has never carried the office
+    /// views still resolves to something rather than silently doing nothing. Only ever used
+    /// when the name above finds nothing - never preferred over it.
+    /// </summary>
+    public const string LegacyWallScheduleName = "Wall Surface Area by Room and Face";
+    public const string LegacyFloorScheduleName = "Floor Surface Area by Room and Face";
+    public const string LegacyCeilingScheduleName = "Ceiling Surface Area by Room and Face";
 
     /// <summary>
     /// What ticking "Painted Surface Area" means: wall and floor, NOT ceiling.
@@ -84,6 +103,25 @@ internal static class SurfaceScheduleVisibility
         _ => throw new ArgumentOutOfRangeException(
                  nameof(surface), surface, "One surface at a time - this is not a flag set."),
     };
+
+    public static string LegacyScheduleNameOf(Surfaces surface) => surface switch
+    {
+        Surfaces.Wall => LegacyWallScheduleName,
+        Surfaces.Floor => LegacyFloorScheduleName,
+        Surfaces.Ceiling => LegacyCeilingScheduleName,
+        _ => throw new ArgumentOutOfRangeException(
+                 nameof(surface), surface, "One surface at a time - this is not a flag set."),
+    };
+
+    /// <summary>
+    /// The view for one surface: the office name first, the vendor's as a fallback.
+    ///
+    /// ONE LOOKUP, SHARED, so this class and <see cref="SurfaceScheduleBuilder"/> can never
+    /// disagree about which view a surface means - a disagreement there would have one of them
+    /// repairing a schedule while the other opens a different one.
+    /// </summary>
+    internal static ViewSchedule? FindSchedule(Document doc, Surfaces surface)
+        => Find(doc, ScheduleNameOf(surface)) ?? Find(doc, LegacyScheduleNameOf(surface));
 
     /// <summary>
     /// Makes exactly <paramref name="visible"/> open and everything else closed.
@@ -108,7 +146,7 @@ internal static class SurfaceScheduleVisibility
             if (!visible.HasFlag(surface)) continue;
 
             var name = ScheduleNameOf(surface);
-            var schedule = Find(doc, name);
+            var schedule = FindSchedule(doc, surface);
 
             if (schedule is null)
             {
@@ -132,7 +170,7 @@ internal static class SurfaceScheduleVisibility
         {
             if (visible.HasFlag(surface)) continue;
 
-            var schedule = Find(doc, ScheduleNameOf(surface));
+            var schedule = FindSchedule(doc, surface);
             if (schedule is null) continue;
 
             Close(uiDoc, schedule, problems);
@@ -285,7 +323,9 @@ internal static class SurfaceScheduleVisibility
         }
     }
 
-    private static ViewSchedule? Find(Document doc, string name)
+    /// <summary>Internal, not private: <see cref="LegacySurfaceScheduleCleanup"/> looks up the
+    /// vendor's own names by this exact query rather than duplicate it.</summary>
+    internal static ViewSchedule? Find(Document doc, string name)
         => new FilteredElementCollector(doc)
             .OfClass(typeof(ViewSchedule))
             .Cast<ViewSchedule>()

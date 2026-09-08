@@ -101,9 +101,6 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
         Transactions.Run(ctx.Document, CommandName, () => captured = calculator.Run());
         var result = captured!;
 
-        var csvPath = ReportWriter.DefaultPath(ctx.Document, "finish-areas");
-        WriteMaterialCsv(csvPath, result.CsvRows);
-
         var report = new List<string>(result.Report);
 
         if (bound is not null)
@@ -116,10 +113,32 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
             report.InsertRange(1, bound.Report);
         }
 
-        var logPath = ReportWriter.WriteSidecarLog(csvPath, report);
+        // The measurement pass has already committed its parameter writes, so a report that
+        // cannot be written must not be reported as the command failing - it would invite the
+        // user to undo correct work. This one keeps its own CSV writer (the material CSV has a
+        // bespoke layout), so the guard is here rather than in ReportWriter.
+        string? csvPath = null;
+        string? logPath = null;
+        var reportProblem = string.Empty;
+
+        try
+        {
+            csvPath = ReportWriter.DefaultPath(ctx.Document, "finish-areas");
+            WriteMaterialCsv(csvPath, result.CsvRows);
+            logPath = ReportWriter.WriteSidecarLog(csvPath, report);
+        }
+        catch (Exception ex)
+        {
+            csvPath = null;
+            reportProblem =
+                $"The material CSV could not be written ({ex.Message}). The areas above were " +
+                "measured and written to the model regardless.";
+
+            Log.Warn($"{CommandName}: report not written: {ex.Message}");
+        }
 
         Log.Info($"{CommandName}: {result.Processed} room(s), {result.CsvRows.Count} material row(s), " +
-                 $"{result.ElementsWritten} element write(s), report={csvPath}");
+                 $"{result.ElementsWritten} element write(s), report={csvPath ?? "(not written)"}");
 
         var paintedRows = result.CsvRows.Count(r => r.Painted);
         var paintedM2 = result.CsvRows.Where(r => r.Painted).Sum(r => r.AreaSqM);
@@ -139,18 +158,24 @@ public sealed class FinishSurfaceAreaCommand : CommandBase
                       "hold the room that contributed most - listed in the log.") + "\n\n" +
                 $"Paint basis: {paintedRows} painted row(s) = {paintedM2:0.000} m² " +
                 $"(filter Is Painted = Yes), plus {otherM2:0.000} m² on unpainted layer materials, " +
-                "which paint costing must exclude.",
+                "which paint costing must exclude." +
+                (reportProblem.Length == 0 ? string.Empty : $"\n\n{reportProblem}"),
             ExpandedContent = string.Join(Environment.NewLine, result.Report.Take(60)),
-            FooterText = $"CSV: {csvPath}",
+            FooterText = csvPath is null ? "No CSV was written." : $"CSV: {csvPath}",
             CommonButtons = TaskDialogCommonButtons.Close,
         };
-        summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open the material CSV");
-        summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open the per-room log");
+
+        // Only offered when there is a file behind the link.
+        if (csvPath is not null)
+        {
+            summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open the material CSV");
+            summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open the per-room log");
+        }
 
         var shown = summary.Show();
-        if (shown == TaskDialogResult.CommandLink1)
+        if (csvPath is not null && shown == TaskDialogResult.CommandLink1)
             Process.Start(new ProcessStartInfo { FileName = csvPath, UseShellExecute = true });
-        else if (shown == TaskDialogResult.CommandLink2)
+        else if (logPath is not null && shown == TaskDialogResult.CommandLink2)
             Process.Start(new ProcessStartInfo { FileName = logPath, UseShellExecute = true });
 
         return Result.Succeeded;

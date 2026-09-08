@@ -161,6 +161,15 @@ public sealed class FinishSettings
     /// </summary>
     public string PaintHostParameter { get; init; } = "Paint Host Id";
 
+    /// <summary>
+    /// "enh" - an ordinary, non-shared project parameter already bound to Generic Models and
+    /// several other categories in this template, carrying a constant unit label ("m²") beside
+    /// a takeoff row's quantity. See <see cref="Finishes.PaintUnitStamp"/> for why a real
+    /// parameter stands in for what the office reference schedule shows as a Calculated Value
+    /// field: the Revit API cannot create or configure one of those.
+    /// </summary>
+    public string PaintUnitParameter { get; init; } = "enh";
+
     // THE OWNING ROOM'S TOTALS ON A TAKEOFF ROW use the SIX EXISTING parameters above -
     // WallParameter / PaintParameter and their floor and ceiling equivalents - which are now
     // bound to Generic Models as well as to Rooms and the element categories.
@@ -191,6 +200,12 @@ public sealed class FinishSettings
     /// 0 and an area measured off a roof look identical in the schedule without it.
     /// </summary>
     public string CeilingSourceParameter { get; init; } = "Ceiling Area Source";
+
+    // THE FFL MARKER IS NOT A SETTING, and that is deliberate. It was one - a single literal
+    // string that IsFlagged compared against - and the first real use typed a different
+    // preposition and a different acronym, so nothing matched and the room silently kept its
+    // limit. A hand-typed marker needs a recognition RULE rather than one exact spelling, and
+    // a rule does not belong in a settings string. See RoomFfsCap.IsFlagged.
 
     // ---- behaviour flags (IN[4], IN[5]) --------------------------------------
 
@@ -357,21 +372,56 @@ public sealed class FinishSettings
     public const string SourceOther = "other";
     public const string SourceNone = "none";
 
+    public const string SourceStair = "stair underside";
+
     public static readonly string[] CeilingSourceOrder =
-        [SourceCeiling, SourceSlabAbove, SourceRoof, SourceOther];
+        [SourceCeiling, SourceStair, SourceSlabAbove, SourceRoof, SourceOther];
 
     /// <summary>
-    /// The room-boundary priority chain, in order, for rooms nothing bounds from above.
-    /// Ceiling first, then the underside of the slab above, then the roof - the first tier
-    /// that measures anything wins outright and the rest are not consulted.
+    /// How far above a room's own floor a candidate's underside must sit before it can be
+    /// that room's ceiling. Without it a room's own floor slab is found as its own ceiling.
     ///
-    /// This is the same order Revit's own volume clipping produces for rooms that ARE
-    /// bounded (it stops at the nearest bounding element), stated explicitly so the two
-    /// paths cannot disagree.
+    /// It is also half of the stair access rule - see <see cref="StairAccessBand"/> - which is
+    /// why it is a named constant rather than a 1.0 written twice in two files.
+    /// </summary>
+    public const double CeilingFallbackFloorSkirt = 1.0;
+
+    /// <summary>
+    /// How near a room's floor a stair has to start, or finish, before that room counts as
+    /// having ACCESS to it.
+    ///
+    /// THE OFFICE RULE: a stair underside is a ceiling source for the room beneath it only
+    /// when that room has no access to the stair. The underside of the flight you walk onto is
+    /// not your ceiling - it is your stair. The underside of somebody else's flight, crossing
+    /// over a store room a storey below, is that store room's ceiling.
+    ///
+    /// Deliberately the same size as <see cref="CeilingFallbackFloorSkirt"/>: a stair whose
+    /// bottom tread is within a step of the floor is one you can walk onto, and that is the
+    /// same distance at which a slab stops being overhead and starts being underfoot.
+    /// </summary>
+    public const double StairAccessBand = CeilingFallbackFloorSkirt;
+
+    /// <summary>
+    /// The overhead priority chain, in order, for rooms nothing bounds from above.
+    ///
+    /// Ceiling first, then a stair's underside, then the slab above, then the roof. Each tier
+    /// claims ONLY the footprint it actually covers and the remainder passes to the next, so a
+    /// room half under a stair and half open to the slab gets both, each over its own part.
+    /// (The chain is not winner-takes-all - see the prism subtraction in
+    /// <see cref="CeilingFallbackResolver.Resolve"/>.)
+    ///
+    /// STAIRS SIT SECOND. Below ceilings, because a ceiling hung beneath a flight is still the
+    /// room's ceiling. Above floors, because the flight is below the slab it rises to.
+    ///
+    /// This mirrors the order Revit's own volume clipping produces for rooms that ARE bounded
+    /// - it stops at the nearest bounding element - with the one difference that Revit cannot
+    /// produce a stair at all, stairs being outside the room-bounding categories entirely.
+    /// That gap is the whole reason this tier exists.
     /// </summary>
     public static readonly (string Source, BuiltInCategory Category)[] CeilingFallbackTiers =
     [
         (SourceCeiling, BuiltInCategory.OST_Ceilings),
+        (SourceStair, BuiltInCategory.OST_Stairs),
         (SourceSlabAbove, BuiltInCategory.OST_Floors),
         (SourceRoof, BuiltInCategory.OST_Roofs),
     ];

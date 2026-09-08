@@ -178,8 +178,8 @@ public sealed class FinishGeometry
     /// "zero finish area". Returning null lets the planar fallback engage and the report
     /// disclose it; a failed measurement must never masquerade as a confident zero.
     /// </summary>
-    public (double Total, MaterialLedger Materials)? ExactSubfaceArea(
-        Face roomFace, IReadOnlyList<Face> hostFaces, Element? owner)
+    public (double Total, MaterialLedger Materials, double OccludedArea, int OcclusionBooleanFailures)? ExactSubfaceArea(
+        Face roomFace, IReadOnlyList<Face> hostFaces, Element? owner, IReadOnlyList<Element>? occluders = null)
     {
         var (roomOrigin, roomNormal) = PlanarData(roomFace);
         if (roomOrigin is null || roomNormal is null) return null;
@@ -187,6 +187,8 @@ public sealed class FinishGeometry
         var total = 0.0;
         var materials = new MaterialLedger();
         var matched = false;
+        var occludedArea = 0.0;
+        var occlusionFailures = 0;
 
         foreach (var hostFace in hostFaces)
         {
@@ -211,11 +213,96 @@ public sealed class FinishGeometry
                 var intersection = BooleanOperationsUtils.ExecuteBooleanOperation(
                     roomSolid, hostSolid, BooleanOperationsType.Intersect);
 
+                // CAPTURED BEFORE OCCLUSION RUNS, and this distinction is load-bearing. A
+                // near-zero or null intersection HERE is the pre-existing "boolean produced
+                // nothing usable" case that RegionArea below already exists to recover from -
+                // occlusion must never be allowed to look like the cause of that, or a room
+                // with no occluders anywhere near it would silently lose the RegionArea
+                // fallback it always had. Only once THIS is true can a later zero be trusted
+                // as "genuinely occluded" rather than "boolean failed".
+                var realIntersection = intersection is not null && intersection.Volume > 1e-9;
+
+                // OCCLUSION: a mezzanine slab or hanging wall standing directly against this
+                // face means part of it is not really there to paint - see the doc comment
+                // on RoomFinishCalculator.OccludingElements for why this exists at all.
+                //
+                // Subtracted from the REAL 3D intersection, before it is ever converted to an
+                // area - not as after-the-fact arithmetic - so the material ledger below is
+                // built from geometry that already excludes the occluded part. A face with
+                // two paint colours where an occluder only covers one of them keeps the other
+                // colour's full area; subtracting square metres from a total could not do
+                // that.
+                //
+                // A FAILED SUBTRACTION LEAVES THE FACE UNCHANGED, NOT ZEROED. The candidate
+                // list is already filtered to occluders whose bounding box overlaps the host
+                // (see OccludingElements), so most calls here have nothing to subtract and
+                // this loop costs one empty check. When a boolean genuinely fails, the choice
+                // matches every other boolean in this file: a failed measurement must never
+                // masquerade as a confident zero, so the host keeps its un-occluded area
+                // rather than losing it to a geometry edge case.
+                if (realIntersection && occluders is { Count: > 0 })
+                {
+                    // A NON-NULLABLE LOCAL, DELIBERATELY, rather than reassigning the outer
+                    // `intersection` (Solid?) through the loop. realIntersection already
+                    // proved it non-null at this point; carrying that proof in the type
+                    // itself is what lets every read below skip a null check it cannot fail,
+                    // instead of asking the compiler to trust a loop-and-catch shape it
+                    // cannot follow.
+                    var current = intersection!;
+
+                    foreach (var occluder in occluders)
+                    {
+                        List<Solid> solids;
+                        try { solids = ElementSolids(occluder); }
+                        catch { continue; }
+
+                        foreach (var solid in solids)
+                        {
+                            if (solid.Volume <= 1e-9) continue;
+
+                            try
+                            {
+                                var before = current.Volume;
+                                var reduced = BooleanOperationsUtils.ExecuteBooleanOperation(
+                                    current, solid, BooleanOperationsType.Difference);
+
+                                if (reduced is null)
+                                {
+                                    occlusionFailures++;
+                                    continue;
+                                }
+
+                                occludedArea += (before - reduced.Volume) / FinishSettings.ExtrudeThickness;
+                                current = reduced;
+                            }
+                            catch
+                            {
+                                occlusionFailures++;
+                            }
+
+                            if (current.Volume <= 1e-9) break;
+                        }
+
+                        if (current.Volume <= 1e-9) break;
+                    }
+
+                    intersection = current;
+                }
+
                 if (intersection is not null && intersection.Volume > 1e-9)
                 {
                     var area = intersection.Volume / FinishSettings.ExtrudeThickness;
                     total += area;
                     materials.Add(FaceMaterialKey(owner, hostFace), area);
+                }
+                else if (realIntersection)
+                {
+                    // realIntersection can only be true here if occlusion ran (see the guard
+                    // above) and reduced a genuinely non-empty intersection down to nothing -
+                    // the host face is fully occluded, which is a real, deliberate zero rather
+                    // than a failed measurement. Does NOT fall through to RegionArea: that
+                    // recovery exists for a boolean that never produced usable geometry in the
+                    // first place, which this is the opposite of.
                 }
                 else if (RegionArea(roomFace, hostFace) is { } direct)
                 {
@@ -251,9 +338,18 @@ public sealed class FinishGeometry
             }
         }
 
-        if (!matched || total <= 1e-6) return null;
+        if (!matched) return null;
 
-        return (total, materials);
+        // total <= 1e-6 ALONE is no longer enough to mean "measurement failed, let the
+        // caller fall back". Every caller's fallback is arithmetic that knows nothing about
+        // occlusion - it would simply re-add the full, un-occluded area, undoing the
+        // subtraction above. occludedArea > 0 is proof this face's geometry WAS found and
+        // measured, and a genuine occluder is why the total is small or zero - a confident,
+        // deliberate answer, not a failure. Only a face that never produced real geometry at
+        // all (occludedArea still zero) falls through to null, exactly as before.
+        if (total <= 1e-6 && occludedArea <= 1e-6) return null;
+
+        return (total, materials, occludedArea, occlusionFailures);
     }
 
     /// <summary>

@@ -120,8 +120,67 @@ internal static class ElementStamp
     }
 
     /// <summary>
+    /// Stamps an element, falling back to the legacy Comments field when storage is
+    /// unavailable. Returns false only when NEITHER worked.
+    ///
+    /// WHY EVERY TOOL SHOULD GO THROUGH THIS RATHER THAN <see cref="Write"/> DIRECTLY
+    ///   Write returns false and swallows its exception, which is right - a failed stamp must
+    ///   not abort a placement run. But two callers ignored that return and had no fallback,
+    ///   and the consequence was not cosmetic: both tools promise an idempotent re-run and
+    ///   implement it by deleting their own stamped output first. An unstamped element is
+    ///   invisible to that search, so the next "regenerate" leaves it standing AND places a
+    ///   second one on top of it. For radiators it is worse again, because the orphans are
+    ///   Mechanical Equipment and therefore register as obstructions in the new pass - so most
+    ///   windows come back refused for "no space", naming a reason that is not the real one.
+    ///
+    ///   Both tools already declared a legacy Comments prefix, and both delete paths already
+    ///   honoured it; nothing on the write side ever produced one. This closes that half, and
+    ///   <see cref="Read"/> now hands back the same tag either way so a caller cannot tell
+    ///   which path was used.
+    /// </summary>
+    /// <param name="legacyCommentsPrefix">
+    /// Prefix identifying this tool's Comments stamps. Prepended to <paramref name="tag"/>
+    /// unless the tag already carries it, so a tool whose tags are self-prefixed (the skirting
+    /// generator's are) is not stamped twice over.
+    /// </param>
+    public static bool WriteOrFallback(
+        Element element, string tool, string tag, string legacyCommentsPrefix,
+        string? sourceUniqueId = null)
+    {
+        if (Write(element, tool, tag, sourceUniqueId)) return true;
+
+        // Storage unavailable. Fall back so the run is still re-runnable, and accept that a
+        // user editing Comments can break it - which is exactly the trade the skirting
+        // generator has always made, now made once here for every tool.
+        try
+        {
+            var parameter = element.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+            if (parameter is not { IsReadOnly: false }) return false;
+
+            parameter.Set(tag.StartsWith(legacyCommentsPrefix, StringComparison.Ordinal)
+                ? tag
+                : legacyCommentsPrefix + tag);
+
+            return true;
+        }
+        catch
+        {
+            // Unstamped: the caller's next run will not recognise this element as its own.
+            return false;
+        }
+    }
+
+    /// <summary>
     /// The tag this add-in wrote, or null. Falls back to the legacy Comments stamp so
-    /// elements placed by earlier versions are still recognised.
+    /// elements placed by earlier versions - and by <see cref="WriteOrFallback"/> on a model
+    /// where storage is unavailable - are still recognised.
+    ///
+    /// THE COMMENTS PATH RETURNS THE TAG, NOT THE WHOLE COMMENT. It used to return the raw
+    /// Comments string with the prefix still on it, which meant a caller comparing the result
+    /// against its own tag never matched on that path: RoomDimensionGenerator tests for
+    /// "&lt;room UniqueId&gt;|" and "DKSI room dimension:&lt;room UniqueId&gt;|..." does not
+    /// start with that. Stripping the prefix makes both paths return the same thing, which is
+    /// what lets a caller treat storage and Comments as interchangeable.
     /// </summary>
     public static string? Read(Element element, string tool, string legacyCommentsPrefix)
     {
@@ -147,10 +206,11 @@ internal static class ElementStamp
             var comments = element
                 .get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString();
 
-            return !string.IsNullOrEmpty(comments) &&
-                   comments.StartsWith(legacyCommentsPrefix, StringComparison.Ordinal)
-                ? comments
-                : null;
+            if (string.IsNullOrEmpty(comments) ||
+                !comments.StartsWith(legacyCommentsPrefix, StringComparison.Ordinal))
+                return null;
+
+            return comments[legacyCommentsPrefix.Length..];
         }
         catch
         {
