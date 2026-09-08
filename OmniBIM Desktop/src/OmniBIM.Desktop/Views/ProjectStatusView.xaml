@@ -6,6 +6,7 @@
 
     <UserControl.Resources>
         <local:StatusToBrushConverter x:Key="StatusToBrush" />
+        <local:PercentToWidthConverter x:Key="PercentToWidth" />
 
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
@@ -38,28 +39,41 @@
             <ItemsControl ItemsSource="{Binding Projects}" Margin="0,12,0,0">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type vm:ProjectStatusRowViewModel}">
-                        <Grid Margin="0,0,0,14">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition />
-                                <RowDefinition />
-                            </Grid.RowDefinitions>
+                        <StackPanel Margin="0,0,0,18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding ProjectName}"
-                                       FontSize="13" FontWeight="Medium" Foreground="#111827" />
+                                <TextBlock Grid.Column="0" Text="{Binding ProjectName}"
+                                           FontSize="14" FontWeight="Medium" Foreground="#111827" />
 
-                            <Border Grid.Row="0" Grid.Column="1" CornerRadius="10" Padding="8,2"
-                                    Background="{Binding Status, Converter={StaticResource StatusToBrush}}">
-                                <TextBlock Text="{Binding Status}" FontSize="10" Foreground="White" FontWeight="SemiBold" />
+                                <TextBlock Grid.Column="1" Text="{Binding EstimatedPercent, StringFormat={}{0}% Est.}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="#374151" />
+                            </Grid>
+
+                            <Border Height="8" Background="#F3F4F6" CornerRadius="4" Margin="0,8,0,0">
+                                <Border HorizontalAlignment="Left" Height="8" CornerRadius="4"
+                                        Background="{Binding Status, Converter={StaticResource StatusToBrush}}"
+                                        Width="{Binding EstimatedPercent, Converter={StaticResource PercentToWidth}}" />
                             </Border>
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,2,0,0"
-                                       FontSize="11" Foreground="#9CA3AF"
-                                       Text="{Binding LastChangedBy, StringFormat={}Last changed by {0}}" />
-                        </Grid>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Column="0" FontSize="11" Foreground="#9CA3AF"
+                                           Text="{Binding LastChangedBy, StringFormat={}Last changed by {0}}" />
+
+                                <Border Grid.Column="1" CornerRadius="10" Padding="8,2"
+                                        Background="{Binding Status, Converter={StaticResource StatusToBrush}}">
+                                    <TextBlock Text="{Binding Status}" FontSize="10" Foreground="White" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

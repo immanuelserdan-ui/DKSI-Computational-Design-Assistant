@@ -68,6 +68,18 @@ public sealed class ShareToWidthConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>A 0-100 percent into a pixel width against the estimate-bar track used in ProjectStatusView.</summary>
+public sealed class PercentToWidthConverter : IValueConverter
+{
+    public const double TrackWidth = 360;
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is int percent ? Math.Max(2, percent / 100.0 * TrackWidth) : 2.0;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public sealed class TodayToBrushConverter : IValueConverter
 {
     private static readonly SolidColorBrush Today = new(Color.FromRgb(0x25, 0x63, 0xEB));

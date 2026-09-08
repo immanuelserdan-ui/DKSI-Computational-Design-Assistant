@@ -5,11 +5,10 @@ using OmniBIM.Desktop.Services;
 namespace OmniBIM.Desktop.ViewModels;
 
 /// <summary>
-/// One row in the Project Status widget. Deliberately carries the STATUS LABEL only, not a
-/// completion percentage - project-status.json has no percentage field (see
-/// Models.ProjectStatus's remarks), and a widget that made one up would misrepresent every
-/// project it lists. If a percentage is wanted later, it needs a real source; this row is
-/// ready to carry one the day that exists.
+/// One row in the Project Status widget. Carries the STATUS LABEL (the real, on-disk value)
+/// and an EstimatedPercent (see ProjectStatusPercentEstimates) - a fixed lookup, not a
+/// measurement, kept clearly separate and always shown as "Est." so it is never mistaken for
+/// real completion data. project-status.json itself still has no percentage field.
 /// </summary>
 public sealed class ProjectStatusRowViewModel(ProjectStatus status)
 {
@@ -22,6 +21,9 @@ public sealed class ProjectStatusRowViewModel(ProjectStatus status)
     /// rather than vanish from the board.
     /// </summary>
     public string Status { get; } = status.Status.Length > 0 ? status.Status : "(no status set)";
+
+    /// <summary>A rough, non-measured estimate derived only from Status - see ProjectStatusPercentEstimates.</summary>
+    public int EstimatedPercent { get; } = ProjectStatusPercentEstimates.For(status.Status);
 
     public string LastChangedBy { get; } = status.LastChangedBy;
     public DateTime LastChangedLocal { get; } = status.LastChangedUtc == default

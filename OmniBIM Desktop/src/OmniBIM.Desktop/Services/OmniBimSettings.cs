@@ -13,6 +13,18 @@ public sealed class OmniBimSettings
     /// <summary>Overrides the add-in's own SharedFolder setting when set. See TimeTrackingLocations.</summary>
     public string SharedTimeTrackingFolder { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Anthropic API key for the chat panel, ONLY as a fallback - this file lives under
+    /// %LOCALAPPDATA%, never inside the git repo, so it's a safe place to keep one, but the
+    /// ANTHROPIC_API_KEY environment variable is checked first and is the recommended path.
+    /// Never set this from source code or a value that came through chat with an assistant -
+    /// type it directly into a settings UI, or set the environment variable instead.
+    /// </summary>
+    public string ClaudeApiKey { get; set; } = string.Empty;
+
+    /// <summary>Model id for the chat panel. See ClaudeChatService.</summary>
+    public string ClaudeModel { get; set; } = "claude-sonnet-5";
+
     public static string Path { get; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Cda", "OmniBIMDesktop", "settings.json");

@@ -13,6 +13,9 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
 {
     public MainViewModel Dashboard { get; } = new();
 
+    /// <summary>The Home page's AI chat panel. Depends on Dashboard, so it's built after it.</summary>
+    public ChatViewModel Chat { get; }
+
     public ObservableCollection<NavItemViewModel> NavItems { get; }
 
     private AppPage _currentPage = AppPage.Home;
@@ -28,10 +31,14 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     public PlaceholderPageViewModel TrendNews { get; } = new("Trend News", NoDataSourceYet);
     public PlaceholderPageViewModel Teams { get; } = new("Teams & Collaboration", NoDataSourceYet);
     public PlaceholderPageViewModel Reports { get; } = new("Reports", NoDataSourceYet);
-    public PlaceholderPageViewModel Settings { get; } = new("Settings", NoDataSourceYet);
+
+    /// <summary>Real, not a placeholder - see SettingsViewModel.</summary>
+    public SettingsViewModel Settings { get; } = new();
 
     public ShellViewModel()
     {
+        Chat = new ChatViewModel(Dashboard);
+
         NavItems =
         [
             new NavItemViewModel("Home", AppPage.Home, Navigate),
