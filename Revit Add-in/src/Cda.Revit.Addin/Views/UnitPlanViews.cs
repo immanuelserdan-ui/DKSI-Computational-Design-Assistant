@@ -873,7 +873,7 @@ public sealed class UnitPlanViewBuilder
     /// </summary>
     public ViewPlan? ResolveMaster(ViewPlan? active, List<string> warnings)
     {
-        if (string.IsNullOrWhiteSpace(_settings.MasterViewName)) return active;
+        if (string.IsNullOrWhiteSpace(_settings.MasterViewName)) return active ?? BestAnnotatedPlan(warnings);
 
         var target = ParameterHelper.Normalize(_settings.MasterViewName);
 
@@ -886,7 +886,15 @@ public sealed class UnitPlanViewBuilder
         if (candidates.Count == 0)
         {
             warnings.Add($"No view named '{_settings.MasterViewName}' was found, so the active view is used instead.");
-            return active;
+
+            // ACTIVE MAY ALSO BE NULL, and until this fallback existed that combination was a
+            // hard failure. Measured 2026-09-02 in FM_Template: MasterViewName defaults to
+            // "(02) Stueplan, terraen" - a view from a DIFFERENT project that this document has
+            // never contained - and the command was run three times from a schedule, where
+            // 'ActiveView as ViewPlan' is null by definition. Both fallbacks were empty, so Run
+            // threw "No master view to duplicate" and the command looked broken while behaving
+            // exactly as written.
+            return active ?? BestAnnotatedPlan(warnings);
         }
 
         if (candidates.Count == 1) return candidates[0];
@@ -979,6 +987,59 @@ public sealed class UnitPlanViewBuilder
     }
 
     /// <summary>Room tags plus dimensions visible in a view - the detailing worth inheriting.</summary>
+    /// <summary>
+    /// The best floor plan in the document to duplicate when neither the configured master nor
+    /// the active view supplied one - the most heavily annotated uncropped storey plan.
+    ///
+    /// WHY THIS EXISTS RATHER THAN LETTING Run THROW. The throw is correct about the danger and
+    /// wrong about the remedy: it tells the user to open a storey plan, but the document
+    /// usually HAS one and this class already knows how to pick it - MasterForLevel ranks
+    /// exactly this way, uncropped first and then by annotation, and has since the model was
+    /// found to carry two views per level sharing a name. Refusing to do per-document what it
+    /// already does per-level made the command fail from any schedule or 3D view.
+    ///
+    /// ANNOTATION IS REQUIRED, NOT PREFERRED, and that is what keeps RequireMasterView's
+    /// promise intact. Duplicating a blank plan produces exactly the outcome that guard was
+    /// written to prevent - correctly named views with no tags and no dimensions - so a
+    /// document whose best candidate carries nothing returns null and the throw still happens.
+    /// This widens where a master can come from; it does not lower the bar for being one.
+    ///
+    /// CROPPED VIEWS ARE EXCLUDED because a cropped plan is almost always a unit view from a
+    /// previous run. Duplicating one would crop every new view to the wrong unit and compound
+    /// it on each re-run.
+    /// </summary>
+    private ViewPlan? BestAnnotatedPlan(List<string> warnings)
+    {
+        try
+        {
+            var ranked = new FilteredElementCollector(_doc)
+                .OfClass(typeof(ViewPlan))
+                .Cast<ViewPlan>()
+                .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && !v.CropBoxActive)
+                .Select(v => (View: v, Annotations: AnnotationCount(v)))
+                .Where(x => x.Annotations > 0)
+                .OrderByDescending(x => x.Annotations)
+                .ToList();
+
+            if (ranked.Count == 0) return null;
+
+            var chosen = ranked[0];
+
+            warnings.Add(
+                $"No master view was given and none was open, so '{chosen.View.Name}' was chosen " +
+                $"automatically - the most annotated uncropped floor plan, carrying " +
+                $"{chosen.Annotations} tag(s) and dimension(s). Open the plan you want copied, or " +
+                $"set MasterViewName, to choose a different one.");
+
+            return chosen.View;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Unit views: could not rank floor plans for a master ({ex.Message}).");
+            return null;
+        }
+    }
+
     private int AnnotationCount(View view)
     {
         try

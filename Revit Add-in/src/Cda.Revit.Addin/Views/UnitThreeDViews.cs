@@ -302,6 +302,15 @@ public sealed class Unit3dViewBuilder
                 }
 
                 view.IsSectionBoxActive = true;
+
+                // REGENERATED BEFORE THE READ-BACK, and without it this check was dead code.
+                // Reading the property in the same breath as setting it returns the value just
+                // assigned, from Revit's in-memory state, not the value that survives the
+                // template still asserting control over it. So the warning could never fire, and
+                // a unit view left showing the whole building - exactly what this line exists to
+                // catch - was reported as a clean success.
+                _doc.Regenerate();
+
                 if (!view.IsSectionBoxActive)
                     warnings.Add($"Unit {group.Unit}: '{name}' still could not activate its section box, so it shows the whole model.");
                 break;
