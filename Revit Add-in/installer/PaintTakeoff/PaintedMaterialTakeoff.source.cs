@@ -4037,6 +4037,35 @@ namespace PaintedMaterialTakeoff.Core
 					yield return item;
 				}
 			}
+			// THE GAP'S OWN CAP, over the gap footprint and nowhere else.
+			//
+			// A room with a ceiling gap - a lightwell or a dormer shaft - is capped over that
+			// opening by something higher up. ResolveCeilingGap already finds it, but until now
+			// kept only its HEIGHT and discarded the element, so its underside was never
+			// measured: on FM_Template that is roof 29336815 at Z=0,676 m over Køkken's 0,72 m²
+			// shaft, confirmed as paintable ceiling inside the room and absent from every
+			// schedule.
+			//
+			// IT CANNOT GO THROUGH THE LOOP ABOVE. That measures against env.Prism, which stops
+			// at the ceiling plane, so a cap sitting above it clips to nothing and yields no
+			// faces. The gap column - the same solid Process() unions in for interior elements -
+			// is the right clip, and confines this to the opening rather than the whole room.
+			//
+			// The occluder trim still applies inside Surface(), so the dormer walls standing on
+			// this cap are deducted from it exactly as they are from the main ceiling.
+			if (env.HasCeilingGap && env.GapOverheadElement != null)
+			{
+				Solid gapClip = InteriorElementCalculator.GapColumn(env, _s.PrismInsetFt, _s.InteriorClipOutsetFt);
+				if ((object)gapClip != null)
+				{
+					SurfaceKind gapKind = ((env.GapOverheadElement is RoofBase) ? SurfaceKind.Roof : SurfaceKind.Ceiling);
+					foreach (PaintRecord item2 in Surface(env, env.GapOverheadElement, gapKind, gapClip, upward: false, outcome))
+					{
+						any = true;
+						yield return item2;
+					}
+				}
+			}
 			if (!any)
 			{
 				string note = ((outcome.SawUnpaintedFace || outcome.ClippedAnyFace) ? ($"{kind} element resolved and clipped to the room, but the Paint tool is on none of its " + "downward faces, so it contributes no painted ceiling area. Paint the underside, or turn off painted-only to report it by its compound-structure material.") : $"{kind} element detected but its underside could not be clipped to the room.");
@@ -4085,7 +4114,21 @@ namespace PaintedMaterialTakeoff.Core
 			// left exactly as it was - so a boolean that fails costs the deduction, never the
 			// surface.
 			double trimmedAwaySqFt = 0.0;
-			if (_occluders.Count > 0 && _s.DeductOccludedWallArea)
+			// CEILINGS ONLY - '!upward' is load-bearing, not tidiness.
+			//
+			// The office rule this implements is about ceilings: where a ceiling and a wall
+			// intersect, that part is wall and must not be measured. Surface() serves BOTH
+			// directions, so trimming here unconditionally silently applied the same deduction
+			// to floors, which nobody asked for.
+			//
+			// MEASURED REGRESSION, caught by the dormer: Loftrum's floor 29318579 dropped from
+			// 10.086 m2 to 9.644 m2 the moment the trim went in - 0.442 m2 removed under
+			// elements that penetrate that slab. Køkken's floor has no occluders over it, stayed
+			// at 8.140, and hid the mistake from every check made at the time.
+			//
+			// A floor's own area under a wall is a separate question with a separate answer, and
+			// it is not this method's to decide by accident.
+			if (!upward && _occluders.Count > 0 && _s.DeductOccludedWallArea)
 			{
 				// MEASURED BEFORE AND AFTER, so the figure reported as 'Occluded [m2]' is the
 				// deduction that was ACTUALLY made rather than a second, independent estimate of
@@ -4472,7 +4515,49 @@ namespace PaintedMaterialTakeoff.Core
 				{
 					continue;
 				}
-				bool flag = !GeometryUtil.FaceBelongsToRoomBelow(xYZ.Z);
+				// A WALL'S BEVELLED TOP - cut flush with a pitched roof or sloped ceiling it is
+				// attached to - is not the same thing as its flat cap, and the plain
+				// normalZ<0.5 test cannot tell them apart. That test assumes a wall's own top
+				// is always near-horizontal (normalZ close to 1, a 60+ degree pitch from
+				// horizontal to trip it); it was never wrong for an ordinary flat-topped wall,
+				// but a SHALLOW attachment - a dormer roof pitched well under 60 degrees - has
+				// a bevel whose normal clears the 0.5 cutoff while the panel itself is still
+				// squarely an interior wall surface, just sloped.
+				//
+				// MEASURED ON FM_Template's dormer (Baldakin_Træ, Slope 0.577 = 30 degrees):
+				// every one of the four shaft walls' bevelled top panels carries normalZ=0.866
+				// (a 30 degree pitch, comfortably over 0.5) and was being thrown away here as
+				// "a wall's own top/upward face" - a consistent ~7% of each wall's real
+				// paintable area, on FOUR walls at once, which is what the missing corner in
+				// the schedule actually was.
+				//
+				// THE FIX DOES NOT PICK A DIFFERENT THRESHOLD - a second fixed angle just moves
+				// the same failure to a different roof pitch, which is exactly what was asked
+				// not to do. It asks a different question: does this face still face ALONG THE
+				// WALL'S OWN RUN, the way an ordinary side face does? Wall.Orientation is the
+				// wall's own nominal facing direction, flat in the XY plane. Projecting the
+				// candidate face's normal onto XY and comparing keeps a bevel that faces into
+				// or out of the room (however shallow the slope) and still correctly rejects a
+				// genuinely flat cap, whose XY projection is near zero because a flat cap has
+				// none of the wall's own direction in it at all.
+				bool flag;
+				XYZ? wallXYNormal = ((xYZ.X * xYZ.X + xYZ.Y * xYZ.Y) > 0.0025) ? new XYZ(xYZ.X, xYZ.Y, 0.0) : null;
+				if (isWall && element is Wall hostWall && wallXYNormal != null)
+				{
+					double alignment = Math.Abs(wallXYNormal.Normalize().DotProduct(hostWall.Orientation));
+					// A genuine bevel is co-planar with the wall's own run, so its XY direction
+					// is parallel (or anti-parallel, for the far face) to Orientation - not
+					// oblique to it the way a hip/gable END cut or a true flat cap would be.
+					// 0.9 keeps roughly 25 degrees of slack either side of parallel, the same
+					// order of tolerance FaceNormalDot already uses elsewhere in this file.
+					flag = alignment < 0.9;
+				}
+				else
+				{
+					// No XY component at all - a genuinely flat cap or underside, or not a
+					// wall - exactly what the original test was built for and still handles.
+					flag = !GeometryUtil.FaceBelongsToRoomBelow(xYZ.Z);
+				}
 				if (flag && (isWall || !_s.IncludeInteriorSlabTopFaces))
 				{
 					if (diag)
@@ -4788,7 +4873,11 @@ namespace PaintedMaterialTakeoff.Core
 		/// coincident-boundary problems elsewhere - gives the kernel unambiguous, genuinely
 		/// solid material to union rather than two shells meeting at a knife-edge.
 		/// </summary>
-		private static Solid? GapColumn(RoomEnvelope env, double overlap, double outset)
+		// INTERNAL, NOT PRIVATE: HorizontalSurfaceCalculator.Overhead needs the identical column
+		// to measure the gap's own cap. Rebuilding an equivalent one there would be a second
+		// definition of "how far above the ceiling does this opening reach", and the two would
+		// drift.
+		internal static Solid? GapColumn(RoomEnvelope env, double overlap, double outset)
 		{
 			double height = env.GapZTop - env.ZTop + overlap;
 			if (height <= 0.05 || (object)env.GapFootprint == null)
@@ -5580,6 +5669,18 @@ namespace PaintedMaterialTakeoff.Core
 		/// </summary>
 		public Solid? GapFootprint { get; private set; }
 
+		/// <summary>
+		/// The element capping the ceiling gap - the roof, slab or ceiling that
+		/// <see cref="GapZTop"/> was read off. Null unless <see cref="HasCeilingGap"/> is true.
+		///
+		/// KEPT BECAUSE IT IS A PAINTABLE SURFACE, not merely a height. Only the Z used to be
+		/// retained and the element itself was discarded, so nothing ever measured the underside
+		/// of a lightwell or dormer cap: on FM_Template that is roof 29336815 over Køkken's
+		/// 0,72 m² shaft, which produced no row in any schedule. HorizontalSurfaceCalculator's
+		/// Overhead() measures it over the gap footprint only.
+		/// </summary>
+		public Element? GapOverheadElement { get; private set; }
+
 		public List<Element> FloorsBelow { get; } = new List<Element>();
 
 		public Solid? Prism { get; private set; }
@@ -6013,6 +6114,10 @@ namespace PaintedMaterialTakeoff.Core
 		{
 			double num = double.MinValue;
 			bool flag = false;
+			// The element behind the winning height, so the caller can MEASURE the cap and not
+			// just clip to it. Assigned only on the way out, and only when this tier actually
+			// won, so a tier that examines candidates and rejects them all leaves it untouched.
+			Element best = null;
 			foreach (Element el in Candidates(doc, category, outline))
 			{
 				foreach (Solid item in GeometryUtil.GetSolids(el, s.MinSolidVolumeCuFt))
@@ -6050,8 +6155,13 @@ namespace PaintedMaterialTakeoff.Core
 					if (num2 > num)
 					{
 						num = num2;
+						best = el;
 					}
 				}
+			}
+			if (flag)
+			{
+				GapOverheadElement = best;
 			}
 			return flag ? new double?(num) : null;
 		}

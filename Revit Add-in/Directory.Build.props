@@ -8,7 +8,25 @@
   <PropertyGroup>
     <RevitVersion>2027</RevitVersion>
     <RevitApiDir>$(ProgramW6432)\Autodesk\Revit $(RevitVersion)</RevitApiDir>
-    <RevitAddinsDir>$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)</RevitAddinsDir>
+
+    <!--
+      ALL-USERS, NOT PER-USER (changed 2026-09-08). This used to be %AppData% - correct
+      while DKSI Revit Tools was a per-user install, wrong the moment the office switched to
+      one shared machine-wide copy in Program Files. Left pointed at %AppData%, an ordinary
+      `dotnet build` - from an IDE, from a colleague, from anyone, for any reason - silently
+      recreated a second manifest for the same add-in, and Revit loads one of the two with no
+      way to tell which. That happened for real: a suite deploy correctly went to Program
+      Files, and a plain build run separately (an IDE's build-on-save, most likely - nothing
+      in that session's own command history touched this project) put a Debug DLL back in
+      %AppData% within the hour, undoing a per-user removal that had been done on purpose.
+      See tools\Remove-PerUserInstall.ps1 for why the two manifests cannot coexist.
+
+      THE COST, ACCEPTED ON PURPOSE: an ordinary unelevated `dotnet build` can no longer
+      deploy at all - Program Files needs admin rights. DeployToRevitAddins is WarnAndContinue
+      either way, so the build itself still succeeds; VerifyRevitDeploy's warning below now
+      names both possible causes rather than assuming the old one.
+    -->
+    <RevitAddinsDir>$(ProgramFiles)\Autodesk\Revit\Addins\$(RevitVersion)</RevitAddinsDir>
   </PropertyGroup>
 
   <!--
