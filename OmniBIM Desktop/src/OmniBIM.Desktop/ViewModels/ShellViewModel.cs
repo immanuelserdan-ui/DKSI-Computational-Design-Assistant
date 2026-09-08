@@ -16,6 +16,9 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     /// <summary>The Home page's AI chat panel. Depends on Dashboard, so it's built after it.</summary>
     public ChatViewModel Chat { get; }
 
+    /// <summary>"What's happening right now", read directly from Revit's live status pipe - independent of Dashboard's CSV-driven refresh.</summary>
+    public LiveStatusViewModel LiveStatus { get; } = new();
+
     public ObservableCollection<NavItemViewModel> NavItems { get; }
 
     private AppPage _currentPage = AppPage.Home;
@@ -67,5 +70,9 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         foreach (var item in NavItems) item.IsSelected = item.Page == CurrentPage;
     }
 
-    public void Dispose() => Dashboard.Dispose();
+    public void Dispose()
+    {
+        Dashboard.Dispose();
+        LiveStatus.Dispose();
+    }
 }

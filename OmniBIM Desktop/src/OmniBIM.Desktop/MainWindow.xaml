@@ -63,6 +63,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
@@ -72,7 +73,10 @@
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Home" FontSize="22" FontWeight="Bold" Foreground="#111827" />
 
-                    <UniformGrid Grid.Row="1" Grid.Column="0" Columns="4" Margin="0,16,16,0">
+                    <!-- Live status: read directly from Revit's live status pipe, independent of the CSV-driven widgets below. -->
+                    <views:LiveStatusBannerView Grid.Row="1" Grid.Column="0" DataContext="{Binding LiveStatus}" Margin="0,16,16,0" />
+
+                    <UniformGrid Grid.Row="2" Grid.Column="0" Columns="4" Margin="0,16,16,0">
                         <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,12,0" BorderBrush="#E5E7EB" BorderThickness="1">
                             <StackPanel>
                                 <TextBlock Text="Active Projects" FontSize="11" Foreground="#6B7280" />
@@ -100,9 +104,9 @@
                         </Border>
                     </UniformGrid>
 
-                    <views:ProjectStatusView Grid.Row="2" Grid.Column="0" DataContext="{Binding Dashboard.ProjectStatus}" Margin="0,16,16,0" VerticalAlignment="Top" />
+                    <views:ProjectStatusView Grid.Row="3" Grid.Column="0" DataContext="{Binding Dashboard.ProjectStatus}" Margin="0,16,16,0" VerticalAlignment="Top" />
 
-                    <StackPanel Grid.Row="1" Grid.RowSpan="2" Grid.Column="1" Margin="0,16,0,0">
+                    <StackPanel Grid.Row="1" Grid.RowSpan="3" Grid.Column="1" Margin="0,16,0,0">
                         <views:TimeManagementView DataContext="{Binding Dashboard.TimeManagement}" />
                         <views:ChatPanelView DataContext="{Binding Chat}" Margin="0,16,0,0" Height="420" />
                     </StackPanel>
@@ -112,6 +116,7 @@
             <ScrollViewer Visibility="{Binding CurrentPage, Converter={StaticResource PageToVisibility}, ConverterParameter=TimeManagement}">
                 <StackPanel Margin="24">
                     <TextBlock Text="Time Management" FontSize="22" FontWeight="Bold" Foreground="#111827" />
+                    <views:LiveStatusBannerView DataContext="{Binding LiveStatus}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
                     <views:TimeManagementView DataContext="{Binding Dashboard.TimeManagement}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
                     <views:TimeBreakdownView DataContext="{Binding Dashboard.TimeManagement}" Margin="0,16,0,0" MaxWidth="520" HorizontalAlignment="Left" />
                 </StackPanel>
