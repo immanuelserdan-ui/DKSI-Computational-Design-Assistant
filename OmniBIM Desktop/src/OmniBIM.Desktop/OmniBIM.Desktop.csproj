@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>OmniBIM.Desktop</RootNamespace>
+    <AssemblyName>OmniBIM.Desktop</AssemblyName>
+    <!--
+      Deliberately zero PackageReferences for this Phase 1 scaffold: the data layer
+      (Services/*, Models/*) and the MVVM base (ViewModels/ObservableObject) are hand-rolled
+      so the project builds and runs with only the .NET SDK, no NuGet restore required. Add
+      CommunityToolkit.Mvvm and a charting library (e.g. LiveCharts2) once the project has a
+      network-connected build pipeline and the hand-rolled bar row in Views/TimeManagementView
+      needs to grow into a real chart control.
+    -->
+  </PropertyGroup>
+
+</Project>

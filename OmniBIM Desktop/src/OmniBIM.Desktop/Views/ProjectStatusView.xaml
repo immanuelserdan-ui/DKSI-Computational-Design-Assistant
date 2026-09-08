@@ -1,0 +1,81 @@
+<UserControl x:Class="OmniBIM.Desktop.Views.ProjectStatusView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:OmniBIM.Desktop.ViewModels"
+             xmlns:local="clr-namespace:OmniBIM.Desktop.Views">
+
+    <UserControl.Resources>
+        <local:StatusToBrushConverter x:Key="StatusToBrush" />
+
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+        <Style x:Key="EmptyIfTeamWide" TargetType="TextBlock">
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTeamWide}" Value="False">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Border Background="White" CornerRadius="12" Padding="20" BorderBrush="#E5E7EB" BorderThickness="1">
+        <StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Project Status" FontSize="16" FontWeight="SemiBold" Foreground="#111827" />
+                <TextBlock Grid.Column="1" Foreground="#6B7280" FontSize="12"
+                           Text="{Binding ActiveCount, StringFormat={}{0} active}" />
+            </Grid>
+
+            <TextBlock Style="{StaticResource EmptyIfTeamWide}" Margin="0,4,0,0" FontSize="11" Foreground="#B45309"
+                       TextWrapping="Wrap"
+                       Text="No shared time-tracking folder is configured - this board only shows projects this machine has set a status for, not the whole team." />
+
+            <ItemsControl ItemsSource="{Binding Projects}" Margin="0,12,0,0">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:ProjectStatusRowViewModel}">
+                        <Grid Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition />
+                                <RowDefinition />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding ProjectName}"
+                                       FontSize="13" FontWeight="Medium" Foreground="#111827" />
+
+                            <Border Grid.Row="0" Grid.Column="1" CornerRadius="10" Padding="8,2"
+                                    Background="{Binding Status, Converter={StaticResource StatusToBrush}}">
+                                <TextBlock Text="{Binding Status}" FontSize="10" Foreground="White" FontWeight="SemiBold" />
+                            </Border>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,2,0,0"
+                                       FontSize="11" Foreground="#9CA3AF"
+                                       Text="{Binding LastChangedBy, StringFormat={}Last changed by {0}}" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock Text="No project has a status set yet." FontSize="12" Foreground="#9CA3AF" Margin="0,4,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Projects.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </StackPanel>
+    </Border>
+</UserControl>
