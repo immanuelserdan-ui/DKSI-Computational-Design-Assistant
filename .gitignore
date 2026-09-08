@@ -10,6 +10,13 @@ artifacts/
 *.user
 *.suo
 
+# ---- local install rollback copies -------------------------------------------
+#
+# Install-Fix.ps1 backs up the DLL it's about to overwrite next to itself, stamped with the
+# time. Machine-local rollback history, not source - never the same two runs in a row.
+*.installed-backup-*.dll
+*Diag.addin
+
 # ---- Revit binaries ---------------------------------------------------------
 #
 # Excluded BY EXTENSION rather than by folder, deliberately. The model folders

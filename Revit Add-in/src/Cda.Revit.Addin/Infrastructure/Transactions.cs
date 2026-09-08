@@ -17,10 +17,42 @@ namespace Cda.Revit.Addin.Infrastructure;
 internal static class Transactions
 {
     /// <summary>Runs <paramref name="action"/> inside a single committed transaction.</summary>
-    public static void Run(Document doc, string name, Action action)
+    public static void Run(Document doc, string name, Action action) =>
+        Run(doc, name, action, swallowWarnings: false);
+
+    /// <summary>
+    /// Runs <paramref name="action"/> inside a single committed transaction, optionally
+    /// resolving Revit's own warnings instead of showing them.
+    /// </summary>
+    /// <param name="swallowWarnings">
+    /// TRUE FOR BATCH WORK, and it is not a way of hiding problems - it is the difference
+    /// between a tool that finishes and one that stops on the eleventh of fifty-one elements
+    /// waiting for somebody to click OK.
+    ///
+    /// Revit posts warnings during element creation - "element is slightly off axis", "the
+    /// element is outside its host" and dozens more - and the default handler shows each in a
+    /// modal dialog. Unattended, a long run blocks forever; attended, the user clicks through
+    /// forty identical boxes and stops reading them.
+    ///
+    /// WARNINGS ONLY. Errors are left alone, so anything Revit considers genuinely invalid
+    /// still surfaces and still rolls the transaction back. And nothing here excuses a tool
+    /// from reporting: this add-in verifies its own work by re-measuring what it created, so a
+    /// warning Revit resolved silently still shows up as a fault in the report if it changed
+    /// the result.
+    /// </param>
+    public static void Run(Document doc, string name, Action action, bool swallowWarnings)
     {
         using var tx = new Transaction(doc, name);
         tx.Start();
+
+        if (swallowWarnings)
+        {
+            var options = tx.GetFailureHandlingOptions();
+            options.SetFailuresPreprocessor(new WarningSwallower());
+            options.SetClearAfterRollback(true);
+            tx.SetFailureHandlingOptions(options);
+        }
+
         try
         {
             action();
@@ -30,6 +62,34 @@ internal static class Transactions
         {
             if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Deletes Revit's warnings and lets everything else through.
+    ///
+    /// DeleteWarning is the only resolution taken. The tempting next step - calling
+    /// ResolveFailure on errors so the run never stops - hands Revit permission to fix a
+    /// problem by deleting the element it is complaining about, and a batch tool that quietly
+    /// destroys geometry to keep going is worse than one that stops.
+    /// </summary>
+    private sealed class WarningSwallower : IFailuresPreprocessor
+    {
+        public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
+        {
+            var resolved = false;
+
+            foreach (var failure in accessor.GetFailureMessages())
+            {
+                if (failure.GetSeverity() != FailureSeverity.Warning) continue;
+
+                accessor.DeleteWarning(failure);
+                resolved = true;
+            }
+
+            return resolved
+                ? FailureProcessingResult.ProceedWithCommit
+                : FailureProcessingResult.Continue;
         }
     }
 
