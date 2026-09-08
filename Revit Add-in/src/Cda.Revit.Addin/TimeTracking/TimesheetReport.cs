@@ -169,6 +169,12 @@ internal static class TimesheetReport
     /// Per project, per view, biggest first. The answer to "where did the day go?" — and the
     /// sheet that makes the view-template column earn its place, because grouping by template
     /// is time per discipline rather than time per drawing.
+    ///
+    /// VISITS COUNTS ROWS THAT ARE NOT A HEARTBEAT (<see cref="TimeTracker.HeartbeatDescription"/>),
+    /// not every row - a heartbeat is a partial flush of a segment that has not closed, not a
+    /// second visit to the view, so counting it would turn one 25-minute sitting with two
+    /// heartbeats mid-way into "3 visits". Hours and Time still sum every row, heartbeats
+    /// included, since the minutes are equally real either way.
     /// </summary>
     private static XlsxSheet ByView(IReadOnlyList<TimeEntry> entries)
     {
@@ -177,7 +183,10 @@ internal static class TimesheetReport
 
         var groups = entries
             .GroupBy(e => (e.ProjectName, e.ViewName, e.ViewTemplate))
-            .Select(g => (Key: g.Key, Minutes: g.Sum(e => e.DurationMinutes), Count: g.Count()))
+            .Select(g => (
+                Key: g.Key,
+                Minutes: g.Sum(e => e.DurationMinutes),
+                Count: g.Count(e => e.Description != TimeTracker.HeartbeatDescription)))
             .OrderByDescending(g => g.Minutes);
 
         foreach (var (key, minutes, count) in groups)

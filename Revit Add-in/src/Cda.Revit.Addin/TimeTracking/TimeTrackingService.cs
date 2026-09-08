@@ -26,8 +26,11 @@ namespace Cda.Revit.Addin.TimeTracking;
 ///                    trusting the view's own Phase parameter alone. See OnDocumentChanged.
 ///   DocumentClosing  close the segment while the document is still readable. A moment
 ///                    later its title and project number are gone.
-///   Idling           the clock for <see cref="IdleMonitor"/>, and a safe place to put a
-///                    dialog in front of the user — Revit is by definition doing nothing.
+///   Idling           the clock for <see cref="IdleMonitor"/> and for <see cref="TimeTracker.Heartbeat"/>
+///                    (periodic partial flush of a still-open segment, so a consumer reading
+///                    the ledger live sees progress without waiting for a view change), and
+///                    a safe place to put a dialog in front of the user — Revit is by
+///                    definition doing nothing.
 ///   OnShutdown       the last chance to write the open segment.
 /// </summary>
 internal static class TimeTrackingService
@@ -77,6 +80,8 @@ internal static class TimeTrackingService
             application.ControlledApplication.DocumentClosing += OnDocumentClosing;
             application.ControlledApplication.DocumentChanged += OnDocumentChanged;
 
+            if (_settings.Enabled) LiveStatusServer.Start();
+
             Log.Info($"Time tracking registered (enabled={_settings.Enabled}, " +
                      $"idle={_settings.IdleThresholdMinutes} min, " +
                      $"shared='{(_settings.SharedFolder.Length == 0 ? "none" : _settings.SharedFolder)}').");
@@ -95,6 +100,8 @@ internal static class TimeTrackingService
             application.Idling -= OnIdling;
             application.ControlledApplication.DocumentClosing -= OnDocumentClosing;
             application.ControlledApplication.DocumentChanged -= OnDocumentChanged;
+
+            LiveStatusServer.Stop();
 
             // The whole point of a shutdown hook: without it, closing Revit silently loses
             // however long the user spent in the view they were last looking at.
@@ -121,13 +128,19 @@ internal static class TimeTrackingService
         if (!_settings.Enabled)
         {
             TimeTracker.Flush("tracking was switched off");
+            LiveStatusServer.Stop();
         }
-        else if (_uiApp is not null)
+        else
         {
-            // Switching tracking back on has to start a segment now. Waiting for the next
-            // ViewActivated means a day spent in one plan records nothing, and the feature
-            // reads as still off.
-            SyncToActiveView(_uiApp);
+            LiveStatusServer.Start();
+
+            if (_uiApp is not null)
+            {
+                // Switching tracking back on has to start a segment now. Waiting for the next
+                // ViewActivated means a day spent in one plan records nothing, and the feature
+                // reads as still off.
+                SyncToActiveView(_uiApp);
+            }
         }
 
         Log.Info($"Time tracking settings applied (enabled={_settings.Enabled}, " +
@@ -341,6 +354,11 @@ internal static class TimeTrackingService
         {
             _uiApp = sender as UIApplication ?? _uiApp;
             _monitor?.Tick();
+
+            // Same tick, same guard (_promptOpen already returned above): a heartbeat while
+            // a modal idle prompt is on screen would fire the moment the dialog opened, since
+            // the segment doesn't advance while it waits for an answer.
+            TimeTracker.Heartbeat(DateTime.UtcNow);
         }
         catch (Exception ex)
         {

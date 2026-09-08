@@ -220,6 +220,57 @@ internal static class TimeTracker
     }
 
     /// <summary>
+    /// Marker stamped in <see cref="TimeEntry.Description"/> for a row written by
+    /// <see cref="Heartbeat"/> rather than a real close - see that method's remarks for why
+    /// this, and not a new <see cref="TimeEntryType"/>, is what distinguishes them.
+    /// </summary>
+    public const string HeartbeatDescription = "(in progress)";
+
+    /// <summary>
+    /// Flushes the open segment to disk WITHOUT closing it, if it has been running longer
+    /// than <see cref="TimeTrackingSettings.HeartbeatSeconds"/>. Called from the Idling tick,
+    /// same as <see cref="IdleMonitor.Tick"/>.
+    ///
+    /// WHY NOT JUST CALL Close() AND REOPEN. Close() nulls <see cref="_open"/>, and between
+    /// that instant and the next ViewActivated/Resume there is a window - however short -
+    /// where nothing is timing. A heartbeat is not a context change: the user is still on
+    /// the same view, so the segment stays open and only its accounted-for start moves
+    /// forward, exactly as if it had just begun again. The eventual real Close() then only
+    /// covers what heartbeats have not already flushed - no double-counting, because the two
+    /// never cover the same span of time.
+    ///
+    /// WRITTEN AS <see cref="TimeEntryType.Automated"/>, same as an ordinary close - it IS
+    /// automated time, just flushed early. A new enum value would silently vanish from
+    /// TimesheetReport's "Automated" sub-total (which matches on TimeEntryType), so instead
+    /// this stamps <see cref="HeartbeatDescription"/> into Description, the field every other
+    /// annotated row already uses ("Away from Revit — kept", "Accumulated short visits") -
+    /// picked up by <see cref="TimesheetReport"/>'s "Visits" column so a 25-minute visit with
+    /// two heartbeats mid-way still counts as ONE visit, not three.
+    /// </summary>
+    public static void Heartbeat(DateTime nowUtc)
+    {
+        lock (Gate)
+        {
+            if (!_settings.Enabled) return;
+            if (_open is null) return;
+            if (_settings.HeartbeatSeconds <= 0) return;
+
+            var elapsed = nowUtc - _openedUtc;
+            if (elapsed.TotalSeconds < _settings.HeartbeatSeconds) return;
+
+            var context = _open;
+            var startUtc = _openedUtc;
+
+            Write(context, startUtc, nowUtc, elapsed.TotalSeconds, TimeEntryType.Automated, HeartbeatDescription);
+
+            // Re-anchor rather than close: _open stays exactly what it was.
+            _openedUtc = nowUtc;
+
+            Log.Debug($"Time tracking: heartbeat flushed {elapsed.TotalSeconds:0.0} s on '{context.Describe()}'.");
+        }
+    }
+
+    /// <summary>
     /// Closes and writes whatever is open. Called on document close and on Revit shutdown —
     /// the two moments where the alternative is losing the segment entirely.
     /// </summary>

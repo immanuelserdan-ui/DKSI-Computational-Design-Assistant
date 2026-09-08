@@ -86,6 +86,19 @@ public sealed class TimeTrackingSettings
     /// </summary>
     public int PollSeconds { get; set; } = 10;
 
+    /// <summary>
+    /// Seconds an open segment is allowed to run before it is flushed to disk as a heartbeat
+    /// row, without closing it - see <see cref="TimeTracker.Heartbeat"/>. Zero or less turns
+    /// this off, matching the original behaviour: a segment writes nothing until it actually
+    /// closes, which can be an hour or more of continuous work in one view. Exists for
+    /// consumers reading the LEDGER (not the live-status pipe, which already updates every
+    /// second regardless of this) - the weekly hours, task/project breakdowns and other
+    /// aggregates in OmniBIM only move when a row lands, so this is what bounds how stale
+    /// those figures can get while someone sits in one view. Seconds, not minutes, so it can
+    /// go below a minute without falling back to fractional values - default is 30.
+    /// </summary>
+    public int HeartbeatSeconds { get; set; } = 30;
+
     // ---- Project Information carried onto every row ---------------------------
 
     /// <summary>
