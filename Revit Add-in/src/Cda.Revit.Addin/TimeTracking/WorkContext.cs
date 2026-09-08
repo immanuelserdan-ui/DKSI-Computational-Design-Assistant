@@ -19,7 +19,8 @@ public sealed record WorkContext(
     string Afdeling = "",
     string ClientNumber = "",
     string Operator = "",
-    string Selskab = "")
+    string Selskab = "",
+    string QA = "")
 {
     /// <summary>
     /// Reads the context off a live document and view.
@@ -40,7 +41,7 @@ public sealed record WorkContext(
         var projectName = fileName;
         var projectNumber = string.Empty;
         string afdeling = string.Empty, clientNumber = string.Empty,
-               @operator = string.Empty, selskab = string.Empty;
+               @operator = string.Empty, selskab = string.Empty, qa = string.Empty;
 
         // ProjectInformation belongs to project documents. A family editor session is still
         // work worth logging, so it is tracked — under the family's own name.
@@ -60,6 +61,7 @@ public sealed record WorkContext(
             clientNumber = ProjectText(doc, settings.ClientNumberParameter);
             @operator = ProjectText(doc, settings.OperatorParameter);
             selskab = ProjectText(doc, settings.SelskabParameter);
+            qa = ProjectText(doc, settings.QAParameter);
         }
 
         var viewName = view is null ? string.Empty : Safe(() => view.Name);
@@ -78,7 +80,7 @@ public sealed record WorkContext(
 
         return new WorkContext(
             projectName, projectNumber, fileName, viewName, template ?? string.Empty,
-            afdeling, clientNumber, @operator, selskab);
+            afdeling, clientNumber, @operator, selskab, qa);
     }
 
     /// <summary>One Project Information parameter, by name, never throwing.</summary>

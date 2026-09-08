@@ -2,10 +2,10 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Time Tracking"
-        Width="880"
-        Height="620"
-        MinWidth="700"
-        MinHeight="480"
+        Width="900"
+        Height="820"
+        MinWidth="760"
+        MinHeight="640"
         ShowInTaskbar="False"
         WindowStyle="ToolWindow">
 
@@ -13,6 +13,8 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="150" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -29,10 +31,80 @@
             <StackPanel>
                 <TextBlock x:Name="StatusLine" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBlock x:Name="StatusDetail" Margin="0,4,0,0" Opacity="0.8" TextWrapping="Wrap" />
+
+                <!-- Set by a person, visible to everyone who opens this project - see
+                     ProjectStatusStore. Saved on its own, immediately, because this is not a
+                     personal preference batched with the rest of Settings below. -->
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <TextBlock Text="Modeller status" VerticalAlignment="Center" FontWeight="SemiBold" />
+                    <ComboBox x:Name="ModellerStatusBox" Width="160" Margin="8,0,0,0"
+                              SelectionChanged="OnModellerStatusChanged" />
+                    <TextBlock x:Name="ModellerStatusDetail" VerticalAlignment="Center"
+                               Margin="10,0,0,0" Opacity="0.75" TextWrapping="Wrap" />
+                </StackPanel>
+
+                <!-- What the RUNNING segment is being logged as - not a project-wide fact
+                     like Modeller Status above. Auto-detected fresh on every view change (see
+                     TaskDetection); overriding it here takes effect immediately and does not
+                     interrupt the elapsed clock - see TimeTracker.SetManualTask. -->
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                    <TextBlock Text="Task / Phase" VerticalAlignment="Center" FontWeight="SemiBold" />
+                    <ComboBox x:Name="TaskPhaseBox" Width="200" Margin="8,0,0,0"
+                              SelectionChanged="OnTaskPhaseChanged" />
+                    <TextBlock x:Name="TaskPhaseDetail" VerticalAlignment="Center"
+                               Margin="10,0,0,0" Opacity="0.75" TextWrapping="Wrap" />
+                </StackPanel>
             </StackPanel>
         </Border>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+        <!-- The single facts about whichever project is open - fixed for the life of this
+             modal window, same as ModellerStatusBox above. Read-only: these come from
+             Project Information and the session ledger, not typed in here. -->
+        <Border Grid.Row="1"
+                BorderBrush="#FFB0B0B0"
+                BorderThickness="1"
+                Padding="12"
+                Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="Project info" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <UniformGrid Columns="2" Rows="4">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Project name:" Width="150" />
+                        <TextBlock x:Name="InfoProjectName" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="QA:" Width="150" />
+                        <TextBlock x:Name="InfoQA" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Afdeling:" Width="150" />
+                        <TextBlock x:Name="InfoAfdeling" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Date started:" Width="150" />
+                        <TextBlock x:Name="InfoDateStarted" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Selskab:" Width="150" />
+                        <TextBlock x:Name="InfoSelskab" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Date last modified:" Width="150" />
+                        <TextBlock x:Name="InfoLastModified" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Operator:" Width="150" />
+                        <TextBlock x:Name="InfoOperator" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="Autodesk account:" Width="150" />
+                        <TextBlock x:Name="InfoAutodeskAccount" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </UniformGrid>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,8">
             <TextBlock Text="Show" VerticalAlignment="Center" Margin="0,0,8,0" />
             <ComboBox x:Name="RangeBox" Width="150" SelectionChanged="OnRangeChanged">
                 <ComboBoxItem Content="Today" IsSelected="True" />
@@ -43,23 +115,43 @@
             <Button Content="Refresh" Width="90" Height="26" Margin="12,0,0,0" Click="OnRefresh" />
         </StackPanel>
 
-        <ListView Grid.Row="2" x:Name="EntryList">
+        <!-- One row per Revit session (open to close) on the current project - see
+             SessionLogStore. A still-open session (no row in the ledger yet) is shown as an
+             extra top row with an "(in progress)" end, from SessionTrackingService's live
+             snapshot rather than the file. -->
+        <DockPanel Grid.Row="3" Margin="0,0,0,8" LastChildFill="True">
+            <TextBlock DockPanel.Dock="Top" Text="Sessions on this project" FontWeight="SemiBold" Margin="0,0,0,4" />
+            <ListView x:Name="SessionList">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="Start" Width="150" DisplayMemberBinding="{Binding Start}" />
+                        <GridViewColumn Header="End" Width="150" DisplayMemberBinding="{Binding End}" />
+                        <GridViewColumn Header="Duration" Width="90" DisplayMemberBinding="{Binding Duration}" />
+                    </GridView>
+                </ListView.View>
+            </ListView>
+        </DockPanel>
+
+        <!-- One row per day, per project, per task/phase - the same rollup the Excel export's
+             Summary sheet computes, not the raw per-view-visit segments. Those still go into
+             the CSV ledger exactly as before; this list is a reading of it, not a second
+             store. Rows logged before Task/Phase existed group under "(none)". -->
+        <ListView Grid.Row="4" x:Name="EntryList">
             <ListView.View>
                 <GridView>
-                    <GridViewColumn Header="Started" Width="130" DisplayMemberBinding="{Binding Started}" />
-                    <GridViewColumn Header="Minutes" Width="70" DisplayMemberBinding="{Binding Minutes}" />
-                    <GridViewColumn Header="Project" Width="170" DisplayMemberBinding="{Binding Project}" />
-                    <GridViewColumn Header="View" Width="150" DisplayMemberBinding="{Binding View}" />
-                    <GridViewColumn Header="Template" Width="100" DisplayMemberBinding="{Binding Template}" />
-                    <GridViewColumn Header="Type" Width="80" DisplayMemberBinding="{Binding Type}" />
-                    <GridViewColumn Header="Description" Width="180" DisplayMemberBinding="{Binding Description}" />
+                    <GridViewColumn Header="Date" Width="130" DisplayMemberBinding="{Binding Date}" />
+                    <GridViewColumn Header="Project" Width="180" DisplayMemberBinding="{Binding Project}" />
+                    <GridViewColumn Header="Task / Phase" Width="160" DisplayMemberBinding="{Binding TaskPhase}" />
+                    <GridViewColumn Header="Hours" Width="80" DisplayMemberBinding="{Binding Hours}" />
+                    <GridViewColumn Header="Time" Width="80" DisplayMemberBinding="{Binding Time}" />
+                    <GridViewColumn Header="Entries" Width="80" DisplayMemberBinding="{Binding Entries}" />
                 </GridView>
             </ListView.View>
         </ListView>
 
-        <TextBlock Grid.Row="3" x:Name="TotalLine" Margin="0,8,0,0" FontWeight="SemiBold" />
+        <TextBlock Grid.Row="5" x:Name="TotalLine" Margin="0,8,0,0" FontWeight="SemiBold" />
 
-        <Expander Grid.Row="4" Header="Settings" Margin="0,12,0,0">
+        <Expander Grid.Row="6" Header="Settings" Margin="0,12,0,0">
             <StackPanel Margin="0,10,0,0">
 
                 <CheckBox x:Name="EnabledBox" Content="Track time automatically" Margin="0,0,0,8" />
@@ -120,7 +212,7 @@
             </StackPanel>
         </Expander>
 
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
             <Button Content="Add Manual Entry…" Width="150" Height="28" Click="OnAddManual" />
             <Button Content="Export CSV…" Width="120" Height="28" Margin="8,0,0,0" Click="OnExport" />
             <Button Content="Close" Width="90" Height="28" Margin="8,0,0,0" IsCancel="True" />

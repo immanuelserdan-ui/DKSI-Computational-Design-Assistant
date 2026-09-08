@@ -32,6 +32,29 @@ internal static class TimeTracker
     private static WorkContext? _open;
     private static DateTime _openedUtc;
 
+    /// <summary>
+    /// The task/phase in effect right now - stamped onto a row when it is WRITTEN, exactly
+    /// like <see cref="Write"/>'s <c>description</c> parameter, and for the same reason:
+    /// keeping it out of <see cref="WorkContext"/>'s equality means changing it never counts
+    /// as a context change, so it never triggers <see cref="Switch"/> to close and reopen the
+    /// current segment. A manual pick therefore takes effect immediately with no interruption
+    /// to the running elapsed clock - the trade is that a segment spanning a task change is
+    /// stamped, whole, with whichever task was current when it finally closed, the same
+    /// simplification already accepted for Description.
+    /// </summary>
+    private static string _taskPhase = string.Empty;
+    private static string _taskCategory = string.Empty;
+
+    /// <summary>
+    /// Distinct, non-DKSI transaction names seen since the last row was written - UNLIKE
+    /// <see cref="_taskPhase"/>, this does NOT persist across a write: it describes what
+    /// happened up to that specific row, so a fresh row starts having recorded nothing.
+    /// Stamped onto <see cref="TimeEntry.ExternalActivity"/> and cleared in <see cref="Write"/>.
+    /// See <see cref="TimeTrackingService.OnDocumentChanged"/> for what decides what lands
+    /// here - a best-effort, openly incomplete filter, not a reliable per-add-in measurement.
+    /// </summary>
+    private static readonly HashSet<string> _externalTransactions = new(StringComparer.Ordinal);
+
     /// <summary>The context that was open when the timer paused, so Resume can return to it.</summary>
     private static WorkContext? _pausedContext;
 
@@ -53,6 +76,63 @@ internal static class TimeTracker
             _settings = settings;
             if (!string.IsNullOrWhiteSpace(username)) _username = username;
         }
+    }
+
+    /// <summary>
+    /// The identity every new row is stamped with - the Windows login until
+    /// <see cref="TimeTrackingService"/> upgrades it to the Autodesk sign-in name, same
+    /// value <see cref="Configure"/> feeds into segment rows. Exposed so
+    /// <see cref="SessionTrackingService"/> stamps sessions with the same account rather
+    /// than resolving its own, possibly out-of-step, copy.
+    /// </summary>
+    public static string Username { get { lock (Gate) return _username; } }
+
+    /// <summary>The task/phase that would be stamped on a row written right now.</summary>
+    public static string TaskPhase { get { lock (Gate) return _taskPhase; } }
+
+    /// <summary><see cref="TaskDetection.AutoDetected"/> or <see cref="TaskDetection.ManualOverride"/>.</summary>
+    public static string TaskCategory { get { lock (Gate) return _taskCategory; } }
+
+    /// <summary>
+    /// A person picked this from the dropdown. Stands until they pick again, or until a
+    /// STRONG auto-detection (family editor, sheet) overrides it - see
+    /// <see cref="ApplyAutoTask"/>.
+    /// </summary>
+    public static void SetManualTask(string phase)
+    {
+        lock (Gate)
+        {
+            _taskPhase = phase;
+            _taskCategory = TaskDetection.ManualOverride;
+        }
+    }
+
+    /// <summary>
+    /// Called from <see cref="TimeTrackingService"/> on every view activation with the
+    /// result of <see cref="TaskDetection.Detect"/>.
+    /// </summary>
+    /// <param name="isStrong">
+    /// True for family-editor and sheet detections, which describe what is unambiguously
+    /// happening and so must win even over a standing manual choice; false for the softer
+    /// "read the view's Phase" and "General Modeling" fallback readings, which only fill in
+    /// a blank and must never quietly erase something the user picked by hand.
+    /// </param>
+    public static void ApplyAutoTask(string phase, bool isStrong)
+    {
+        lock (Gate)
+        {
+            if (!isStrong && _taskCategory == TaskDetection.ManualOverride) return;
+
+            _taskPhase = phase;
+            _taskCategory = TaskDetection.AutoDetected;
+        }
+    }
+
+    /// <summary>Notes a model-writing transaction this add-in did not author.</summary>
+    public static void RecordExternalTransaction(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+        lock (Gate) _externalTransactions.Add(name);
     }
 
     /// <summary>The context currently being timed, or null when nothing is open.</summary>
@@ -211,6 +291,9 @@ internal static class TimeTracker
             Afdeling = context?.Afdeling ?? string.Empty,
             ClientNumber = context?.ClientNumber ?? string.Empty,
             Operator = context?.Operator ?? string.Empty,
+            QA = context?.QA ?? string.Empty,
+            TaskPhase = _taskPhase,
+            TaskCategory = _taskCategory,
         };
 
         TimeLogStore.Append(entry, _settings);
@@ -278,7 +361,17 @@ internal static class TimeTracker
             Afdeling = context.Afdeling,
             ClientNumber = context.ClientNumber,
             Operator = context.Operator,
+            QA = context.QA,
+            TaskPhase = _taskPhase,
+            TaskCategory = _taskCategory,
+            ExternalActivity = _externalTransactions.Count == 0
+                ? string.Empty
+                : string.Join("; ", _externalTransactions.OrderBy(n => n, StringComparer.OrdinalIgnoreCase)),
         };
+
+        // Cleared here, not preserved like _taskPhase - this describes what happened UP TO
+        // this row, and a row that has just been written has nothing left to describe.
+        _externalTransactions.Clear();
 
         TimeLogStore.Append(entry, _settings);
     }

@@ -14,11 +14,16 @@ namespace Cda.Revit.Addin.TimeTracking;
 /// down in OnShutdown. Every failure in here is logged and swallowed: a time tracker that
 /// stops the modelling tools loading is worse than no time tracker.
 ///
-/// THE FOUR HOOKS
+/// THE FIVE HOOKS
 ///
 ///   ViewActivated    the context signal. Fires on every view change AND on every document
 ///                    switch, which makes it the one event that answers "what is the user
-///                    looking at now?" without polling.
+///                    looking at now?" without polling. Also re-runs task/phase
+///                    auto-detection (<see cref="TaskDetection"/>) for the newly active
+///                    document/view.
+///   DocumentChanged  the ACTIVITY signal for task/phase - refines "General Modeling" once
+///                    an actual edit shows what is really being worked on, rather than
+///                    trusting the view's own Phase parameter alone. See OnDocumentChanged.
 ///   DocumentClosing  close the segment while the document is still readable. A moment
 ///                    later its title and project number are gone.
 ///   Idling           the clock for <see cref="IdleMonitor"/>, and a safe place to put a
@@ -70,6 +75,7 @@ internal static class TimeTrackingService
             application.ViewActivated += OnViewActivated;
             application.Idling += OnIdling;
             application.ControlledApplication.DocumentClosing += OnDocumentClosing;
+            application.ControlledApplication.DocumentChanged += OnDocumentChanged;
 
             Log.Info($"Time tracking registered (enabled={_settings.Enabled}, " +
                      $"idle={_settings.IdleThresholdMinutes} min, " +
@@ -88,6 +94,7 @@ internal static class TimeTrackingService
             application.ViewActivated -= OnViewActivated;
             application.Idling -= OnIdling;
             application.ControlledApplication.DocumentClosing -= OnDocumentClosing;
+            application.ControlledApplication.DocumentChanged -= OnDocumentChanged;
 
             // The whole point of a shutdown hook: without it, closing Revit silently loses
             // however long the user spent in the view they were last looking at.
@@ -144,6 +151,7 @@ internal static class TimeTrackingService
 
         var view = Safe(() => uiApp.ActiveUIDocument?.ActiveView);
         TimeTracker.Switch(WorkContext.From(doc, view, _settings));
+        ApplyAutoTask(doc, view);
     }
 
     // ------------------------------------------------------------------ Revit events
@@ -166,6 +174,7 @@ internal static class TimeTrackingService
             _monitor?.MarkActive();
 
             TimeTracker.Switch(WorkContext.From(e.Document, e.CurrentActiveView, _settings));
+            ApplyAutoTask(e.Document, e.CurrentActiveView);
         }
         catch (Exception ex)
         {
@@ -173,6 +182,13 @@ internal static class TimeTrackingService
             // half-switched state.
             Log.Error("Time tracking: ViewActivated handler failed.", ex);
         }
+    }
+
+    /// <summary>Re-runs task/phase auto-detection for the document/view just activated.</summary>
+    private static void ApplyAutoTask(Document? doc, View? view)
+    {
+        var (phase, isStrong) = TaskDetection.Detect(doc, view);
+        TimeTracker.ApplyAutoTask(phase, isStrong);
     }
 
     private static void OnDocumentClosing(object? sender, DocumentClosingEventArgs e)
@@ -196,6 +212,122 @@ internal static class TimeTrackingService
             Log.Error("Time tracking: DocumentClosing handler failed.", ex);
         }
     }
+
+    /// <summary>
+    /// Refines the auto-detected task/phase from what is actually being edited, once an edit
+    /// happens - see <see cref="TaskDetection"/>'s class doc for why this is a SOFT signal:
+    /// it fills in over a plain view-Phase reading, but a standing manual choice still wins
+    /// (<see cref="TimeTracker.ApplyAutoTask"/> already enforces that; this call passes
+    /// <c>isStrong: false</c> for exactly that reason).
+    ///
+    /// "Paint / Finishes" is covered by the SAME category set as Walls/Ceilings/Roofs/Floors,
+    /// deliberately - Revit's Paint tool has no category of its own, it re-colours a face on
+    /// one of those host elements, which is what DocumentChanged actually reports as modified.
+    ///
+    /// BEST-EFFORT ONLY against this add-in's OWN automated writes. There is no add-in-wide
+    /// convention for naming a transaction, so <see cref="IsKnownAutomationTransaction"/>
+    /// recognises the prefixes that exist today plus a "DKSI" substring several of them
+    /// already use, and nothing more. A background pass with an unrecognised name can still
+    /// nudge this to "General Modeling" for a moment - low-severity, since that is already
+    /// the system's default landing category, and it self-corrects on the next view change.
+    ///
+    /// ALSO RECORDS every non-DKSI transaction name onto
+    /// <see cref="TimeTracker.RecordExternalTransaction"/> - the "external add-in" proxy.
+    /// READ THAT METHOD'S REMARKS BEFORE TRUSTING THIS DATA: a transaction name alone cannot
+    /// tell a genuine third-party add-in apart from an ordinary native Revit command ("Wall",
+    /// "Move Elements", ...), so this column will be dominated by perfectly normal modelling
+    /// most of the time. It is raw material for someone to filter by name, not a finished
+    /// "time in add-in X" measurement - no such measurement is possible through the Revit API.
+    /// </summary>
+    /// <summary>Counts invocations, so "the event never reached this handler" is provable.</summary>
+    private static int _documentChangedCount;
+
+    private static void OnDocumentChanged(object? sender, DocumentChangedEventArgs e)
+    {
+        _documentChangedCount++;
+
+        if (!_settings.Enabled)
+        {
+            Log.Debug($"Time tracking DocumentChanged #{_documentChangedCount}: ignored, tracking is off.");
+            return;
+        }
+
+        try
+        {
+            var doc = Safe(() => e.GetDocument());
+            if (doc is null || doc.IsFamilyDocument || doc.IsLinked)
+            {
+                Log.Debug($"Time tracking DocumentChanged #{_documentChangedCount}: skipped " +
+                          $"(doc null={doc is null}, family={doc?.IsFamilyDocument}, linked={doc?.IsLinked}).");
+                return;
+            }
+
+            // Only for the document currently being timed - an edit in a background or
+            // secondary document must not relabel the task, or credit external activity, to
+            // the one the user is actually in.
+            var open = TimeTracker.Open;
+            var docTitle = Safe(() => doc.Title) ?? string.Empty;
+
+            if (open is null || docTitle != open.FileName)
+            {
+                Log.Debug($"Time tracking DocumentChanged #{_documentChangedCount}: skipped, " +
+                          $"'{docTitle}' does not match the tracked context " +
+                          $"('{open?.FileName ?? "(nothing open)"}').");
+                return;
+            }
+
+            var transactionNames = e.GetTransactionNames();
+            var recorded = new List<string>();
+
+            // Recorded per name, independently of the category check below - a transaction
+            // this add-in did not author is worth logging even in a batch that also
+            // contains one of ours.
+            foreach (var name in transactionNames)
+            {
+                if (IsKnownAutomationTransaction(name)) continue;
+                TimeTracker.RecordExternalTransaction(name);
+                recorded.Add(name);
+            }
+
+            Log.Debug($"Time tracking DocumentChanged #{_documentChangedCount}: " +
+                      $"transaction name(s) [{string.Join(", ", transactionNames)}]; " +
+                      $"recorded as external: [{string.Join(", ", recorded)}].");
+
+            if (transactionNames.Any(IsKnownAutomationTransaction)) return;
+
+            var touched = e.GetAddedElementIds().Concat(e.GetModifiedElementIds());
+
+            var isGeneralModeling = touched.Any(id =>
+            {
+                var category = Safe(() => doc.GetElement(id)?.Category?.Id.Value);
+                return category is not null && GeneralModelingCategories.Contains(category.Value);
+            });
+
+            if (isGeneralModeling)
+            {
+                Log.Debug($"Time tracking DocumentChanged #{_documentChangedCount}: " +
+                          "a Wall/Ceiling/Roof/Floor was touched - task set to General Modeling.");
+                TimeTracker.ApplyAutoTask("General Modeling", isStrong: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Time tracking DocumentChanged #{_documentChangedCount}: handler failed.", ex);
+        }
+    }
+
+    private static readonly long[] GeneralModelingCategories =
+    [
+        (long)BuiltInCategory.OST_Walls,
+        (long)BuiltInCategory.OST_Ceilings,
+        (long)BuiltInCategory.OST_Roofs,
+        (long)BuiltInCategory.OST_Floors,
+    ];
+
+    private static bool IsKnownAutomationTransaction(string name) =>
+        name.StartsWith(Finishes.FinishAutomation.TransactionPrefix, StringComparison.Ordinal) ||
+        name.StartsWith(Overlay.PaintHighlight.TransactionPrefix, StringComparison.Ordinal) ||
+        name.Contains("DKSI", StringComparison.OrdinalIgnoreCase);
 
     private static void OnIdling(object? sender, IdlingEventArgs e)
     {

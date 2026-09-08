@@ -85,4 +85,29 @@ public sealed class TimeEntry
 
     /// <summary>Project Information &gt; Selskab (company).</summary>
     public string Selskab { get; init; } = string.Empty;
+
+    /// <summary>Project Information &gt; QA (the reviewer of record).</summary>
+    public string QA { get; init; } = string.Empty;
+
+    /// <summary>
+    /// What kind of work this row represents - one of <see cref="TaskDetection.Presets"/>
+    /// picked by hand, a Revit project Phase name read off the view, or one of the two
+    /// strong auto-detections (Family Creation, Construction Documentation). See
+    /// <see cref="TaskDetection"/> and <see cref="TimeTracker.ApplyAutoTask"/>.
+    /// </summary>
+    public string TaskPhase { get; init; } = string.Empty;
+
+    /// <summary>Whether <see cref="TaskPhase"/> was typed by a person or inferred automatically.</summary>
+    public string TaskCategory { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Distinct model-writing transaction names seen during this segment that this add-in
+    /// did not author, semicolon-separated. A DELIBERATELY WEAK PROXY, not a measurement of
+    /// any specific add-in's usage - it mixes ordinary native Revit commands (a plain "Wall"
+    /// or "Move Elements") in with anything a genuine third-party add-in wrote, because
+    /// Revit's API exposes no way to tell those apart. Read the raw names to judge for
+    /// yourself; do not treat this column as "time spent in an external add-in" on its own.
+    /// See <see cref="TimeTrackingService.OnDocumentChanged"/>.
+    /// </summary>
+    public string ExternalActivity { get; init; } = string.Empty;
 }

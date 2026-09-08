@@ -108,6 +108,9 @@ public sealed class TimeTrackingSettings
 
     public string SelskabParameter { get; set; } = "Selskab";
 
+    /// <summary>Project Information &gt; QA (the reviewer of record, alongside Operator).</summary>
+    public string QAParameter { get; set; } = "QA";
+
     // ------------------------------------------------------------------ persistence
 
     public static string UserSettingsPath { get; } = Path.Combine(

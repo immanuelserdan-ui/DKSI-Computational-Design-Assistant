@@ -30,6 +30,7 @@ internal static class TimesheetReport
         {
             Summary(entries, from, to, username),
             ByView(entries),
+            ByTask(entries),
             Detail(entries),
         };
 
@@ -58,6 +59,8 @@ internal static class TimesheetReport
         if (!entries.Any(e => e.Afdeling.Length > 0)) missing.Add("Afdeling");
         if (!entries.Any(e => e.ClientNumber.Length > 0)) missing.Add("Client no.");
         if (!entries.Any(e => e.Operator.Length > 0)) missing.Add("Operator");
+        if (!entries.Any(e => e.QA.Length > 0)) missing.Add("QA");
+        if (!entries.Any(e => e.TaskPhase.Length > 0)) missing.Add("Task / Phase");
 
         // Added rather than listed in a collection initializer: inside one, [ ... ] is parsed
         // as an INDEXER assignment, not a collection expression, and the error it produces
@@ -79,8 +82,8 @@ internal static class TimesheetReport
 
         var header = new List<string>
         {
-            "Date", "Day", "Selskab", "Afdeling", "Client no.", "Operator",
-            "Project", "Hours", "Time", "Entries", "Automated", "Manual",
+            "Date", "Day", "Selskab", "Afdeling", "Client no.", "Operator", "QA",
+            "Project", "Task / Phase", "Hours", "Time", "Entries", "Automated", "Manual",
         };
         rows.Add(header);
 
@@ -88,11 +91,16 @@ internal static class TimesheetReport
 
         // Grouped by the Project Information too, not just the project name. If a model's
         // Selskab or Operator changed mid-month that is a real split worth seeing, not a
-        // detail to average away.
+        // detail to average away. Task/Phase joins the same grouping for the same reason -
+        // this is what makes the timesheet answer "how much on Construction Documentation
+        // vs Clash Detection today", not just "how much today", which is the whole point of
+        // tagging a segment with a task in the first place - see TaskDetection.
         var byDay = entries
-            .GroupBy(e => (Date: e.Started.Date, e.ProjectName, e.Selskab, e.Afdeling, e.ClientNumber, e.Operator))
+            .GroupBy(e => (Date: e.Started.Date, e.ProjectName, e.Selskab, e.Afdeling, e.ClientNumber, e.Operator, e.QA,
+                            TaskPhase: e.TaskPhase.Length == 0 ? "(none)" : e.TaskPhase))
             .OrderBy(g => g.Key.Date)
-            .ThenBy(g => g.Key.ProjectName, StringComparer.CurrentCultureIgnoreCase);
+            .ThenBy(g => g.Key.ProjectName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(g => g.Key.TaskPhase, StringComparer.CurrentCultureIgnoreCase);
 
         foreach (var group in byDay)
         {
@@ -108,9 +116,11 @@ internal static class TimesheetReport
             row.Add(Blank(group.Key.Afdeling));
             row.Add(Blank(group.Key.ClientNumber));
             row.Add(Blank(group.Key.Operator));
+            row.Add(Blank(group.Key.QA));
 
             row.AddRange([
                 Blank(group.Key.ProjectName),
+                group.Key.TaskPhase,
                 Hours(minutes),
                 HoursMinutes(minutes),
                 group.Count().ToString(CultureInfo.InvariantCulture),
@@ -123,10 +133,10 @@ internal static class TimesheetReport
 
         var total = entries.Sum(e => e.DurationMinutes);
 
-        // Date, Day, the four Project Information columns, then Project - so the totals line
-        // up under Hours regardless of what any of them contain.
+        // Date, Day, the five Project Information columns, then Project and Task/Phase - so
+        // the totals line up under Hours regardless of what any of them contain.
         var totalRow = new List<string> { "TOTAL" };
-        while (totalRow.Count < 7) totalRow.Add(string.Empty);
+        while (totalRow.Count < 9) totalRow.Add(string.Empty);
 
         totalRow.AddRange([
             Hours(total),
@@ -145,7 +155,7 @@ internal static class TimesheetReport
             Name = "Summary",
             Rows = rows,
             BoldRows = bold,
-            Widths = [12, 6, 12, 12, 12, 18, 28, 9, 9, 9, 11, 9],
+            Widths = [12, 6, 12, 12, 12, 18, 12, 28, 20, 9, 9, 9, 11, 9],
 
             // Freeze below the header wherever it ended up - the note line above it is
             // conditional, so a hardcoded 4 would cut the table in half when it is absent.
@@ -195,7 +205,48 @@ internal static class TimesheetReport
     // ------------------------------------------------------------------ sheet 3
 
     /// <summary>
-    /// Every entry, unrolled — the audit trail behind the two sheets above.
+    /// Per project, per task/phase, biggest first - the answer "how much of this billed to
+    /// Construction Documentation vs Clash Detection", which is the whole point of tagging a
+    /// segment with a task in the first place. Rows with no task auto-detected or chosen
+    /// (entries logged before this add-in tracked task/phase) group under "(none)" rather
+    /// than vanishing, so a month with older rows in it does not silently under-report.
+    /// </summary>
+    private static XlsxSheet ByTask(IReadOnlyList<TimeEntry> entries)
+    {
+        var rows = new List<IReadOnlyList<string>>();
+        rows.Add(["Project", "Task / Phase", "Category", "Hours", "Time", "Entries"]);
+
+        var groups = entries
+            .GroupBy(e => (e.ProjectName, TaskPhase: e.TaskPhase.Length == 0 ? "(none)" : e.TaskPhase, e.TaskCategory))
+            .Select(g => (Key: g.Key, Minutes: g.Sum(e => e.DurationMinutes), Count: g.Count()))
+            .OrderByDescending(g => g.Minutes);
+
+        foreach (var (key, minutes, count) in groups)
+        {
+            rows.Add([
+                Blank(key.ProjectName),
+                key.TaskPhase,
+                Blank(key.TaskCategory),
+                Hours(minutes),
+                HoursMinutes(minutes),
+                count.ToString(CultureInfo.InvariantCulture),
+            ]);
+        }
+
+        return new XlsxSheet
+        {
+            Name = "By task",
+            Rows = rows,
+            BoldRows = [0],
+            Widths = [22, 26, 16, 9, 9, 8],
+            FreezeAt = 1,
+        };
+    }
+
+    // ------------------------------------------------------------------ sheet 4
+
+    /// <summary>
+    /// Every entry, unrolled — the audit trail behind the sheets above.
     ///
     /// Columns that are empty for EVERY row are dropped rather than printed as a grey band
     /// down the middle of the sheet. A project number nobody filled in is not information,
@@ -207,6 +258,11 @@ internal static class TimesheetReport
         var showTemplate = entries.Any(e => e.ViewTemplate.Length > 0);
         var showDescription = entries.Any(e => e.Description.Length > 0);
         var showFile = entries.Any(e => e.FileName.Length > 0);
+        var showTask = entries.Any(e => e.TaskPhase.Length > 0);
+
+        // A deliberately weak proxy - see TimeEntry.ExternalActivity's remarks. Shown only
+        // when there is something to show, same rule as every other optional column here.
+        var showExternal = entries.Any(e => e.ExternalActivity.Length > 0);
 
         // Only when the log actually spans more than one workstation - otherwise it is the
         // same value on every row, which is decoration.
@@ -217,7 +273,9 @@ internal static class TimesheetReport
         header.Add("View");
         if (showTemplate) header.Add("View template");
         header.Add("Type");
+        if (showTask) header.Add("Task / Phase");
         if (showDescription) header.Add("Description");
+        if (showExternal) header.Add("Non-DKSI transactions (raw names)");
         if (showFile) header.Add("Model file");
         if (showMachine) header.Add("Workstation");
 
@@ -239,7 +297,9 @@ internal static class TimesheetReport
             row.Add(entry.ViewName.Length == 0 ? "(no view — manual entry)" : entry.ViewName);
             if (showTemplate) row.Add(Blank(entry.ViewTemplate));
             row.Add(entry.Type.ToString());
+            if (showTask) row.Add(Blank(entry.TaskPhase));
             if (showDescription) row.Add(Blank(entry.Description));
+            if (showExternal) row.Add(Blank(entry.ExternalActivity));
             if (showFile) row.Add(Blank(entry.FileName));
             if (showMachine) row.Add(Blank(entry.Machine));
 
@@ -251,7 +311,9 @@ internal static class TimesheetReport
         widths.Add(44);
         if (showTemplate) widths.Add(18);
         widths.Add(11);
+        if (showTask) widths.Add(24);
         if (showDescription) widths.Add(30);
+        if (showExternal) widths.Add(40);
         if (showFile) widths.Add(34);
         if (showMachine) widths.Add(14);
 

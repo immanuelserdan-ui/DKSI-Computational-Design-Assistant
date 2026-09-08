@@ -23,6 +23,8 @@ internal static class TimeLogCsv
         // Appended, never inserted. Anything reading by index keeps working, and a row
         // written before these existed simply runs out of fields - which Parse tolerates.
         "Selskab", "Afdeling", "ClientNumber", "Operator",
+        // Same rule: appended after everything above, for the same reason.
+        "QA", "TaskPhase", "TaskCategory", "ExternalActivity",
     ];
 
     /// <summary>The header a file must carry to hold every column this version writes.</summary>
@@ -53,6 +55,10 @@ internal static class TimeLogCsv
             entry.Afdeling,
             entry.ClientNumber,
             entry.Operator,
+            entry.QA,
+            entry.TaskPhase,
+            entry.TaskCategory,
+            entry.ExternalActivity,
         };
 
         return string.Join(separator, fields.Select(f => Quote(f, separator)));
@@ -121,6 +127,10 @@ internal static class TimeLogCsv
                 Afdeling = At(13),
                 ClientNumber = At(14),
                 Operator = At(15),
+                QA = At(16),
+                TaskPhase = At(17),
+                TaskCategory = At(18),
+                ExternalActivity = At(19),
             };
         }
         catch
