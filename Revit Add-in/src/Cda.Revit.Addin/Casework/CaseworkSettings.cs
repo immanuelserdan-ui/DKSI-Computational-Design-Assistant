@@ -41,26 +41,31 @@ public sealed class CaseworkSettings
     public BuiltInCategory[] FittingCategories { get; init; } = [BuiltInCategory.OST_Casework];
 
     /// <summary>
-    /// What may be cut. Walls only, because that is the manual step being replaced.
+    /// What may be cut. Walls, for the side voids that reach into an adjacent or
+    /// intersecting wall, and floors, for the bottom voids underneath a unit that reach
+    /// down into the floor finish and the slab below it.
     ///
-    /// Floors and ceilings are deliberately absent: a side void that clips a slab is
-    /// normally a modelling accident rather than an intended cut, and cutting one is a
-    /// visible change to a drawing that nobody asked for.
+    /// Ceilings stay deliberately absent: nothing in these families carries a void that
+    /// reaches upward, so offering ceilings would only spend rejected attempts.
     /// </summary>
-    public BuiltInCategory[] TargetCategories { get; init; } = [BuiltInCategory.OST_Walls];
+    public BuiltInCategory[] TargetCategories { get; init; } =
+        [BuiltInCategory.OST_Walls, BuiltInCategory.OST_Floors];
 
     /// <summary>
-    /// How far past the instance's own bounding box to look for walls, in millimetres.
+    /// How far past the instance's own bounding box to look for walls and floors, in
+    /// millimetres.
     ///
     /// This is the one number that has to be generous, and it is worth being clear about
     /// why. An instance's bounding box in the project covers its SOLID geometry — voids are
     /// consumed at regeneration and contribute nothing to it. So a side void sticking 60 mm
-    /// out of the carcass to reach the return wall is outside the box the model reports, and
-    /// a tight net would never offer that wall as a candidate.
+    /// out of the carcass to reach the return wall, or a bottom void reaching down into the
+    /// floor build-up, is outside the box the model reports, and a tight net would never
+    /// offer that wall or floor as a candidate. The padding applies in Z the same as X and
+    /// Y, so it covers the downward reach as well as the sideways one.
     ///
-    /// 300 mm covers any side void these families carry with room to spare. Over-reaching
-    /// costs nothing but a rejected attempt — see <see cref="CaseworkVoidCutter"/> for why
-    /// the attempt itself is the test.
+    /// 300 mm covers any side or bottom void these families carry with room to spare.
+    /// Over-reaching costs nothing but a rejected attempt — see
+    /// <see cref="CaseworkVoidCutter"/> for why the attempt itself is the test.
     /// </summary>
     public double ReachMm { get; init; } = 300;
 

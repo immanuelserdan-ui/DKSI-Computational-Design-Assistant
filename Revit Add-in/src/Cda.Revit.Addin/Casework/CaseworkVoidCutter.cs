@@ -12,6 +12,17 @@ public sealed class CaseworkCutResult
     /// <summary>Cuts actually created this pass.</summary>
     public required int CutsAdded { get; init; }
 
+    /// <summary>
+    /// The walls and floors that were actually cut this pass, de-duplicated.
+    ///
+    /// Reported because the count alone cannot answer the question the caller has to ask next:
+    /// a cut changes the finish and paint area of the room the cut element faces, and naming
+    /// the rooms means starting from the elements. <see cref="Automation.CaseworkCutAutomation"/>
+    /// turns these into the finish engine's work list; without them it could only say "something
+    /// is stale somewhere", which is not a scope a measurement pass can be run over.
+    /// </summary>
+    public required IReadOnlyList<ElementId> CutElementIds { get; init; }
+
     /// <summary>Pairs Revit rejected because the void does not reach the wall. Expected, not a fault.</summary>
     public required int NoIntersection { get; init; }
 
@@ -23,19 +34,20 @@ public sealed class CaseworkCutResult
 
 /// <summary>
 /// Applies the Cut Geometry step that Revit will not apply on its own: every wall a casework
-/// fitting's SIDE voids reach into, cut by that instance.
+/// fitting's SIDE voids reach into, and every floor its BOTTOM voids reach down into
+/// (finish and slab alike), cut by that instance.
 ///
 /// WHAT REVIT DOES AND DOES NOT DO
 ///   A family marked "Cut with Voids When Loaded" cuts its HOST when the instance is placed.
-///   That is the primary void and it needs no help. Every other wall in the room is simply
-///   not part of that relationship — an adjacent or intersecting wall is cut only when
-///   somebody runs Modify → Cut → Cut Geometry and picks the two elements by hand. This
-///   class is that hand.
+///   That is the primary void and it needs no help. Every other wall or floor nearby is
+///   simply not part of that relationship — an adjacent wall, or the floor finish and slab
+///   underneath, is cut only when somebody runs Modify → Cut → Cut Geometry and picks the
+///   two elements by hand. This class is that hand.
 ///
 /// THE ATTEMPT IS THE TEST, AND THAT IS THE CENTRAL DESIGN DECISION.
-///   The obvious implementation measures the void solids and intersects them with each wall.
-///   It cannot be written honestly against a project document. Void geometry is consumed at
-///   family regeneration: <c>FamilyInstance.get_Geometry</c> returns solids, and
+///   The obvious implementation measures the void solids and intersects them with each
+///   candidate. It cannot be written honestly against a project document. Void geometry is
+///   consumed at family regeneration: <c>FamilyInstance.get_Geometry</c> returns solids, and
 ///   <c>IncludeNonVisibleObjects</c> does not bring the voids back. The only way to read the
 ///   real void forms is <c>Document.EditFamily</c>, which opens the family in the background,
 ///   costs the better part of a second per family, cannot be called while a transaction is
@@ -45,14 +57,14 @@ public sealed class CaseworkCutResult
 ///   Every substitute for that is an approximation: a box around the void, a bounding-box
 ///   overlap, a distance threshold. An approximation that says yes when the truth is no
 ///   creates a cut that removes nothing, and a no-op cut is not free — it is a permanent
-///   relationship on the wall, it shows in Revit's cut list, and the finish engine's
-///   <c>GetElementsBeingCut</c> checks will believe it.
+///   relationship on the wall or floor, it shows in Revit's cut list, and the finish
+///   engine's <c>GetElementsBeingCut</c> checks will believe it.
 ///
 ///   So this does not approximate. It offers Revit a candidate pair and lets Revit's own
 ///   geometry engine answer, because <c>AddInstanceVoidCut</c> refuses a pair whose void does
 ///   not intersect the element. The refusal arrives as an exception, which is why the loop
 ///   below catches one on the ordinary path rather than only on the failure path. The result
-///   is exact: every cut this creates is a cut whose void genuinely reaches that wall.
+///   is exact: every cut this creates is a cut whose void genuinely reaches that wall or floor.
 ///
 /// WHICH MAKES THE DRY RUN EXACT TOO.
 ///   There is no <c>apply</c> flag here. The pass always writes and must run inside a
@@ -62,9 +74,9 @@ public sealed class CaseworkCutResult
 ///   apply can never disagree.
 ///
 /// COST. Per fitting: one bounding-box collector query, then one <c>AddInstanceVoidCut</c>
-/// attempt per candidate wall. No document regeneration inside the loop, no wall geometry
-/// extracted, no boolean operations. The expensive part is the rejected attempts, which is
-/// why the candidate net is capped and sorted nearest-first.
+/// attempt per candidate wall or floor. No document regeneration inside the loop, no
+/// geometry extracted from the candidate, no boolean operations. The expensive part is the
+/// rejected attempts, which is why the candidate net is capped and sorted nearest-first.
 /// </summary>
 public sealed class CaseworkVoidCutter
 {
@@ -87,6 +99,14 @@ public sealed class CaseworkVoidCutter
     private readonly HashSet<long> _familyVoidsRejected = [];
 
     private int _cuts;
+
+    /// <summary>
+    /// The walls and floors actually cut this pass. A set, because one element can be cut by
+    /// several fittings in the same run and the caller uses this to build a room scope - one
+    /// entry per element is what that needs.
+    /// </summary>
+    private readonly HashSet<ElementId> _cutElements = [];
+
     private int _noIntersection;
     private int _alreadyCut;
     private int _notCuttable;
@@ -98,7 +118,8 @@ public sealed class CaseworkVoidCutter
     }
 
     /// <summary>
-    /// Cuts every wall the given fittings' voids reach.
+    /// Cuts every wall or floor the given fittings' voids reach — side voids into walls,
+    /// bottom voids down into the floor finish and the slab beneath it.
     ///
     /// MUST be called inside an open transaction — it writes on the successful path. Wrap it
     /// in <see cref="Transactions.Run"/> to apply, or <see cref="Transactions.Probe"/> to get
@@ -107,7 +128,7 @@ public sealed class CaseworkVoidCutter
     /// <param name="scope">
     /// The fittings to process, or null/empty for every fitting in the model. Scoping is safe
     /// here in a way it is not for the lining resolver: a cut is a property of one instance
-    /// and one wall, not of a neighbourhood, so processing one fitting cannot give a
+    /// and one target, not of a neighbourhood, so processing one fitting cannot give a
     /// different answer than processing all of them.
     /// </param>
     public CaseworkCutResult Run(IReadOnlyList<Element>? scope = null)
@@ -133,14 +154,15 @@ public sealed class CaseworkVoidCutter
             [
                 $"{fittings.Count} fitting(s) examined" +
                 (scope is { Count: > 0 } ? " (scoped)" : " (whole model)") + ".",
-                $"{_cuts} wall cut(s) created; {_alreadyCut} already cut and left alone.",
-                $"{_noIntersection} candidate wall(s) refused by Revit - the voids do not reach them.",
+                $"{_cuts} cut(s) created (walls and floors); {_alreadyCut} already cut and left alone.",
+                $"{_noIntersection} candidate(s) refused by Revit - the voids do not reach them.",
                 $"{_notCuttable} candidate(s) skipped as not cuttable with a void.",
                 $"{_warnings.Count} warning(s).",
             ],
             Rows = _rows,
             Warnings = _warnings,
             CutsAdded = _cuts,
+            CutElementIds = [.. _cutElements],
             NoIntersection = _noIntersection,
             AlreadyCut = _alreadyCut,
             FittingsExamined = fittings.Count,
@@ -222,6 +244,7 @@ public sealed class CaseworkVoidCutter
                 InstanceVoidCutUtils.AddInstanceVoidCut(_doc, target, fitting);
 
                 _cuts++;
+                _cutElements.Add(target.Id);
                 alreadyCut.Add(target.Id.Value);
                 Row(fitting, target, "CUT", "void reaches this wall");
             }
@@ -261,12 +284,12 @@ public sealed class CaseworkVoidCutter
     }
 
     /// <summary>
-    /// Walls near enough to be worth offering, nearest first.
+    /// Walls and floors near enough to be worth offering, nearest first.
     ///
     /// Nearest-first matters only because of the cap: a fitting in a crowded plan can have
-    /// more walls in its net than the cap allows, and the ones its voids actually reach are
-    /// always the closest. Sorting on bounding-box centres is crude and entirely adequate for
-    /// choosing which twelve of twenty walls to try.
+    /// more candidates in its net than the cap allows, and the ones its voids actually reach
+    /// are always the closest. Sorting on bounding-box centres is crude and entirely adequate
+    /// for choosing which twelve of twenty candidates to try.
     /// </summary>
     private IReadOnlyList<Element> Candidates(FamilyInstance fitting, ICollection<long> alreadyCut)
     {

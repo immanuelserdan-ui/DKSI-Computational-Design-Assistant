@@ -9,9 +9,10 @@ using Cda.Revit.Addin.Infrastructure;
 namespace Cda.Revit.Addin.Commands;
 
 /// <summary>
-/// The manual entry point for the casework side-void cutter. The automation runs the same
-/// engine off DocumentChanged; this is the only way to get a DRY RUN, the only way to sweep
-/// a model that was drawn before the add-in existed, and the only way to see the report.
+/// The manual entry point for the casework side- and bottom-void cutter. The automation
+/// runs the same engine off DocumentChanged; this is the only way to get a DRY RUN, the
+/// only way to sweep a model that was drawn before the add-in existed, and the only way to
+/// see the report.
 /// </summary>
 [Transaction(TransactionMode.Manual)]
 public sealed class CutCaseworkVoidsCommand : CommandBase
@@ -30,13 +31,14 @@ public sealed class CutCaseworkVoidsCommand : CommandBase
 
         var choice = new TaskDialog(CommandName)
         {
-            MainInstruction = "Cut walls with casework side voids?",
+            MainInstruction = "Cut walls and floors with casework voids?",
             MainContent =
-                "Every wall within " + $"{settings.ReachMm:0} mm of a casework fitting is offered to " +
-                "Revit as a cut; Revit accepts the ones the family's voids genuinely reach and refuses " +
-                "the rest. Host walls are already cut when the fitting is placed and are left alone, " +
-                "and a wall that is already cut by that fitting is skipped - so this is safe to " +
-                "re-run as often as you like.\n\n" +
+                "Every wall or floor within " + $"{settings.ReachMm:0} mm of a casework fitting is " +
+                "offered to Revit as a cut - side voids into walls, bottom voids down into the floor " +
+                "finish and slab underneath - and Revit accepts the ones the family's voids genuinely " +
+                "reach and refuses the rest. Host walls are already cut when the fitting is placed and " +
+                "are left alone, and an element already cut by that fitting is skipped - so this is " +
+                "safe to re-run as often as you like.\n\n" +
                 "Nothing is ever un-cut. Put '" + settings.SkipComment + "' in an instance's Comments " +
                 "to have it ignored.",
             CommonButtons = TaskDialogCommonButtons.Cancel,
@@ -85,36 +87,43 @@ public sealed class CutCaseworkVoidsCommand : CommandBase
 
         var result = captured!;
 
-        var csvPath = ReportWriter.DefaultPath(ctx.Document, apply ? "casework-cuts" : "casework-cuts-dryrun");
-        ReportWriter.WriteCsv(csvPath, result.Rows);
-
         var log = new List<string>(result.Summary) { string.Empty, "WARNINGS:" };
         log.AddRange(result.Warnings.Count > 0 ? result.Warnings.Select(w => "  " + w) : ["  (none)"]);
 
-        var logPath = ReportWriter.WriteSidecarLog(csvPath, log);
+        // The apply path has already committed its cuts by this point, so a failure to write
+        // the report must not be reported as the command failing - see ReportWriter.TryWriteReport.
+        var csvPath = ReportWriter.TryWriteReport(
+            ctx.Document, apply ? "casework-cuts" : "casework-cuts-dryrun",
+            result.Rows, log, out var reportProblem, out var logPath);
 
         Log.Info($"{CommandName}: apply={apply}, cuts={result.CutsAdded}, " +
-                 $"warnings={result.Warnings.Count}, report={csvPath}");
+                 $"warnings={result.Warnings.Count}, report={csvPath ?? "(not written)"}");
 
         var summary = new TaskDialog(CommandName)
         {
             MainInstruction = apply
-                ? $"Done - {result.CutsAdded} wall cut(s) created."
-                : $"Dry run complete - {result.CutsAdded} wall cut(s) would be created. Nothing was modified.",
-            MainContent = string.Join("\n", result.Summary),
+                ? $"Done - {result.CutsAdded} cut(s) created."
+                : $"Dry run complete - {result.CutsAdded} cut(s) would be created. Nothing was modified.",
+            MainContent = string.Join("\n", result.Summary) +
+                          (reportProblem.Length == 0 ? string.Empty : $"\n\n{reportProblem}"),
             ExpandedContent = result.Warnings.Count > 0
                 ? string.Join(Environment.NewLine, result.Warnings.Take(60))
                 : null,
-            FooterText = $"Report: {csvPath}",
+            FooterText = csvPath is null ? "No report was written." : $"Report: {csvPath}",
             CommonButtons = TaskDialogCommonButtons.Close,
         };
-        summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open the report");
-        summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open the log");
+
+        // Only offered when there is actually a file behind the link.
+        if (csvPath is not null)
+        {
+            summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open the report");
+            summary.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open the log");
+        }
 
         var shown = summary.Show();
-        if (shown == TaskDialogResult.CommandLink1)
+        if (csvPath is not null && shown == TaskDialogResult.CommandLink1)
             Process.Start(new ProcessStartInfo { FileName = csvPath, UseShellExecute = true });
-        else if (shown == TaskDialogResult.CommandLink2)
+        else if (logPath is not null && shown == TaskDialogResult.CommandLink2)
             Process.Start(new ProcessStartInfo { FileName = logPath, UseShellExecute = true });
 
         return Result.Succeeded;

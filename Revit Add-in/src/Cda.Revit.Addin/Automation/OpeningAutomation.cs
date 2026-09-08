@@ -81,6 +81,83 @@ internal static class OpeningAutomation
         /// one side of it and "Left" on the other.
         /// </summary>
         public int LeftIsFamilyPlusX { get; set; } = 1;
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.DeriveSidesFromFacing"/>, surfaced here for the
+        /// same reason <see cref="LeftIsFamilyPlusX"/> is: a settings edit rather than a rebuild.
+        ///
+        /// OFF by default, and NOT cosmetic - unlike LeftIsFamilyPlusX, this one moves numbers.
+        /// Switching it on makes every flipped door's FROM and TO swap relative to Revit's own
+        /// From Room / To Room fields, which is the entire point and also the entire risk: any
+        /// other schedule or export reading the built-in fields will then disagree with the
+        /// door schedules, silently. Read the note on UdvendigSettings.DeriveSidesFromFacing
+        /// before turning it on.
+        /// </summary>
+        public bool DeriveDoorSidesFromFacing { get; set; }
+
+        /// <summary>
+        /// Let the resolver REPLACE the built-in From/To Room columns in every schedule with the
+        /// SCRP parameters. OFF - see UdvendigSettings.RepointSchedules for the full account of
+        /// why this default changed. Short version: it deleted an office standard from 39
+        /// schedules, and re-did it on every model edit, so nobody could put it back by hand.
+        /// </summary>
+        public bool RepointScheduleColumns { get; set; }
+
+        /// <summary>
+        /// Add back the built-in From/To Room columns removed by earlier builds. A one-off
+        /// repair: switch on, run, switch off. Additive only - it can never remove a column.
+        /// </summary>
+        public bool RestoreBuiltInRoomColumns { get; set; }
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.RestoreFromToScheduleColumns"/>. A one-off
+        /// repair, same discipline as <see cref="RestoreBuiltInRoomColumns"/>: switch on, run
+        /// 'Resolve Udvendig Rooms' from the ribbon once, switch off. Unlike that one, this
+        /// REMOVES the SCRP column it replaces, and only in the interior 'Door * FROM/TO' set -
+        /// see the setting's own doc comment for why the two schedule sets need this to differ.
+        /// </summary>
+        public bool RestoreFromToScheduleColumns { get; set; }
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.RevealExtDoorRoomColumns"/>. A one-off repair,
+        /// same discipline as the two above: switch on, run 'Resolve Udvendig Rooms' from the
+        /// ribbon once, switch off. The gentlest of the three - it changes column visibility,
+        /// one heading and column order, and never adds or removes a field.
+        /// </summary>
+        public bool RevealExtDoorRoomColumns { get; set; }
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.SubstituteExteriorSide"/>. UNLIKE every other
+        /// flag here this one defaults to TRUE, because it is the tool's original behaviour and
+        /// switching it off changes what the SCRP parameters mean for exterior doors.
+        /// </summary>
+        public bool SubstituteExteriorSide { get; set; } = true;
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.RepointFromToScheduleColumns"/>. A one-off
+        /// repair. Pair it with <see cref="SubstituteExteriorSide"/> set to false, and never
+        /// with <see cref="RestoreFromToScheduleColumns"/>, which is its exact opposite.
+        /// </summary>
+        public bool RepointFromToScheduleColumns { get; set; }
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.FilterExtDoorSchedules"/>. A one-off repair,
+        /// and the only flag in this file that changes which ROWS a schedule lists.
+        /// </summary>
+        public bool FilterExtDoorSchedules { get; set; }
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.RemoveExtDoorFilter"/>. The way back from
+        /// <see cref="FilterExtDoorSchedules"/>, which empties that set in this model.
+        /// </summary>
+        public bool RemoveExtDoorFilter { get; set; }
+
+        /// <summary>
+        /// Mirror of <see cref="UdvendigSettings.PointExtDoorToSubstituted"/>. The last step of
+        /// the office rule: the 'Ext Door' columns stop showing 'Udvendig'. A one-off repair,
+        /// and it needs the substituted shared parameters to exist first.
+        /// </summary>
+        public bool PointExtDoorToSubstituted { get; set; }
     }
 
     private static readonly string SettingsPath = Path.Combine(
@@ -108,18 +185,56 @@ internal static class OpeningAutomation
 
     public static bool LiningEnabled => _options.ResolveLiningClashes;
 
+    /// <summary>
+    /// Exposed so the ribbon command builds its resolver the same way this automation does.
+    /// Without it a manual run would use a different rule from the automatic one and quietly
+    /// overwrite its answers - the two must never disagree about what a door's sides are.
+    /// </summary>
+    public static bool DeriveDoorSidesFromFacing => _options.DeriveDoorSidesFromFacing;
+
+    public static bool RepointScheduleColumns => _options.RepointScheduleColumns;
+
+    public static bool RestoreBuiltInRoomColumns => _options.RestoreBuiltInRoomColumns;
+
+    public static bool RestoreFromToScheduleColumns => _options.RestoreFromToScheduleColumns;
+
+    public static bool RevealExtDoorRoomColumns => _options.RevealExtDoorRoomColumns;
+
+    public static bool SubstituteExteriorSide => _options.SubstituteExteriorSide;
+
+    public static bool RepointFromToScheduleColumns => _options.RepointFromToScheduleColumns;
+
+    public static bool FilterExtDoorSchedules => _options.FilterExtDoorSchedules;
+
+    public static bool RemoveExtDoorFilter => _options.RemoveExtDoorFilter;
+
+    public static bool PointExtDoorToSubstituted => _options.PointExtDoorToSubstituted;
+
     public static string SettingsFile => SettingsPath;
 
     // ---------------------------------------------------------------- dirty tracking
 
     /// <summary>
-    /// Set when a door or window is added, changed or deleted. Separate from the finish
+    /// Set when a door, window or ROOM is added, changed or deleted. Separate from the finish
     /// engine's flag on purpose: moving a wall makes finish areas stale without changing
     /// any opening, and re-running a whole-model door sweep for that is wasted time.
+    ///
+    /// Rooms are in here because the resolver copies room numbers and names onto doors - see
+    /// the note in <see cref="MarkDirtyIfOpenings"/>.
     /// </summary>
-    private static bool _dirty;
+    /// <remarks>
+    /// PER DOCUMENT. As a plain static this meant "SOME document owes a resolve", and
+    /// <see cref="Run"/> - handed whatever document happened to be active when the deferred
+    /// flush fired - would sweep that one and clear the flag on the way in. The document that
+    /// actually owed the pass never got one, and the door schedules it feeds silently kept the
+    /// previous run's values. See <see cref="DocumentScoped{T}"/>.
+    /// </remarks>
+    private static readonly DocumentScoped<DocumentFlags> Flags = new();
 
-    public static bool IsDirty => _dirty;
+    public static bool IsDirty(Document doc) => Flags.For(doc).OpeningDirty;
+
+    /// <summary>Releases a closing document's flag so it cannot outlive the file.</summary>
+    public static void Forget(Document? doc) => Flags.Forget(doc);
 
     /// <summary>
     /// True when any of the given ids is a door or window — including deleted ones, which
@@ -128,23 +243,41 @@ internal static class OpeningAutomation
     /// </summary>
     public static void MarkDirtyIfOpenings(Document doc, IEnumerable<ElementId> touched, int deletedCount)
     {
-        if (_dirty) return;
+        var flags = Flags.For(doc);
+        if (flags.OpeningDirty) return;
 
         // A deletion cannot be classified — the element is gone. Rather than miss the case
         // where the thing deleted WAS a door, treat any deletion as possibly relevant. The
         // cost is one extra full sweep; the cost of the alternative is a stale schedule.
         if (deletedCount > 0)
         {
-            _dirty = true;
+            flags.OpeningDirty = true;
             return;
         }
 
         foreach (var id in touched)
         {
             var category = doc.GetElement(id)?.Category?.Id.Value;
-            if (category is (long)BuiltInCategory.OST_Doors or (long)BuiltInCategory.OST_Windows)
+
+            // ROOMS COUNT, and leaving them out was a real gap.
+            //
+            // The Udvendig resolver writes the room NUMBER and NAME of whatever sits on each
+            // side of a door into the SCRP parameters, and the door schedules read those. So
+            // renaming or renumbering a room changes what every adjacent door should say -
+            // while touching no door at all. Watching only Doors and Windows meant _dirty
+            // stayed false, RunOpeningPass early-returned, and the schedules kept showing the
+            // OLD room name until somebody happened to edit a door, reopen the model, or press
+            // the ribbon button. Save did not rescue it either: Recalculate calls
+            // RunOpeningPass unforced.
+            //
+            // That is indistinguishable from the automation being broken, and it is exactly
+            // the "the From/To values do not update" symptom. A room edit is cheap to react to
+            // and rare next to geometry edits, so the extra sweep costs little.
+            if (category is (long)BuiltInCategory.OST_Doors
+                         or (long)BuiltInCategory.OST_Windows
+                         or (long)BuiltInCategory.OST_Rooms)
             {
-                _dirty = true;
+                flags.OpeningDirty = true;
                 return;
             }
         }
@@ -162,12 +295,14 @@ internal static class OpeningAutomation
     public static void Run(Document doc, string transactionPrefix, string reason, bool force = false)
     {
         if (doc.IsFamilyDocument || doc.IsReadOnly) return;
-        if (!force && !_dirty) return;
+
+        var flags = Flags.For(doc);
+        if (!force && !flags.OpeningDirty) return;
 
         // Cleared up front, not at the end. A failure part-way must not leave the flag set
         // and have every subsequent trigger retry the same failing sweep; the next real
         // edit sets it again, which is the right moment to try once more.
-        _dirty = false;
+        flags.OpeningDirty = false;
 
         if (_options.ResolveUdvendig) RunUdvendig(doc, transactionPrefix, reason);
         if (_options.ResolveLiningClashes) RunLining(doc, transactionPrefix, reason);
@@ -178,13 +313,30 @@ internal static class OpeningAutomation
         try
         {
             var watch = Stopwatch.StartNew();
-            var resolver = new UdvendigRoomResolver(doc, new UdvendigSettings());
+            var resolver = new UdvendigRoomResolver(doc, new UdvendigSettings
+            {
+                DeriveSidesFromFacing = _options.DeriveDoorSidesFromFacing,
+                RepointSchedules = _options.RepointScheduleColumns,
+                RestoreBuiltInRoomColumns = _options.RestoreBuiltInRoomColumns,
+                RestoreFromToScheduleColumns = _options.RestoreFromToScheduleColumns,
+                RevealExtDoorRoomColumns = _options.RevealExtDoorRoomColumns,
+                SubstituteExteriorSide = _options.SubstituteExteriorSide,
+                RepointFromToScheduleColumns = _options.RepointFromToScheduleColumns,
+                FilterExtDoorSchedules = _options.FilterExtDoorSchedules,
+                RemoveExtDoorFilter = _options.RemoveExtDoorFilter,
+                PointExtDoorToSubstituted = _options.PointExtDoorToSubstituted,
+            });
             UdvendigResult? result = null;
 
             // Whole model, always: selection is [] rather than "whatever happens to be
             // selected". An automatic pass must not depend on where the user's cursor is.
+            //
+            // swallowWarnings, because nobody triggered this and nobody is waiting on it. It
+            // runs from an idle tick, from document open, and from inside DocumentSaving - and
+            // a modal Revit warning raised from any of those is, to the user, an add-in that
+            // has hung the model. Errors are untouched and still roll the transaction back.
             Transactions.Run(doc, transactionPrefix + "resolve Udvendig rooms",
-                () => result = resolver.Run(apply: true, []));
+                () => result = resolver.Run(apply: true, []), swallowWarnings: true);
 
             Log.Info($"Opening automation: Udvendig resolved because {reason}. " +
                      $"Took {watch.ElapsedMilliseconds} ms, {result!.Warnings.Count} warning(s).");
@@ -213,8 +365,12 @@ internal static class OpeningAutomation
 
             // The apply pass calls Document.Regenerate() and reads "Lining Length" back off
             // the family, so the whole thing has to sit inside one transaction.
+            //
+            // swallowWarnings for the same reason as the Udvendig pass above: this is an
+            // unattended sweep over every opening in the model, run from idle, from document
+            // open and from inside DocumentSaving.
             Transactions.Run(doc, transactionPrefix + "resolve lining clashes",
-                () => result = resolver.Run(apply: true, []));
+                () => result = resolver.Run(apply: true, []), swallowWarnings: true);
 
             var lining = result!;
             var reportPath = WriteLiningReport(doc, lining);
