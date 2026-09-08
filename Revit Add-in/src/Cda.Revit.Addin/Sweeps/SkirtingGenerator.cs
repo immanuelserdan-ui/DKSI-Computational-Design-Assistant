@@ -287,6 +287,17 @@ public sealed class SkirtingGenerator
     /// <summary>Wall-hosted elements that are not openings, so cannot break a board.</summary>
     private int _hostedNonOpenings;
 
+    /// <summary>
+    /// Openings genuinely hosted in a wall, but not on THIS room's short stretch of it -
+    /// see the guard in <see cref="OpeningSpans"/>. Confirmed 2026-09-04 against a door
+    /// hosted on wall 29307987 (shared by five rooms) that connects Bad and Gang, over 2 m
+    /// from Entre's own 1450 mm stretch of that same wall: Curve.Project clamped every point
+    /// of its geometry onto Entre's boundary curve anyway, manufacturing a blocker at Entre's
+    /// corner that had nothing to do with Entre. Same defect class PlaceReveals' OnRun guard
+    /// already protects against - this is the same fix, for the pass that matters more.
+    /// </summary>
+    private int _openingsElsewhere;
+
     /// <summary>Boundary segments folded into a neighbour because they were collinear.</summary>
     private int _segmentsMerged;
 
@@ -968,6 +979,16 @@ public sealed class SkirtingGenerator
             $"{_mePassedThrough} M&E element(s) passed through rather than cut around.");
 
         _report.Add(
+            $"ON THIS RUN: {_openingsElsewhere} insert(s) hosted in a wall were NOT measured " +
+            "against a run because they sit on a different room's stretch of the same wall - " +
+            "walls shared by several rooms host every one of those rooms' doors, and Curve.Project " +
+            "clamps a far-away point onto the nearest end of a bound curve rather than rejecting " +
+            "it. Unguarded, that turns a door on the OTHER side of a shared wall into a phantom " +
+            "blocker sitting exactly at this run's corner - a notch with no element anywhere near " +
+            "it. Same guard as PlaceReveals' OnRun, applied here to the run-subtraction pass " +
+            "instead of the jamb pass, which is where it costs a whole board rather than a return.");
+
+        _report.Add(
             $"DOOR GEOMETRY AVOIDED: {_openingGeometryBreaks} run(s) were cut back off the real " +
             $"solids of a door, window or opening family ({_openingModels.Count} considered). This " +
             "is separate from the opening breaks above and catches what those cannot: openings " +
@@ -975,7 +996,13 @@ public sealed class SkirtingGenerator
             "this wall's insert list, and its architrave and lining sit on this wall's face " +
             "regardless. That is the collision at partition ends and wall junctions next to a " +
             "doorway. Measured against solids rather than bounding boxes, so a swung leaf costs " +
-            "no board.");
+            $"no board. {_openingsAlreadyMeasured} insert(s) hosted in THIS run's own wall were " +
+            "skipped here rather than measured twice - the jamb pass already subtracted them, " +
+            "and re-subtracting a door's full frame and swung leaf on top of its own opening is " +
+            "what once cost one 2370 mm face 992 mm of board across four doors it had already " +
+            "accounted for. This number should track the doors actually hosted in the run's own " +
+            "wall; a run of zero on a wall known to carry doors means the two passes have stopped " +
+            "agreeing on which openings belong to it, and the double count is back.");
 
         _report.Add(
             $"MITRE JOINS: {_cornersClosed} corner(s) resolved. The board ARRIVING at a corner " +
@@ -1993,6 +2020,20 @@ public sealed class SkirtingGenerator
 
             if (!SkirtingRun.OnRun(axis, insert, _doc, thickness, _settings.JambMargin))
             {
+                // NOT AUDITED HERE, DELIBERATELY LEFT AS IS. A first version of this fix
+                // called RecordJamb on this path too, and that was wrong: this branch runs
+                // once per (room, wall) pass for every opening the WALL hosts, so a wall
+                // shared by several rooms would log "not on this run" from every room that
+                // correctly does NOT own a given opening - turning "18 listed, twice the
+                // openings that reach the floor" (see the report's own EVERY JAMB,
+                // ACCOUNTED FOR line) into noise that no longer matches that count, for no
+                // diagnostic gain: the reconciliation below already flags an opening that
+                // NEVER gets audited by anything as "THIS IS A DEFECT, not a rule", loudly,
+                // in the always-shown summary - it does not need a line per rejection to do
+                // that. The actual cause found 2026-09-04 (a wide leafless Opening whose
+                // WidthOf read 0, starving OnRun's own reach budget) is fixed at the source
+                // in ReachWidthOf; that reconciliation warning is what would catch a
+                // different cause of this same symptom in the future.
                 _revealsElsewhere++;
                 continue;
             }
@@ -3919,6 +3960,29 @@ public sealed class SkirtingGenerator
                 continue;
             }
 
+            // IS THIS INSERT ACTUALLY ON THIS RUN? Same guard PlaceReveals already uses
+            // (SkirtingRun.OnRun), and for the identical reason: FindInserts returns every
+            // insert hosted anywhere in the WALL, and a wall is very often shared by several
+            // rooms along its length. Without this, a door hosted near one room's stretch of
+            // a long shared wall still gets measured against every OTHER room's short axis
+            // segment too - and Curve.Project on a bound curve clamps a far-away point onto
+            // the segment's nearest end rather than rejecting it, which manufactures a
+            // blocker sitting exactly at that other room's corner. Confirmed 2026-09-04: a
+            // door on wall 29307987 connecting Bad and Gang, measured against Entre's 1450 mm
+            // stretch of the same wall over 2 m away, cut ~455 mm off Entre's run at the
+            // corner nearest that door - a notch with no element anywhere near it, because
+            // the "blocker" was never really there.
+            //
+            // The reach formula is the same as PlaceReveals' too, deliberately: an insert
+            // that genuinely straddles this run's own end must still be kept (see OnRun's own
+            // doc comment), so this only rejects inserts that are actually elsewhere on the
+            // wall, not ones this run legitimately shares a corner with.
+            if (!SkirtingRun.OnRun(axis, insert, _doc, SafeWidth(wall), _settings.JambMargin))
+            {
+                _openingsElsewhere++;
+                continue;
+            }
+
             // Real jamb geometry first - lining and architrave, which are wider than the
             // hole. Rough Width is the fallback for inserts with no readable solids.
             var span = SkirtingRun.FromJambGeometry(
@@ -4599,21 +4663,20 @@ public sealed class SkirtingGenerator
     /// copy/paste between models, e-transmit and upgrade, so an ElementId written today can
     /// point at an unrelated element after the model has been through a project lifecycle.
     /// </summary>
-    private static void Stamp(Element instance, string value, Element? source = null)
+    private void Stamp(Element instance, string value, Element? source = null)
     {
-        if (ElementStamp.Write(instance, SkirtingSettings.Stamp, value, source?.UniqueId)) return;
+        // The Comments fallback that used to live here has moved into ElementStamp, so the
+        // radiator and dimension tools get the same behaviour instead of silently having none.
+        if (ElementStamp.WriteOrFallback(
+                instance, SkirtingSettings.Stamp, value, SkirtingSettings.Stamp, source?.UniqueId))
+            return;
 
-        // Storage unavailable. Fall back so the run is still re-runnable, and accept that a
-        // user editing Comments can break it.
-        try
-        {
-            var parameter = instance.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-            if (parameter is { IsReadOnly: false }) parameter.Set(value);
-        }
-        catch
-        {
-            // Unstamped: the next run may duplicate this one piece.
-        }
+        // Neither path took. Reported rather than swallowed: this board cannot be found by the
+        // next Regenerate, so it will be left standing while a second one is placed over it.
+        _problems.Add(
+            $"Board {instance.Id.Value} could not be stamped, so a later Regenerate will not " +
+            "recognise it as this tool's work - it will be left in place and a second board " +
+            "laid over it. Delete it by hand, or check that Comments is writable on this type.");
     }
 
     public SkirtingResult Result() => new()

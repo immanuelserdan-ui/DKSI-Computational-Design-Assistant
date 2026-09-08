@@ -93,13 +93,26 @@ public sealed class PlaceSkirtingCommand : CommandBase
         // A tool that is right every time beats one that is faster and sometimes wrong.
         var generator = new SkirtingGenerator(ctx.Document, settings);
 
-        Transactions.Run(ctx.Document, CommandName, generator.Run);
+        // swallowWarnings, for the same reason Place Radiators and Dimension Rooms use it: this
+        // places a component along every boundary of every qualifying room in the model, plus a
+        // jamb board at every reveal, so a run is hundreds of creations rather than a handful.
+        // Revit posts warnings during that kind of bulk placement ("element is slightly off
+        // axis", "outside its host" and a dozen more), and the default handler shows each in a
+        // modal dialog - which stops the run dead partway and leaves the user clicking through
+        // identical boxes they have stopped reading. Warnings only; errors still surface and
+        // still roll the whole run back.
+        Transactions.Run(ctx.Document, CommandName, generator.Run, swallowWarnings: true);
 
         var result = generator.Result();
 
-        var logPath = ReportWriter.WriteSidecarLog(
-            ReportWriter.DefaultPath(ctx.Document, "skirting"),
-            [.. result.Report, string.Empty, .. result.Problems]);
+        // The boards are already committed by now, so an unwritable reports folder must not
+        // turn a successful run into "the command could not complete" - see
+        // ReportWriter.TryWriteLog. This tool's report has always been the sidecar log alone,
+        // with no CSV beside it, and that is unchanged.
+        var logPath = ReportWriter.TryWriteLog(
+            ctx.Document, "skirting",
+            [.. result.Report, string.Empty, .. result.Problems],
+            out var reportProblem);
 
         Log.Info($"{CommandName}: {result.Placed} piece(s), {Measure.ToMetres(result.TotalLength):0.00} m, " +
                  $"{result.RoomsExcluded} room(s) excluded, {result.Problems.Count} problem(s).");
@@ -127,9 +140,10 @@ public sealed class PlaceSkirtingCommand : CommandBase
                     : string.Empty) +
                 (result.Problems.Count == 0
                     ? string.Empty
-                    : $"\n\n{result.Problems.Count} problem(s):\n" + string.Join("\n", result.Problems.Take(6))),
+                    : $"\n\n{result.Problems.Count} problem(s):\n" + string.Join("\n", result.Problems.Take(6))) +
+                (reportProblem.Length == 0 ? string.Empty : $"\n\n{reportProblem}"),
             ExpandedContent = string.Join(Environment.NewLine, result.Report),
-            FooterText = $"Report: {logPath}",
+            FooterText = logPath is null ? "No report was written." : $"Report: {logPath}",
             CommonButtons = TaskDialogCommonButtons.Close,
         };
         summary.Show();

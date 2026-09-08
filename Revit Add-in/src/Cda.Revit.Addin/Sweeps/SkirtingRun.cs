@@ -212,10 +212,62 @@ public static class SkirtingRun
 
         if (nearest is null) return true;
 
-        var reach = hostThickness + (WidthOf(insert, doc) / 2.0) + margin;
+        var reach = hostThickness + (ReachWidthOf(insert, doc) / 2.0) + margin;
         var flat = new XYZ(nearest.X - centre.X, nearest.Y - centre.Y, 0);
 
         return flat.GetLength() <= reach;
+    }
+
+    /// <summary>
+    /// The width <see cref="OnRun"/>'s reach budget uses - <see cref="WidthOf"/> when it has a
+    /// real answer, and the insert's own bounding-box footprint when it does not.
+    ///
+    /// SEPARATE FROM WidthOf DELIBERATELY, RATHER THAN CHANGING WHAT IT RETURNS.
+    /// <see cref="FromInsert"/> also calls WidthOf, and already has its own correct
+    /// bounding-box fallback for the width-is-zero case (it falls through to projecting the
+    /// bounding box directly). Making WidthOf itself return a bounding-box guess would change
+    /// WHICH branch FromInsert takes - "centre + width" instead of "project the box" - and
+    /// risk moving a jamb SPAN that already measures correctly. This fixes only the "is this
+    /// insert on this run" gate.
+    ///
+    /// WHY THIS WAS MISSING A CASE. A raw Opening (Architecture > Opening > Wall - a
+    /// floor-reaching rectangular cut with no leaf, no frame, nothing hosted on it) exposes
+    /// none of the parameters WidthOf checks: it is not a FamilyInstance, so it has no Rough
+    /// Width, Void Width, FAMILY_WIDTH_PARAM or "Width". WidthOf silently returned 0 for it,
+    /// which starves OnRun's reach formula of exactly the term its own doc comment says
+    /// covers this: "An insert straddling the run's end reads about half its own width, which
+    /// is why the width is part of the reach." Revit's own room-boundary computation stops
+    /// EACH side's polygon at its own near jamb around a floor-reaching opening - neither
+    /// room's boundary curve ever reaches the opening's true centre - so with width == 0 the
+    /// projected point clamps to that near jamb and the distance back to centre (roughly half
+    /// the true width) is never inside reach, on ANY run. Confirmed 2026-09-04 against element
+    /// 29308755, a 2.16 m wide floor-reaching Opening in a basement wall: refused by every run
+    /// it was offered to, reported as "JAMB RECONCILIATION - 1 OPENING(S) DROPPED WITH NO
+    /// AUDIT LINE... THIS IS A DEFECT, not a rule."
+    /// </summary>
+    private static double ReachWidthOf(Element insert, Document doc)
+    {
+        var width = WidthOf(insert, doc);
+        if (width > 0) return width;
+
+        // THE LARGER HORIZONTAL EXTENT, NOT THE SMALLER. A rectangular wall opening's box is
+        // width x thickness x height in plan, and a wall is essentially never thinner than it
+        // is short, so the larger of the two horizontal extents is the width. Same
+        // conservative trade FromBoundingBox documents elsewhere in this file: on a
+        // non-orthogonal wall an axis-aligned box over-estimates width a little, which costs
+        // at most a slightly wider reach - the alternative, leaving width at 0, drops the
+        // opening's jambs outright rather than merely over-including a neighbour.
+        try
+        {
+            var box = insert.get_BoundingBox(null);
+            if (box is null) return 0.0;
+
+            return Math.Max(box.Max.X - box.Min.X, box.Max.Y - box.Min.Y);
+        }
+        catch
+        {
+            return 0.0;
+        }
     }
 
     /// <summary>
