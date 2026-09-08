@@ -41,12 +41,20 @@
     and must NEVER be shipped - a private copy causes type-identity mismatches at runtime, the
     ones that read as "cannot cast Element to Element". They come from the Revit install.
 
-    THE SIGNING CERTIFICATE for Painted Material Takeoff. Trusting a self-signed root is a real
-    change to a workstation's security posture and is not a decision an installer should make
-    silently on anyone's behalf. It stays a separate, documented, deliberate step - see
-    "installer/PaintTakeoff/Trust-Certificate.ps1". If this suite is going past a handful of
-    machines, the right fix is an organisational code-signing certificate, after which the step
-    disappears entirely.
+    A SIGNING CERTIFICATE FOR PAINTED MATERIAL TAKEOFF, WHICH IS NO LONGER NEEDED AT ALL. This
+    note used to describe Trust-Certificate.ps1 as a required per-workstation step, because the
+    payload was the vendor's own binary, self-signed and therefore untrusted. It is not that
+    any more: the DLL override in tools/build-painttakeoff.ps1 replaces it with a rebuild, and
+    a rebuild carries no Authenticode signature for anyone to trust. Both assemblies in this
+    bundle are unsigned, and both load.
+
+    Revit may still show its own add-in security prompt on first launch, answered once with
+    "Always Load". That is a property of unsigned add-ins generally, not of this product, and
+    no installer action can pre-answer it.
+
+    THE BUNDLE ITSELF IS ALSO UNSIGNED, which is what puts SmartScreen in front of every user.
+    That one is worth fixing: an organisational code-signing certificate removes the warning
+    and is the single highest-value change before a wide rollout.
 
   SO WHAT IS BUNDLED IS EVERYTHING THIS SUITE ACTUALLY OWNS: both add-in assemblies, both
   manifests, the shared parameter file, the time-tracking defaults, and the embedded icons that

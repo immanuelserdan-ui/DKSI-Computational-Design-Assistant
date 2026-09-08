@@ -13,7 +13,7 @@ else. The `.wxs` and the `.addin` are the exceptions: they are ours, and they ex
 | `PaintTakeoff.wxs` | WiX source for the repackage - puts the payload where Revit 2027 reads it |
 | `PaintedMaterialTakeoff.addin` | Manifest override - drops the entry that built the product's own ribbon tab |
 | `INSTALL.txt` | End-user install and troubleshooting notes for the MSI |
-| `Trust-Certificate.ps1` | Adds the signing certificate to the machine trust stores |
+| `Trust-Certificate.ps1` | Trusts the ORIGINAL vendor DLL's certificate. Not needed for the MSI built here - that payload is an unsigned rebuild |
 | `signing-public.cer` | Public half of the signing certificate (no private key) |
 
 `Trust-Certificate.ps1` defaults to the `.cer` beside it, so keep these two together.
@@ -85,7 +85,8 @@ powershell -ExecutionPolicy Bypass -File ..\..\tools\build-painttakeoff.ps1
 
 It compiles nothing. It runs an administrative install of `dist\PaintTakeoff-1.0.1.msi` to
 unpack the payload, then links `PaintTakeoff.wxs` around it - so the binaries are
-byte-for-byte 1.0.1 and the DLL keeps its original Authenticode signature. Verified by
+byte-for-byte 1.0.1 at that stage. The DLL override applied afterwards replaces the binary
+with an unsigned rebuild, which is why no trust step survives. Verified by
 extracting both packages and comparing hashes; all six files match.
 
 Two things that are easy to get wrong if this is ever rewritten:
@@ -98,10 +99,24 @@ Two things that are easy to get wrong if this is ever rewritten:
   `msiexec /a` blows MAX_PATH and reports `Error 1304 ... Verify that you have access to
   that directory`, which reads like a permissions problem and is not one.
 
-**The output MSI is unsigned.** The signing key is not in this repository and should not
-be. The DLL inside is still signed, so `Trust-Certificate.ps1` is still required and still
-does its job; what is missing is a signature on the package itself, which means a SmartScreen
-warning on the UAC prompt. Signing the MSI is a separate step for whoever holds the key.
+**The output MSI is unsigned, and so is the DLL inside it.** The signing key is not in this
+repository and should not be.
+
+The second half of that used to read "the DLL inside is still signed, so `Trust-Certificate.ps1`
+is still required". That stopped being true when the DLL override began shipping a rebuild
+instead of the vendor's binary — a rebuild has no Authenticode signature, so there is nothing
+left to trust and the script does nothing for this package. Measured, not assumed:
+
+| | Status | Signer |
+|---|---|---|
+| vendor 1.0.1 payload | `UnknownError` | `CN=Revit Automation Project - ... Dev Signing` |
+| what this repackages | `NotSigned` | *(none)* |
+
+`Trust-Certificate.ps1` is kept for anyone installing the **original vendor MSI**, which is
+still signed and still needs it.
+
+What remains missing is a signature on the package itself, which means a SmartScreen warning on
+the UAC prompt. Signing is a separate step for whoever holds an organisational certificate.
 
 ## This is NOT the DKSI Revit Tools add-in
 
@@ -116,7 +131,7 @@ alternatives on a workstation, not a merged install.
 | Install scope | All users, `C:\Program Files\Autodesk\Revit\Addins\2027\` | Per-user, `%AppData%\Autodesk\Revit\Addins\2027\Cda` |
 | Rights needed | Administrator | None, and no UAC prompt - see `../DKSI-Revit-Tools.wxs` |
 | Ribbon | "Paint Takeoff" panel, three buttons | `DKSI` tab, one "DKSI Tools" pulldown of six commands |
-| Code signing | Self-signed, trust step required | Not signed - `../../tools/build-installer.ps1` has no signing step |
+| Code signing | Not signed - the shipped payload is a rebuild, so the old trust step no longer applies | Not signed - `../../tools/build-installer.ps1` has no signing step |
 
 The paint measurement that PaintTakeoff ships is deliberately absent from the DKSI ribbon:
 `Adjust Room Boundaries` does the boundary correction and stops. See the comment above that

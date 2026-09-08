@@ -95,7 +95,22 @@ foreach ($f in $required) {
 # a second "Revit Automation" tab on every workstation.
 
 $ptStage = Join-Path $Dist 'inno-painttakeoff'
-$ptMsi   = Join-Path $Dist 'PaintTakeoff-1.0.3.msi'
+
+# NEWEST BY VERSION, NEVER A HARDCODED ONE. This said 'PaintTakeoff-1.0.3.msi' and shipped
+# that payload for weeks after it stopped being current. 1.0.3 predates the DLL override in
+# installer\PaintTakeoff - the fix that gives every split-face material its own carrier - so
+# the per-user installer was handing testers a takeoff that drops materials from the schedule
+# while leaving them in the CSV. Silent, and exactly the class of error the paint data cannot
+# tolerate. Pinning a version by hand is what let a stale payload ship unnoticed.
+$ptMsi = Get-ChildItem -Path $Dist -Filter 'PaintTakeoff-*.msi' -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        $parsed = $null
+        if ([version]::TryParse(($_.BaseName -replace '^PaintTakeoff-',''), [ref]$parsed)) {
+            [pscustomobject]@{ Path = $_.FullName; Version = $parsed }
+        }
+    } |
+    Sort-Object Version -Descending |
+    Select-Object -First 1 -ExpandProperty Path
 
 if (Test-Path $ptStage) { Remove-Item $ptStage -Recurse -Force }
 

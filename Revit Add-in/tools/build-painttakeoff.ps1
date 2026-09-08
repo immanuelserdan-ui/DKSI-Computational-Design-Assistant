@@ -13,10 +13,21 @@
 # reads, instead of the pre-2027 folder 1.0.1 targeted. See the header of
 # installer\PaintTakeoff\PaintTakeoff.wxs for the full account.
 #
-# Because the payload is copied rather than rebuilt, the DLL inside keeps its original
-# Authenticode signature - so Trust-Certificate.ps1 is still required on each workstation,
-# and still does the same job. The OUTPUT MSI is unsigned: the private key is not in this
-# repository and must not be. Signing the package is a separate step for whoever holds it.
+# NO CERTIFICATE STEP IS NEEDED FOR WHAT THIS BUILDS, and this comment used to say the
+# opposite. It was written when the payload was copied out of the vendor MSI unchanged, which
+# kept the original Authenticode signature - self-signed, untrusted, hence Trust-Certificate.ps1.
+#
+# The DLL override below replaced that binary with a rebuild, and a rebuild is UNSIGNED. There
+# is no longer a certificate on the shipped DLL to trust, so running that script does nothing
+# for this package. Verified rather than assumed:
+#
+#   original 1.0.1 payload   UnknownError  CN=Revit Automation Project - ... Dev Signing
+#   what this ships          NotSigned     (no signer)
+#
+# The script is kept because the ORIGINAL vendor MSI is still signed and still needs it.
+#
+# The OUTPUT MSI is unsigned too: the private key is not in this repository and must not be.
+# Signing the package is a separate step for whoever holds an organisational certificate.
 
 param(
     # Anything built here must sort ABOVE the version already on the machine or Windows will
@@ -210,5 +221,5 @@ Say "Install:      msiexec /i `"$msi`""
 Say "Silent:       msiexec /i `"$msi`" /qn"
 Say "Uninstall:    Apps & features, or  msiexec /x `"$msi`""
 Say ""
-Say "Trust-Certificate.ps1 is still required first on a workstation that has not run it." 'Yellow'
+Say "No certificate step: the DLL override is a rebuild and carries no signature." 'Gray'
 Say ""

@@ -34,7 +34,21 @@ $InstallerDir = Join-Path $Root 'installer'
 $Dist         = Join-Path $Root 'dist'
 $Wix          = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
 
-if (-not $PaintTakeoffMsi) { $PaintTakeoffMsi = Join-Path $Dist 'PaintTakeoff-1.0.3.msi' }
+# NEWEST BY VERSION, NEVER A HARDCODED ONE - same reason as build-inno.ps1. The default here
+# was 'PaintTakeoff-1.0.3.msi', which predates the DLL override in installer\PaintTakeoff, so
+# anyone building the suite without passing -PaintTakeoffMsi chained a takeoff missing the
+# split-face carrier fix and had no way to tell from the output.
+if (-not $PaintTakeoffMsi) {
+    $PaintTakeoffMsi = Get-ChildItem -Path $Dist -Filter 'PaintTakeoff-*.msi' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $parsed = $null
+            if ([version]::TryParse(($_.BaseName -replace '^PaintTakeoff-',''), [ref]$parsed)) {
+                [pscustomobject]@{ Path = $_.FullName; Version = $parsed }
+            }
+        } |
+        Sort-Object Version -Descending |
+        Select-Object -First 1 -ExpandProperty Path
+}
 
 function Say([string]$text, [string]$colour = 'Gray') { Write-Host $text -ForegroundColor $colour }
 
@@ -150,5 +164,5 @@ Say "Progress bar: `"$bundle`" /passive /norestart"
 Say "Uninstall:    Apps & features, or  `"$bundle`" /uninstall /quiet"
 Say ""
 Say "NOT /VERYSILENT - that is an Inno Setup switch. Burn uses /quiet." 'Yellow'
-Say "Trust-Certificate.ps1 is still a separate step on each workstation." 'Yellow'
+Say "No certificate step needed - both shipped assemblies are unsigned." 'Gray'
 Say ""
