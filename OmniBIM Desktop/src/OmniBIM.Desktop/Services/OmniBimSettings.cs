@@ -14,16 +14,17 @@ public sealed class OmniBimSettings
     public string SharedTimeTrackingFolder { get; set; } = string.Empty;
 
     /// <summary>
-    /// Anthropic API key for the chat panel, ONLY as a fallback - this file lives under
-    /// %LOCALAPPDATA%, never inside the git repo, so it's a safe place to keep one, but the
-    /// ANTHROPIC_API_KEY environment variable is checked first and is the recommended path.
-    /// Never set this from source code or a value that came through chat with an assistant -
-    /// type it directly into a settings UI, or set the environment variable instead.
+    /// Gemini (Google AI Studio) API key for the chat panel, ONLY as a fallback - this file
+    /// lives under %LOCALAPPDATA%, never inside the git repo, so it's a safe place to keep
+    /// one, but the GEMINI_API_KEY environment variable is checked first and is the
+    /// recommended path. Never set this from source code or a value that came through chat
+    /// with an assistant - type it directly into a settings UI, or set the environment
+    /// variable instead. Get a free key at https://aistudio.google.com/apikey.
     /// </summary>
-    public string ClaudeApiKey { get; set; } = string.Empty;
+    public string GeminiApiKey { get; set; } = string.Empty;
 
-    /// <summary>Model id for the chat panel. See ClaudeChatService.</summary>
-    public string ClaudeModel { get; set; } = "claude-sonnet-5";
+    /// <summary>Model id for the chat panel. See GeminiChatService.</summary>
+    public string GeminiModel { get; set; } = "gemini-2.0-flash";
 
     public static string Path { get; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

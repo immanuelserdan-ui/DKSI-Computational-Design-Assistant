@@ -17,10 +17,12 @@
 
         <Border Background="White" CornerRadius="12" Padding="20" Margin="0,16,0,0" BorderBrush="#E5E7EB" BorderThickness="1">
             <StackPanel>
-                <TextBlock Text="Claude API key" FontSize="13" FontWeight="SemiBold" Foreground="#111827" />
+                <TextBlock Text="Gemini API key" FontSize="13" FontWeight="SemiBold" Foreground="#111827" />
                 <TextBlock FontSize="11" Foreground="#6B7280" TextWrapping="Wrap" Margin="0,2,0,8">
-                    Powers the OmniBIM Assistant chat panel on Home. The
-                    <Run FontFamily="Consolas" Text="ANTHROPIC_API_KEY" />
+                    Powers the OmniBIM Assistant chat panel on Home. Get a free one at
+                    <Run FontFamily="Consolas" Text="aistudio.google.com/apikey" />
+                    . The
+                    <Run FontFamily="Consolas" Text="GEMINI_API_KEY" />
                     environment variable is checked first; set one here only if you'd rather keep it local to
                     this app. Stored under %LOCALAPPDATA%, never in the git repo. Leave blank to keep the
                     current key.
@@ -56,7 +58,7 @@
                 </StackPanel>
 
                 <TextBlock Text="Model" FontSize="13" FontWeight="SemiBold" Foreground="#111827" Margin="0,16,0,0" />
-                <TextBox Text="{Binding ClaudeModel, UpdateSourceTrigger=PropertyChanged}"
+                <TextBox Text="{Binding GeminiModel, UpdateSourceTrigger=PropertyChanged}"
                          Padding="8" BorderBrush="#D1D5DB" BorderThickness="1" FontSize="12" Margin="0,4,0,0" />
             </StackPanel>
         </Border>

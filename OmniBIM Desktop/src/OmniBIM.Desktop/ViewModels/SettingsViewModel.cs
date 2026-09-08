@@ -13,8 +13,8 @@ public sealed class SettingsViewModel : ObservableObject
     private string _sharedTimeTrackingFolder = string.Empty;
     public string SharedTimeTrackingFolder { get => _sharedTimeTrackingFolder; set => SetField(ref _sharedTimeTrackingFolder, value); }
 
-    private string _claudeModel = "claude-sonnet-5";
-    public string ClaudeModel { get => _claudeModel; set => SetField(ref _claudeModel, value); }
+    private string _geminiModel = "gemini-2.0-flash";
+    public string GeminiModel { get => _geminiModel; set => SetField(ref _geminiModel, value); }
 
     /// <summary>
     /// Not bound from the PasswordBox directly - WPF has no safe two-way binding for one.
@@ -34,8 +34,8 @@ public sealed class SettingsViewModel : ObservableObject
     {
         var settings = OmniBimSettings.Load();
         SharedTimeTrackingFolder = settings.SharedTimeTrackingFolder;
-        ClaudeModel = string.IsNullOrWhiteSpace(settings.ClaudeModel) ? "claude-sonnet-5" : settings.ClaudeModel;
-        HasApiKeyConfigured = ClaudeChatService.ResolveApiKey() is not null;
+        GeminiModel = string.IsNullOrWhiteSpace(settings.GeminiModel) ? "gemini-2.0-flash" : settings.GeminiModel;
+        HasApiKeyConfigured = GeminiChatService.ResolveApiKey() is not null;
 
         SaveCommand = new RelayCommand(_ => Save());
     }
@@ -46,16 +46,16 @@ public sealed class SettingsViewModel : ObservableObject
     {
         var settings = OmniBimSettings.Load();
         settings.SharedTimeTrackingFolder = SharedTimeTrackingFolder.Trim();
-        settings.ClaudeModel = string.IsNullOrWhiteSpace(ClaudeModel) ? "claude-sonnet-5" : ClaudeModel.Trim();
+        settings.GeminiModel = string.IsNullOrWhiteSpace(GeminiModel) ? "gemini-2.0-flash" : GeminiModel.Trim();
 
         // Only overwrite a stored key if the box actually had something typed into it this
         // save - an untouched, empty PasswordBox must not blank out a key that came from the
-        // ANTHROPIC_API_KEY environment variable, or one saved in an earlier session.
-        if (!string.IsNullOrEmpty(_pendingApiKey)) settings.ClaudeApiKey = _pendingApiKey;
+        // GEMINI_API_KEY environment variable, or one saved in an earlier session.
+        if (!string.IsNullOrEmpty(_pendingApiKey)) settings.GeminiApiKey = _pendingApiKey;
 
         settings.Save();
 
-        HasApiKeyConfigured = ClaudeChatService.ResolveApiKey() is not null;
+        HasApiKeyConfigured = GeminiChatService.ResolveApiKey() is not null;
         StatusMessage = $"Saved at {DateTime.Now:HH:mm:ss}. The shared folder change needs a restart to take effect; " +
                          "the API key and model apply to the next message you send.";
     }

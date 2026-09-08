@@ -21,7 +21,7 @@ public sealed class ChatMessageViewModel(ChatMessage message)
 /// </summary>
 public sealed class ChatViewModel : ObservableObject
 {
-    private readonly ClaudeChatService _service = new();
+    private readonly GeminiChatService _service = new();
     private readonly MainViewModel _dashboard;
     private readonly List<ChatMessage> _history = [];
 
@@ -40,14 +40,15 @@ public sealed class ChatViewModel : ObservableObject
         _dashboard = dashboard;
         SendCommand = new RelayCommand(_ => _ = SendAsync());
 
-        var noKey = ClaudeChatService.ResolveApiKey() is null;
+        var noKey = GeminiChatService.ResolveApiKey() is null;
         if (noKey)
         {
             Messages.Add(new ChatMessageViewModel(new ChatMessage
             {
                 Role = ChatRole.System,
-                Text = "No Claude API key configured yet. Set the ANTHROPIC_API_KEY environment " +
-                       "variable and restart OmniBIM to use this chat.",
+                Text = "No Gemini API key configured yet. Get a free one at " +
+                       "https://aistudio.google.com/apikey, set the GEMINI_API_KEY environment " +
+                       "variable, and restart OmniBIM to use this chat.",
             }));
         }
     }
