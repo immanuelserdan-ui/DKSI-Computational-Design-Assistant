@@ -31,9 +31,11 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     public PlaceholderPageViewModel Projects { get; } = new("Projects", NoDataSourceYet);
     public PlaceholderPageViewModel ScanToBim { get; } = new("Scan to BIM", NoDataSourceYet);
     public PlaceholderPageViewModel Workflow { get; } = new("Workflow", NoDataSourceYet);
-    public PlaceholderPageViewModel TrendNews { get; } = new("Trend News", NoDataSourceYet);
     public PlaceholderPageViewModel Teams { get; } = new("Teams & Collaboration", NoDataSourceYet);
     public PlaceholderPageViewModel Reports { get; } = new("Reports", NoDataSourceYet);
+
+    /// <summary>Real, not a placeholder - a hand-curated snapshot of real articles. See TrendNewsViewModel.</summary>
+    public TrendNewsViewModel TrendNews { get; } = new();
 
     /// <summary>Real, not a placeholder - see SettingsViewModel.</summary>
     public SettingsViewModel Settings { get; } = new();

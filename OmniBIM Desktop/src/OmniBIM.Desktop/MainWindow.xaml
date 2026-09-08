@@ -43,8 +43,12 @@
         <Border Grid.Column="0" Background="#0F172A">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Top" Margin="20,20,20,24">
-                    <TextBlock Text="OmniBIM" FontSize="18" FontWeight="Bold" Foreground="White" />
-                    <TextBlock Text="by DKSI" FontSize="11" Foreground="#60A5FA" />
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="Resources/omnibim-logo-transparent.png" Width="26" Height="26" />
+                        <TextBlock Text="OmniBIM" FontSize="18" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" Margin="8,0,0,0" />
+                    </StackPanel>
+                    <TextBlock Text="by DKSI" FontSize="11" Foreground="#60A5FA" Margin="34,2,0,0" />
                 </StackPanel>
 
                 <ItemsControl ItemsSource="{Binding NavItems}">
@@ -144,8 +148,8 @@
                                         Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource PageToVisibility}, ConverterParameter=ScanToBim}" />
             <views:PlaceholderPageView DataContext="{Binding Workflow}"
                                         Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource PageToVisibility}, ConverterParameter=Workflow}" />
-            <views:PlaceholderPageView DataContext="{Binding TrendNews}"
-                                        Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource PageToVisibility}, ConverterParameter=TrendNews}" />
+            <views:TrendNewsView DataContext="{Binding TrendNews}"
+                                 Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource PageToVisibility}, ConverterParameter=TrendNews}" />
             <views:PlaceholderPageView DataContext="{Binding Teams}"
                                         Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource PageToVisibility}, ConverterParameter=Teams}" />
             <views:PlaceholderPageView DataContext="{Binding Reports}"

@@ -26,6 +26,9 @@
     <Resource Include="Resources\omnibim.ico" />
     <!-- Same reason: MainWindow.xaml's watermark Image needs this embedded to resolve its relative Source path. -->
     <Resource Include="Resources\omnibim-logo.png" />
+    <!-- Chroma-keyed transparent version (the source logo's own light backdrop removed) for
+         the sidebar icon, which sits on a dark background where the backdrop would show as a box. -->
+    <Resource Include="Resources\omnibim-logo-transparent.png" />
   </ItemGroup>
 
 </Project>
