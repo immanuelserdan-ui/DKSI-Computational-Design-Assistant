@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>OmniBIM.Desktop</RootNamespace>
     <AssemblyName>OmniBIM.Desktop</AssemblyName>
+    <ApplicationIcon>Resources\omnibim.ico</ApplicationIcon>
     <!--
       Deliberately zero PackageReferences for this Phase 1 scaffold: the data layer
       (Services/*, Models/*) and the MVVM base (ViewModels/ObservableObject) are hand-rolled
@@ -17,5 +18,14 @@
       needs to grow into a real chart control.
     -->
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Embedded as a WPF resource so MainWindow.xaml's Icon="Resources/omnibim.ico" resolves
+         regardless of where the built exe ends up - not just used for ApplicationIcon above,
+         which only sets the exe's own PE icon (taskbar, Explorer, shortcuts). -->
+    <Resource Include="Resources\omnibim.ico" />
+    <!-- Same reason: MainWindow.xaml's watermark Image needs this embedded to resolve its relative Source path. -->
+    <Resource Include="Resources\omnibim-logo.png" />
+  </ItemGroup>
 
 </Project>

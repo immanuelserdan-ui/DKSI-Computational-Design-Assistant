@@ -4,6 +4,7 @@
         xmlns:views="clr-namespace:OmniBIM.Desktop.Views"
         xmlns:local="clr-namespace:OmniBIM.Desktop.Views"
         Title="OmniBIM by DKSI" Height="800" Width="1280" MinWidth="960"
+        Icon="Resources/omnibim.ico"
         Background="#F3F4F6">
 
     <Window.Resources>
@@ -58,6 +59,14 @@
 
         <!-- Content -->
         <Grid Grid.Column="1">
+            <!-- Brand watermark: behind every page (first child = bottom of z-order in a Grid),
+                 low opacity, anchored bottom-left where the page content actually leaves empty
+                 space (below the cards in the left column) rather than the overall bottom-right
+                 corner, which the tall chat panel already covers on Home. -->
+            <Image Source="Resources/omnibim-logo.png" Opacity="0.10" Stretch="Uniform"
+                   Width="420" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                   Margin="40,0,0,40" IsHitTestVisible="False" />
+
             <ScrollViewer Visibility="{Binding CurrentPage, Converter={StaticResource PageToVisibility}, ConverterParameter=Home}">
                 <Grid Margin="24">
                     <Grid.RowDefinitions>
