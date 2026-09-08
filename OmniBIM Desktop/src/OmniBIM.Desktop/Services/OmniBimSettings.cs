@@ -24,7 +24,7 @@ public sealed class OmniBimSettings
     public string GeminiApiKey { get; set; } = string.Empty;
 
     /// <summary>Model id for the chat panel. See GeminiChatService.</summary>
-    public string GeminiModel { get; set; } = "gemini-2.0-flash";
+    public string GeminiModel { get; set; } = "gemini-3.5-flash-lite";
 
     public static string Path { get; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

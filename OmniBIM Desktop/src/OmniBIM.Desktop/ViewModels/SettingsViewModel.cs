@@ -13,7 +13,7 @@ public sealed class SettingsViewModel : ObservableObject
     private string _sharedTimeTrackingFolder = string.Empty;
     public string SharedTimeTrackingFolder { get => _sharedTimeTrackingFolder; set => SetField(ref _sharedTimeTrackingFolder, value); }
 
-    private string _geminiModel = "gemini-2.0-flash";
+    private string _geminiModel = "gemini-3.5-flash-lite";
     public string GeminiModel { get => _geminiModel; set => SetField(ref _geminiModel, value); }
 
     /// <summary>
@@ -34,7 +34,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         var settings = OmniBimSettings.Load();
         SharedTimeTrackingFolder = settings.SharedTimeTrackingFolder;
-        GeminiModel = string.IsNullOrWhiteSpace(settings.GeminiModel) ? "gemini-2.0-flash" : settings.GeminiModel;
+        GeminiModel = string.IsNullOrWhiteSpace(settings.GeminiModel) ? "gemini-3.5-flash-lite" : settings.GeminiModel;
         HasApiKeyConfigured = GeminiChatService.ResolveApiKey() is not null;
 
         SaveCommand = new RelayCommand(_ => Save());
@@ -46,7 +46,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         var settings = OmniBimSettings.Load();
         settings.SharedTimeTrackingFolder = SharedTimeTrackingFolder.Trim();
-        settings.GeminiModel = string.IsNullOrWhiteSpace(GeminiModel) ? "gemini-2.0-flash" : GeminiModel.Trim();
+        settings.GeminiModel = string.IsNullOrWhiteSpace(GeminiModel) ? "gemini-3.5-flash-lite" : GeminiModel.Trim();
 
         // Only overwrite a stored key if the box actually had something typed into it this
         // save - an untouched, empty PasswordBox must not blank out a key that came from the

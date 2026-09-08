@@ -83,7 +83,7 @@ public sealed class GeminiChatService
         }
 
         var model = OmniBimSettings.Load().GeminiModel;
-        if (string.IsNullOrWhiteSpace(model)) model = "gemini-2.0-flash";
+        if (string.IsNullOrWhiteSpace(model)) model = "gemini-3.5-flash-lite";
 
         var body = new RequestBody
         {
