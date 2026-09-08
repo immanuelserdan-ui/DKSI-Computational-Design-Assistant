@@ -4053,16 +4053,47 @@ namespace PaintedMaterialTakeoff.Core
 			//
 			// The occluder trim still applies inside Surface(), so the dormer walls standing on
 			// this cap are deducted from it exactly as they are from the main ceiling.
+			// DIAGNOSTIC (2026-09-08) - Surface() logs nothing of its own, so a gap cap that
+			// resolves to a real element but returns zero rows looks identical to one that
+			// never ran at all. This is the one thing the element's own Ceiling Paint Area /
+			// Painted Surface Area parameters (both 0, confirmed on FM_Template's roof 29336815)
+			// cannot settle by themselves: that they are room-clipped totals written by the
+			// OTHER engine, not proof this file's own gapClip actually reached the face. Remove
+			// once that is confirmed from this log instead of inferred from it.
+			bool gapCapDiag = env.HasCeilingGap;
+			if (gapCapDiag)
+			{
+				env.Warnings.Add($"[GapCapDiag {env.RoomNumber} '{env.RoomName}'] GapOverheadElement=" +
+					$"{(env.GapOverheadElement != null ? env.GapOverheadElement.Id.Value.ToString() : "null")}.");
+			}
 			if (env.HasCeilingGap && env.GapOverheadElement != null)
 			{
 				Solid gapClip = InteriorElementCalculator.GapColumn(env, _s.PrismInsetFt, _s.InteriorClipOutsetFt);
+				if (gapCapDiag)
+				{
+					env.Warnings.Add($"[GapCapDiag {env.RoomNumber} '{env.RoomName}'] gapClip=" +
+						$"{((object)gapClip != null ? $"volume={gapClip.Volume:0.####} cu ft, box={GeometryUtil.OutlineOf(gapClip)?.MinimumPoint}..{GeometryUtil.OutlineOf(gapClip)?.MaximumPoint}" : "null")}.");
+				}
 				if ((object)gapClip != null)
 				{
 					SurfaceKind gapKind = ((env.GapOverheadElement is RoofBase) ? SurfaceKind.Roof : SurfaceKind.Ceiling);
+					int gapRowCount = 0;
+					double gapRowArea = 0.0;
 					foreach (PaintRecord item2 in Surface(env, env.GapOverheadElement, gapKind, gapClip, upward: false, outcome))
 					{
 						any = true;
+						gapRowCount++;
+						gapRowArea += item2.NetAreaSqFt;
 						yield return item2;
+					}
+					if (gapCapDiag)
+					{
+						env.Warnings.Add($"[GapCapDiag {env.RoomNumber} '{env.RoomName}'] Surface() on " +
+							$"{env.GapOverheadElement.Id.Value} returned {gapRowCount} row(s), " +
+							$"{GeometryUtil.ToSqM(gapRowArea):0.####} m2. " +
+							(gapRowCount == 0
+								? "Ran, clipped, found nothing to paint - check outcome.SawUnpaintedFace/ClippedAnyFace below, and the element's own material."
+								: "Succeeded."));
 					}
 				}
 			}
@@ -4140,10 +4171,35 @@ namespace PaintedMaterialTakeoff.Core
 				double before = FacingArea(list, xYZ);
 				for (int i = 0; i < list.Count; i++)
 				{
+					// AN OCCLUDER HAS TO ACTUALLY COVER THE VISIBLE FACE, not merely share 3D
+					// volume somewhere within the ceiling's own thickness (2026-09-08).
+					//
+					// A wall built UP FROM the ceiling's own underside - base coincident with
+					// this solid's own bottom, never reaching below it into the room - does not
+					// hide any of the ceiling's visible surface: from inside the room looking
+					// up, nothing stands in front of that face. The two solids overlapping
+					// within the ceiling's own thickness zone is a fact about where the wall
+					// was BUILT, not about what the room can see. Only an occluder that
+					// genuinely extends BELOW the ceiling's own face - a wall hanging down PAST
+					// it into open room air, the way 29310596 does 0,82 ft past this ceiling's
+					// underside - actually stands between the room and part of the ceiling.
+					//
+					// CONFIRMED ON THE MODEL, not inferred: the four dormer walls' bases sit at
+					// z=-4,101 ft, bit-identical to this ceiling's own underside. They pass
+					// THROUGH the ceiling's thickness on their way up to the shaft above, but
+					// never below it - so the boolean trim below was removing real, painted,
+					// unobstructed ceiling area, on the strength of a 3D overlap that never
+					// corresponded to anything actually blocking the view from the room.
+					(double Min, double Max) ceilingRange = GeometryUtil.ZRange(list[i]);
 					foreach (Element occluder in _occluders)
 					{
 						foreach (Solid cutter in GeometryUtil.GetSolids(occluder, _s.MinSolidVolumeCuFt))
 						{
+							(double Min, double Max) cutterRange = GeometryUtil.ZRange(cutter);
+							if (cutterRange.Min >= ceilingRange.Min - _s.PrismInsetFt)
+							{
+								continue;
+							}
 							Solid trimmed = GeometryUtil.TryBoolean(list[i], cutter, BooleanOperationsType.Difference, _s.MinSolidVolumeCuFt);
 							if ((object)trimmed != null)
 							{
@@ -4405,6 +4461,24 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				yield break;
 			}
+			// REVERTED (2026-09-08), the same day it was added. A wall resting flush on the
+			// room's ceiling - base coincident with env.ZTop, not hanging below it into open
+			// room air - has an "underside face" that is a B-rep artifact, not a real surface:
+			// it is sealed against the ceiling, inaccessible, unpaintable. The near-zero area
+			// this clip's coincident-plane boolean produced for that face (0.0074 m2 instead of
+			// its full 0.13 m2 footprint) LOOKED like a bug and technically was one, but it was
+			// accidentally close to the physically correct answer - which is zero - for the
+			// wrong reason. Adding an overlap here "fixed" the boolean and in doing so
+			// manufactured 0.13 m2 of phantom material duplicating the ceiling's own area
+			// directly beneath it. Confirmed against the model, not inferred: there is no
+			// separate wall-base material there - what the geometry finds at that footprint IS
+			// the ceiling.
+			//
+			// A wall that genuinely hangs below ZTop into open room air - base BELOW the
+			// ceiling's own underside, like 29310596/29330864 in this same room - was never
+			// affected by this overlap either way: its underside face sits safely inside the
+			// clip's original, un-overlapped height, nowhere near the coincident-plane edge
+			// case this line existed to paper over.
 			double num = env.ZTop - env.ZBottom;
 			if (num <= 0.1)
 			{
@@ -4776,9 +4850,20 @@ namespace PaintedMaterialTakeoff.Core
 				MaterialBucket materialBucket2 = value2;
 				if (!(materialBucket2.Area <= _s.MinFaceAreaSqFt))
 				{
-					bool flag3 = !isWall && item == FaceRole.Underside;
+					// UNDERSIDE IS CEILING REGARDLESS OF HOST CATEGORY (2026-09-08). This used to
+					// read '!isWall && item == FaceRole.Underside', so a hanging wall's own
+					// underside - recovered by the clip-overlap fix just above this method - fell
+					// through to Group=Wall and reported nowhere near the room's ceiling in any
+					// schedule, even though it is geometrically identical to the floor-underside
+					// case one line below it: a downward-facing horizontal face, at the room's
+					// ceiling plane, is the ceiling of the space below it. Which category its
+					// host happens to belong to does not change what the face physically is - the
+					// floor branch already says so in its own note. Kind stays InteriorWall so the
+					// row still traces to its real host (Paint Host Id, CategoryName) rather than
+					// pretending to be a floor slab; only the schedule GROUP changes.
+					bool isUnderside = item == FaceRole.Underside;
 					bool flag4 = !isWall && item == FaceRole.Top;
-					string notes = (flag3 ? "Underside of an overhead floor slab, reported as the room's ceiling surface: in construction this face is the ceiling of the space below. Found geometrically because Revit's plan slice at the Room Computation Height does not reach a slab inside the room, so it never appears in the room boundary." : (flag4 ? "Top of a mezzanine slab inside this room — its walking surface. Strictly this deck belongs to the space above, and it is charged to this room only because no Room is placed on the mezzanine, which would otherwise leave its painted floor finish belonging to nothing. Place a Room on the mezzanine to have it reported there instead." : ((isWall ? "Wall" : "Slab") + " standing inside the room but absent from its boundary — Revit's plan slice at the Room Computation Height does not reach it. Measured geometrically against the room volume.")));
+					string notes = (isUnderside ? (isWall ? "Underside of a hanging wall, reported as the room's ceiling surface: physically this face is the ceiling of the space below it, the same as a floor slab's underside would be - which host category it happens to belong to does not change what it is." : "Underside of an overhead floor slab, reported as the room's ceiling surface: in construction this face is the ceiling of the space below. Found geometrically because Revit's plan slice at the Room Computation Height does not reach a slab inside the room, so it never appears in the room boundary.") : (flag4 ? "Top of a mezzanine slab inside this room — its walking surface. Strictly this deck belongs to the space above, and it is charged to this room only because no Room is placed on the mezzanine, which would otherwise leave its painted floor finish belonging to nothing. Place a Room on the mezzanine to have it reported there instead." : ((isWall ? "Wall" : "Slab") + " standing inside the room but absent from its boundary — Revit's plan slice at the Room Computation Height does not reach it. Measured geometrically against the room volume.")));
 					notes = notes + " " + (diagnostics.TryGetValue(key2, out var diagnostic) ? diagnostic : "[DIAG none]");
 					yield return new PaintRecord
 					{
@@ -4787,8 +4872,8 @@ namespace PaintedMaterialTakeoff.Core
 						RoomDepartment = env.RoomDepartment,
 						LevelName = env.LevelName,
 						RoomId = env.Room.Id,
-						Kind = (flag3 ? SurfaceKind.FloorAbove : (isWall ? SurfaceKind.InteriorWall : SurfaceKind.InteriorSlab)),
-						Group = (flag3 ? SurfaceGroup.Ceiling : (flag4 ? SurfaceGroup.Floor : SurfaceGroup.Wall)),
+						Kind = (isUnderside && !isWall ? SurfaceKind.FloorAbove : (isWall ? SurfaceKind.InteriorWall : SurfaceKind.InteriorSlab)),
+						Group = (isUnderside ? SurfaceGroup.Ceiling : (flag4 ? SurfaceGroup.Floor : SurfaceGroup.Wall)),
 						Calculated = true,
 						CategoryName = (element.Category?.Name ?? (isWall ? "Walls" : "Floors")),
 						ElementId = element.Id,
@@ -4802,7 +4887,7 @@ namespace PaintedMaterialTakeoff.Core
 						ZBottomFt = env.ZBottom,
 						ZTopFt = env.ZTop,
 						MeasuredHeightFt = env.ClearHeight,
-						TopSource = (flag3 ? OverheadKind.FloorAbove : env.TopSource),
+						TopSource = ((isUnderside && !isWall) ? OverheadKind.FloorAbove : env.TopSource),
 						Notes = notes,
 						Shape = ((materialBucket2.Shape.Count > 0) ? materialBucket2.Shape : null)
 					};
