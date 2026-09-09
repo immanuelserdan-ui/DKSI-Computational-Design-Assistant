@@ -58,14 +58,25 @@ Revit Add-in/
 dotnet build "Revit Add-in/CdaRevitTools.slnx" -c Debug
 ```
 
-The build copies output to `%AppData%\Autodesk\Revit\Addins\2027\Cda\` and the manifest
-one level up. Start Revit; a **DKSI** tab appears.
+The build copies output to `C:\Program Files\Autodesk\Revit\Addins\2027\Cda\` and the
+manifest one level up. Start Revit; a **DKSI** tab appears.
 
-Build without deploying:
+**Run the build elevated.** That is an all-users location, so the copy needs admin rights.
+This changed on 2026-09-08, when the office moved to one shared machine-wide copy; the long
+comment on `RevitAddinsDir` in `Directory.Build.props` records why, and it is worth reading
+before anyone points it back at `%AppData%`.
+
+Build without deploying — no elevation needed:
 
 ```bash
 dotnet build "Revit Add-in/CdaRevitTools.slnx" -c Debug -p:DeployToRevit=false
 ```
+
+Two things can stop a deploy landing, and **neither fails the build**: Revit holding the DLL,
+and the build not being elevated. The copy is `WarnAndContinue` on purpose — failing the
+build because Revit happens to be open would be worse — so watch for the `VerifyRevitDeploy`
+warning, which compares the built and deployed timestamps and names both causes. A fix that
+never reached Revit reads exactly like a fix that did not work.
 
 Revit locks the DLL once it has loaded it, so **close Revit before rebuilding**. If it is
 open you get an MSB3021 copy warning and Revit keeps running the old code.
@@ -96,8 +107,18 @@ after.
 
 ### Uninstall
 
-Delete `%AppData%\Autodesk\Revit\Addins\2027\Cda.Revit.Addin.addin` and the `Cda` folder
-beside it.
+Delete `C:\Program Files\Autodesk\Revit\Addins\2027\Cda.Revit.Addin.addin` and the `Cda`
+folder beside it. Needs admin rights, same as deploying there.
+
+If a per-user copy is also present under `%AppData%`, remove it with
+`tools\Remove-PerUserInstall.ps1` — **run as the user, not elevated**, since `%AppData%`
+resolves against whoever is running the script. Two copies is not a cosmetic problem: both
+carry the same add-in ClientId, Revit loads one without saying which, and someone can run
+months-old code with the current version sitting on disk beside it. `DuplicateInstallCheck`
+warns at startup when it finds both.
+
+Your settings and logs live in `%LocalAppData%\Cda\RevitAddin` and are deliberately left
+alone by all of the above.
 
 ---
 
@@ -362,12 +383,20 @@ Danish Excel; reading handles a file containing both.
 
 ## 9. Company rollout
 
-For a handful of machines, copy the deployed folder and manifest to each user's
-`%AppData%\Autodesk\Revit\Addins\2027`.
+For a handful of machines, copy the deployed folder and manifest to
+`C:\Program Files\Autodesk\Revit\Addins\2027` on each one. Requires admin, and covers
+every user of that machine in one go.
 
-For everyone: build an MSI (WiX) or an Autodesk **bundle** and install to
-`C:\Program Files\Autodesk\Revit\Addins\2027` — the 2027 all-users path. Requires admin,
-covers every user on the machine, and survives profile resets. Sign the assembly with a
+**Do not copy it into anyone's `%AppData%` instead.** This used to be the advice here, and
+it is how you end up with two manifests carrying the same add-in ClientId: Revit loads one
+of them, does not say which, and a user runs months-old code with the current version on
+disk beside it. That has happened in this office — see the note on `RevitAddinsDir` in
+`Directory.Build.props`. `tools\Remove-PerUserInstall.ps1` cleans up a machine that already
+has both.
+
+For everyone: build an MSI (WiX) or an Autodesk **bundle** and install to the same
+all-users path. Survives profile resets, and a silent push from SCCM or Intune runs as
+SYSTEM, which cannot write a useful `%AppData%` copy in any case. Sign the assembly with a
 code-signing certificate before wide distribution.
 
 Before that: put this folder under version control (`git init`), tag releases, and bump
