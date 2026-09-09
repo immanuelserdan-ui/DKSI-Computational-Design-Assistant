@@ -1,6 +1,6 @@
 using Cda.Revit.Addin.Schedules;
 
-namespace Cda.ScheduleFilter.Tests;
+namespace Cda.Schedules.Tests;
 
 /// <summary>
 /// Runnable checks over <see cref="ScheduleFilter"/> - the rules behind the Export

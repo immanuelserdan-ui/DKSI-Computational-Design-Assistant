@@ -48,7 +48,7 @@ public enum ScheduleContent
 /// and nothing that requires reading the table cell by cell.
 ///
 /// Deliberately holds a plain <see cref="long"/> rather than an ElementId. That keeps this
-/// file free of Revit types, which is what lets Cda.ScheduleFilter.Tests compile the real
+/// file free of Revit types, which is what lets Cda.Schedules.Tests compile the real
 /// filtering code instead of a copy of it.
 /// </summary>
 public sealed class ScheduleCandidate

@@ -15,8 +15,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>Cda.ScheduleFilter.Tests</RootNamespace>
-    <AssemblyName>Cda.ScheduleFilter.Tests</AssemblyName>
+    <RootNamespace>Cda.Schedules.Tests</RootNamespace>
+    <AssemblyName>Cda.Schedules.Tests</AssemblyName>
 
     <UseWPF>false</UseWPF>
     <DeployToRevit>false</DeployToRevit>
