@@ -81,6 +81,13 @@ never reached Revit reads exactly like a fix that did not work.
 Revit locks the DLL once it has loaded it, so **close Revit before rebuilding**. If it is
 open you get an MSB3021 copy warning and Revit keeps running the old code.
 
+**On a machine with no Revit**, the build falls back to the Nice3point reference assemblies
+from NuGet, pinned in `Directory.Build.props` to the release the office runs. That exists so
+CI can compile the add-in at all; it warns loudly, and it switches deploying off. It proves
+the code compiles — it proves nothing about how it behaves in Revit. A machine that *does*
+have Revit never touches it, and if you see that warning on one that should, `RevitApiDir`
+is pointing at the wrong folder.
+
 ### Tests
 
 ```bash

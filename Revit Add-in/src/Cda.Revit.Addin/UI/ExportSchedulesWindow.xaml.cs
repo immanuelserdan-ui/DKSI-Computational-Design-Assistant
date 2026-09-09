@@ -62,7 +62,7 @@ public sealed class FilterOption<T>
 public partial class ExportSchedulesWindow : Window
 {
     private readonly List<ScheduleItem> _items;
-    private readonly ScheduleFilter _filter = new();
+    private readonly ScheduleExportFilter _filter = new();
 
     /// <summary>
     /// Combo boxes with a XAML-selected item raise SelectionChanged while
