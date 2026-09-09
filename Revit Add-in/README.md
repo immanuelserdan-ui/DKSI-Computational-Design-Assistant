@@ -70,6 +70,23 @@ dotnet build "Revit Add-in/CdaRevitTools.slnx" -c Debug -p:DeployToRevit=false
 Revit locks the DLL once it has loaded it, so **close Revit before rebuilding**. If it is
 open you get an MSB3021 copy warning and Revit keeps running the old code.
 
+### Tests
+
+```bash
+dotnet run --project "Revit Add-in/tests/Cda.ScheduleFilter.Tests"
+```
+
+Each project under `tests/` is a plain console runner: it prints a line per check and exits
+non-zero if any failed. None of them reference a Revit assembly — each compiles a handful of
+source files straight out of the add-in, so what gets tested is the shipping file rather
+than a copy that drifts away from it — which is what lets them run anywhere, Revit
+installed or not.
+
+`.github/workflows/tests.yml` runs all of them on every pull request. It does **not** build
+the add-in and cannot: `Cda.Revit.Addin` references RevitAPI.dll from a local Revit 2027
+install, which has no place on a hosted runner. **A green tick there is not a green build** —
+a compile error in the add-in still surfaces only on a developer's machine.
+
 ### Debugging
 
 `Properties/launchSettings.json` sets Revit as the start program, so <kbd>F5</kbd> in
