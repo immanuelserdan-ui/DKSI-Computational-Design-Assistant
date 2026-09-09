@@ -278,6 +278,7 @@ public sealed class ScheduleExporter
         Kind = KindOf(view),
         SheetNumber = SheetNumber(view),
         DataRows = CountDataRows(view),
+        Phase = PhaseName(view),
     };
 
     private static string SafeName(ViewSchedule view)
@@ -299,6 +300,26 @@ public sealed class ScheduleExporter
             if (id is null || id == ElementId.InvalidElementId) return string.Empty;
 
             return Category.GetCategory(_doc, id)?.Name ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// The schedule's own Phase setting, off the same VIEW_PHASE parameter its Phasing tab
+    /// edits. Key schedules and sheet/view lists carry no such parameter at all - not "no
+    /// phase set", genuinely absent - and read as empty rather than a guessed default.
+    /// </summary>
+    private string PhaseName(ViewSchedule view)
+    {
+        try
+        {
+            var parameter = view.get_Parameter(BuiltInParameter.VIEW_PHASE);
+            if (parameter is null || !parameter.HasValue) return string.Empty;
+
+            return (_doc.GetElement(parameter.AsElementId()) as Phase)?.Name ?? string.Empty;
         }
         catch
         {
