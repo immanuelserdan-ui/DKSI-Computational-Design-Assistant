@@ -330,8 +330,13 @@ internal static class RibbonBuilder
             name: "CdaExportSchedules",
             text: "Export\nSchedules",
             command: typeof(Commands.ExportSchedulesCommand),
-            tooltip: "Exports every schedule in the model to one Excel workbook, one worksheet each.",
-            longDescription: "Read-only. Writes the .xlsx directly - no Excel install and no " +
+            tooltip: "Pick schedules with the filter dialog, then export them to one Excel " +
+                     "workbook, one worksheet each.",
+            longDescription: "Opens a picker first: filter by name, category, type, sheet " +
+                             "placement or row count, tick what you want, then Export. " +
+                             "Everything starts ticked, so exporting the whole model is one " +
+                             "extra click.\n\n" +
+                             "Read-only. Writes the .xlsx directly - no Excel install and no " +
                              "third-party library required.",
             icon: "excel",
             availability: typeof(ProjectDocumentAvailability));

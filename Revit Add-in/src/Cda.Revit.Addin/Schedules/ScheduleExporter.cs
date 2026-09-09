@@ -36,6 +36,15 @@ public sealed class ScheduleExportSettings
     /// <summary>Only export schedule views that are placed on a sheet.</summary>
     public bool OnlyOnSheets { get; init; }
 
+    /// <summary>
+    /// Export only these schedules, by ElementId.Value. Null exports everything that
+    /// survives the standing filters, which is what a caller with no dialog wants.
+    ///
+    /// An EMPTY set is not the same as null: it means the user filtered everything out,
+    /// and it must export nothing rather than quietly falling back to all of them.
+    /// </summary>
+    public IReadOnlySet<long>? ScheduleIds { get; init; }
+
     // Excel's own ceilings.
     public const int MaxRows = 1_048_576;
     public const int MaxCols = 16_384;
@@ -187,7 +196,41 @@ public sealed class ScheduleExporter
 
     // --------------------------------------------------------- collect the schedules
 
+    /// <summary>
+    /// Every schedule in the model, described well enough for the filter dialog to list
+    /// and filter it. Reads at most a handful of cells per schedule - the full table is
+    /// only read for the ones the user actually keeps.
+    /// </summary>
+    public IReadOnlyList<ScheduleCandidate> FindCandidates() => Exportable().Select(Describe).ToList();
+
+    /// <summary>The schedules this export will actually read: exportable, then filtered.</summary>
     private List<ViewSchedule> CollectSchedules(List<string> skipped)
+    {
+        var result = new List<ViewSchedule>();
+
+        foreach (var view in Exportable())
+        {
+            // Not a problem to report: the user unticked it in the dialog. Listing every
+            // unticked schedule under "Skipped" would bury the real reasons.
+            if (_settings.ScheduleIds is { } chosen && !chosen.Contains(view.Id.Value)) continue;
+
+            if (_settings.OnlyOnSheets && !IsOnSheet(view))
+            {
+                skipped.Add($"{SafeName(view)} - not placed on a sheet");
+                continue;
+            }
+
+            result.Add(view);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Schedules that can be exported at all, before any user filtering: no view
+    /// templates, no revision schedules, none of Revit's internal &lt;angle-bracketed&gt; ones.
+    /// </summary>
+    private List<ViewSchedule> Exportable()
     {
         var revisionCategory = new ElementId(BuiltInCategory.OST_Revisions);
         var result = new List<ViewSchedule>();
@@ -210,21 +253,129 @@ public sealed class ScheduleExporter
 
             if (name.StartsWith('<') && name.EndsWith('>')) continue;
 
-            if (_settings.OnlyOnSheets)
-            {
-                var sheetNumber = view.get_Parameter(BuiltInParameter.VIEWER_SHEET_NUMBER)?.AsString();
-                if (string.IsNullOrWhiteSpace(sheetNumber))
-                {
-                    skipped.Add($"{name} - not placed on a sheet");
-                    continue;
-                }
-            }
-
             result.Add(view);
         }
 
         result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         return result;
+    }
+
+    // ------------------------------------------- describe one schedule for the dialog
+
+    /// <summary>
+    /// Leading Body rows to read when detecting the header. Headers only ever sit at the
+    /// top, and <see cref="HeaderRowCount"/> stops at the first row that is not one, so
+    /// reading a few is as good as reading all of them and costs nothing on a 40,000-row
+    /// takeoff.
+    /// </summary>
+    private const int HeaderProbeRows = 8;
+
+    private ScheduleCandidate Describe(ViewSchedule view) => new()
+    {
+        Id = view.Id.Value,
+        Name = SafeName(view),
+        Category = CategoryName(view),
+        Kind = KindOf(view),
+        SheetNumber = SheetNumber(view),
+        DataRows = CountDataRows(view),
+    };
+
+    private static string SafeName(ViewSchedule view)
+    {
+        try { return view.Name; }
+        catch { return $"Schedule {view.Id.Value}"; }
+    }
+
+    /// <summary>
+    /// The schedule's category as Revit names it. Multi-category schedules and the
+    /// key/sheet/view lists have no single category, and get an empty string rather than
+    /// an invented one.
+    /// </summary>
+    private string CategoryName(ViewSchedule view)
+    {
+        try
+        {
+            var id = view.Definition.CategoryId;
+            if (id is null || id == ElementId.InvalidElementId) return string.Empty;
+
+            return Category.GetCategory(_doc, id)?.Name ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static ScheduleKind KindOf(ViewSchedule view)
+    {
+        try
+        {
+            var definition = view.Definition;
+
+            // Order matters: a key schedule reports a real category too, and calling one
+            // "Doors" in the Type column would hide what it actually is.
+            if (definition.IsKeySchedule) return ScheduleKind.KeySchedule;
+            if (definition.IsMaterialTakeoff) return ScheduleKind.MaterialTakeoff;
+
+            var category = definition.CategoryId?.Value;
+            if (category == (long)BuiltInCategory.OST_Sheets) return ScheduleKind.SheetList;
+            if (category == (long)BuiltInCategory.OST_Views) return ScheduleKind.ViewList;
+        }
+        catch
+        {
+            // Definition unreadable - the plain kind is the safe answer, and the schedule
+            // still lists and still exports.
+        }
+
+        return ScheduleKind.Schedule;
+    }
+
+    private static string SheetNumber(ViewSchedule view)
+    {
+        try { return view.get_Parameter(BuiltInParameter.VIEWER_SHEET_NUMBER)?.AsString() ?? string.Empty; }
+        catch { return string.Empty; }
+    }
+
+    private static bool IsOnSheet(ViewSchedule view) => !string.IsNullOrWhiteSpace(SheetNumber(view));
+
+    /// <summary>
+    /// Body rows below the header, or null when the table would not open.
+    ///
+    /// APPROXIMATE, on purpose. Revit's group-separator rows are counted here but dropped
+    /// from the export, so a heavily grouped schedule lists a few rows higher than the
+    /// number the summary reports afterwards. Telling them apart means reading every cell
+    /// of every schedule in the model, which is the cost the dialog exists to avoid. The
+    /// figure is for choosing what to export - the summary after the export is the exact one.
+    /// </summary>
+    private int? CountDataRows(ViewSchedule view)
+    {
+        try
+        {
+            var data = view.GetTableData().GetSectionData(SectionType.Body);
+            if (data is null || data.NumberOfRows <= 0 || data.NumberOfColumns <= 0) return 0;
+
+            var firstRow = data.FirstRowNumber;
+            var firstCol = data.FirstColumnNumber;
+            var probe = new List<List<string>>();
+
+            for (var r = firstRow; r < firstRow + Math.Min(data.NumberOfRows, HeaderProbeRows); r++)
+            {
+                var cells = new List<string>();
+                for (var c = firstCol; c < firstCol + data.NumberOfColumns; c++)
+                {
+                    try { cells.Add(view.GetCellText(SectionType.Body, r, c)); }
+                    catch { cells.Add(string.Empty); }
+                }
+
+                probe.Add(cells);
+            }
+
+            return Math.Max(0, data.NumberOfRows - HeaderRowCount(view, probe));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------ read one schedule
