@@ -6,14 +6,14 @@ name: Tests
 # reference no Revit assembly - each compiles a few plain-arithmetic source files straight
 # out of the add-in - so they run on a hosted runner like any other console app.
 #
-# It does NOT build Cda.Revit.Addin, and cannot: that project references RevitAPI.dll and
-# RevitAPIUI.dll from a local Revit 2027 install, which is licensed desktop software with
-# no place on a GitHub runner. So a compile error in the add-in still surfaces only on a
-# developer's machine, and a green tick here is not a green build.
+# The add-in itself is compiled too, in a second job. A runner cannot have Revit on it, so
+# that build uses the NuGet reference assemblies Directory.Build.props falls back to when no
+# install is found - see the comment on HasLocalRevitApi there.
 #
-# What it does catch is the logic the test projects cover - the radiator sign conventions,
-# room containment, the dimension maths, the Udvendig rules, the schedule export filter -
-# and the fact that those files still compile at all.
+# WHAT THAT DOES AND DOES NOT PROVE: it type-checks every file in the add-in, including the
+# WPF windows and their XAML, against the real Revit API surface. It does not run anything,
+# and reference assemblies carry no implementation, so nothing here says the add-in BEHAVES
+# correctly inside Revit. A green tick means it compiles and the tested logic holds.
 
 on:
   push:
@@ -85,3 +85,24 @@ jobs:
             printf 'FAILED: %s\n' "${failed[@]}"
             exit 1
           fi
+
+  addin:
+    name: Add-in compiles
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: 'Revit Add-in/global.json'
+
+      - name: Build Cda.Revit.Addin
+        working-directory: 'Revit Add-in'
+        # EnableWindowsTargeting lets a net10.0-windows WPF project build off Windows; the
+        # Revit references come from the NuGet fallback, since the runner has no install.
+        # DeployToRevit is already forced off in that case, so nothing tries to copy anywhere.
+        run: |
+          dotnet build src/Cda.Revit.Addin/Cda.Revit.Addin.csproj \
+            --configuration Release \
+            -p:EnableWindowsTargeting=true

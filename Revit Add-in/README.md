@@ -89,10 +89,10 @@ source files straight out of the add-in, so what gets tested is the shipping fil
 than a copy that drifts away from it — which is what lets them run anywhere, Revit
 installed or not.
 
-`.github/workflows/tests.yml` runs all of them on every pull request. It does **not** build
-the add-in and cannot: `Cda.Revit.Addin` references RevitAPI.dll from a local Revit 2027
-install, which has no place on a hosted runner. **A green tick there is not a green build** —
-a compile error in the add-in still surfaces only on a developer's machine.
+`.github/workflows/tests.yml` runs all of them on every pull request, and compiles the
+add-in alongside them against the NuGet reference assemblies. So a compile error is caught
+before merge — but reference assemblies carry no implementation and nothing here runs inside
+Revit, so **a green tick means it compiles, not that it works**.
 
 ### Debugging
 
