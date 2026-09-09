@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    NO REVIT REFERENCE, DELIBERATELY - same reasoning as Cda.Heating.Tests.
+    NO REVIT REFERENCE, DELIBERATELY - same reasoning as Cda.Schedules.Tests.
 
     It compiles ONE source file from the add-in: ClipRules.cs, which holds every containment
     rule in the skirting tool and is written in plain arithmetic with no Revit type in it.
