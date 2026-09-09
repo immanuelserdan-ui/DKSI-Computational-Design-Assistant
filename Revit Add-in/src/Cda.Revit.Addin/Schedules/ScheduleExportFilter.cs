@@ -96,13 +96,20 @@ public sealed class ScheduleCandidate
 /// Every clause is AND-ed: narrowing one control never widens the result, which is the
 /// only behaviour a filter panel can have that people can predict.
 ///
+/// NOT CALLED ScheduleFilter, WHICH IS THE OBVIOUS NAME: Autodesk.Revit.DB.ScheduleFilter
+/// is a real Revit type - the one ScheduleDefinition.AddFilter takes. A class of that name
+/// in this namespace shadows it for every file here that imports Autodesk.Revit.DB, and
+/// SurfaceScheduleBuilder is one of them. It shipped that way briefly and broke the build
+/// with "ScheduleFilter does not contain a constructor that takes 3 arguments", which no
+/// amount of reading the export code would have explained.
+///
 /// NOTE ON DATE RANGE: Revit's API exposes no created-on or modified-on date for a view,
 /// and workshared models only add who touched it, never when. A date filter here would
 /// have to be invented from something else - and a filter that quietly means something
 /// other than what its label says is worse than no filter at all. Placement and content
 /// are the honest "status" axes a schedule actually has.
 /// </summary>
-public sealed class ScheduleFilter
+public sealed class ScheduleExportFilter
 {
     /// <summary>
     /// Free text. Split on whitespace; every term must appear somewhere in the name,

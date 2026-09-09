@@ -3,7 +3,7 @@ using Cda.Revit.Addin.Schedules;
 namespace Cda.Schedules.Tests;
 
 /// <summary>
-/// Runnable checks over <see cref="ScheduleFilter"/> - the rules behind the Export
+/// Runnable checks over <see cref="ScheduleExportFilter"/> - the rules behind the Export
 /// Schedules dialog.
 ///
 /// The model here is a small but realistic set of schedules off a housing project: door
@@ -55,7 +55,7 @@ internal static class Program
     {
         Section("a fresh filter hides nothing");
 
-        var filter = new ScheduleFilter();
+        var filter = new ScheduleExportFilter();
 
         True("reports itself unfiltered", filter.IsUnfiltered);
         Names("keeps every schedule", filter, Model.Select(c => c.Name).ToArray());
@@ -65,29 +65,29 @@ internal static class Program
     {
         Section("search");
 
-        Names("matches part of a name", new ScheduleFilter { Search = "window" }, "Window Schedule");
+        Names("matches part of a name", new ScheduleExportFilter { Search = "window" }, "Window Schedule");
 
         // The AND is the whole point: each word typed has to narrow the list, or a long
         // search term matches more than a short one and nobody can predict it.
         Names("every word has to match",
-            new ScheduleFilter { Search = "door 2nd" },
+            new ScheduleExportFilter { Search = "door 2nd" },
             "Door Schedule - 2nd Floor");
 
         Names("is case insensitive",
-            new ScheduleFilter { Search = "DOOR SCHEDULE" },
+            new ScheduleExportFilter { Search = "DOOR SCHEDULE" },
             "Door Schedule - 1st Floor", "Door Schedule - 2nd Floor");
 
         Names("searches the category too, not just the name",
-            new ScheduleFilter { Search = "Windows" },
+            new ScheduleExportFilter { Search = "Windows" },
             "Window Schedule");
 
-        Names("searches the sheet number", new ScheduleFilter { Search = "A-901" }, "Paint Takeoff");
+        Names("searches the sheet number", new ScheduleExportFilter { Search = "A-901" }, "Paint Takeoff");
 
         Names("no match is an empty list, never a fallback to everything",
-            new ScheduleFilter { Search = "ceiling" });
+            new ScheduleExportFilter { Search = "ceiling" });
 
         True("whitespace only is not a search",
-            new ScheduleFilter { Search = "   " }.Apply(Model).Count == Model.Length);
+            new ScheduleExportFilter { Search = "   " }.Apply(Model).Count == Model.Length);
     }
 
     private static void Category()
@@ -95,16 +95,16 @@ internal static class Program
         Section("category");
 
         Names("exact category, not a substring",
-            new ScheduleFilter { Category = "Doors" },
+            new ScheduleExportFilter { Category = "Doors" },
             "Door Schedule - 1st Floor", "Door Schedule - 2nd Floor", "WORKING - scratch counts",
             "Door Hardware Set", "Corrupt Door Count");
 
         // "Door" is a prefix of "Doors". A substring match here would make the category
         // combo and the search box do the same job, badly.
-        Names("a near miss matches nothing", new ScheduleFilter { Category = "Door" });
+        Names("a near miss matches nothing", new ScheduleExportFilter { Category = "Door" });
 
         Names("case insensitive, because Revit's own casing varies by locale",
-            new ScheduleFilter { Category = "rooms" },
+            new ScheduleExportFilter { Category = "rooms" },
             "Room Finish Schedule");
     }
 
@@ -112,14 +112,14 @@ internal static class Program
     {
         Section("type");
 
-        Names("key schedules", new ScheduleFilter { Kind = ScheduleKind.KeySchedule }, "Door Hardware Set");
-        Names("material takeoffs", new ScheduleFilter { Kind = ScheduleKind.MaterialTakeoff }, "Paint Takeoff");
-        Names("sheet lists", new ScheduleFilter { Kind = ScheduleKind.SheetList }, "Sheet Index");
+        Names("key schedules", new ScheduleExportFilter { Kind = ScheduleKind.KeySchedule }, "Door Hardware Set");
+        Names("material takeoffs", new ScheduleExportFilter { Kind = ScheduleKind.MaterialTakeoff }, "Paint Takeoff");
+        Names("sheet lists", new ScheduleExportFilter { Kind = ScheduleKind.SheetList }, "Sheet Index");
 
         // A key schedule reports a real category as well. It must not also count as a
         // plain schedule, or "Schedule" means "anything".
         Names("plain schedules exclude the special kinds",
-            new ScheduleFilter { Kind = ScheduleKind.Schedule },
+            new ScheduleExportFilter { Kind = ScheduleKind.Schedule },
             "Door Schedule - 1st Floor", "Door Schedule - 2nd Floor", "Window Schedule",
             "Room Finish Schedule", "WORKING - scratch counts", "Corrupt Door Count");
     }
@@ -129,12 +129,12 @@ internal static class Program
         Section("placement");
 
         Names("on a sheet",
-            new ScheduleFilter { Placement = SheetPlacement.OnSheet },
+            new ScheduleExportFilter { Placement = SheetPlacement.OnSheet },
             "Door Schedule - 1st Floor", "Door Schedule - 2nd Floor", "Window Schedule",
             "Paint Takeoff", "Sheet Index");
 
         Names("not on a sheet",
-            new ScheduleFilter { Placement = SheetPlacement.NotOnSheet },
+            new ScheduleExportFilter { Placement = SheetPlacement.NotOnSheet },
             "Room Finish Schedule", "WORKING - scratch counts", "Door Hardware Set", "Corrupt Door Count");
 
         True("a blank sheet number is not a placement",
@@ -146,11 +146,11 @@ internal static class Program
         Section("content");
 
         Names("empty schedules",
-            new ScheduleFilter { Content = ScheduleContent.Empty },
+            new ScheduleExportFilter { Content = ScheduleContent.Empty },
             "WORKING - scratch counts", "Corrupt Door Count");
 
         True("schedules with rows exclude the empty one",
-            !new ScheduleFilter { Content = ScheduleContent.WithData }
+            !new ScheduleExportFilter { Content = ScheduleContent.WithData }
                 .Apply(Model)
                 .Any(c => c.Name == "WORKING - scratch counts"));
     }
@@ -165,8 +165,8 @@ internal static class Program
         var broken = Model.Single(c => c.Name == "Corrupt Door Count");
 
         True("shows as ? rather than 0", broken.RowsLabel == "?");
-        True("survives 'has rows'", new ScheduleFilter { Content = ScheduleContent.WithData }.Matches(broken));
-        True("survives 'empty'", new ScheduleFilter { Content = ScheduleContent.Empty }.Matches(broken));
+        True("survives 'has rows'", new ScheduleExportFilter { Content = ScheduleContent.WithData }.Matches(broken));
+        True("survives 'empty'", new ScheduleExportFilter { Content = ScheduleContent.Empty }.Matches(broken));
     }
 
     private static void ClausesCombine()
@@ -174,11 +174,11 @@ internal static class Program
         Section("clauses are AND-ed");
 
         Names("category and placement together",
-            new ScheduleFilter { Category = "Doors", Placement = SheetPlacement.OnSheet },
+            new ScheduleExportFilter { Category = "Doors", Placement = SheetPlacement.OnSheet },
             "Door Schedule - 1st Floor", "Door Schedule - 2nd Floor");
 
         Names("search, category, type and content together",
-            new ScheduleFilter
+            new ScheduleExportFilter
             {
                 Search = "schedule",
                 Category = "Doors",
@@ -189,8 +189,8 @@ internal static class Program
 
         // Adding a clause can only ever remove rows. If one widens the result, two
         // controls are fighting and the panel becomes unpredictable.
-        var narrower = new ScheduleFilter { Search = "door", Category = "Doors" }.Apply(Model);
-        var wider = new ScheduleFilter { Search = "door" }.Apply(Model);
+        var narrower = new ScheduleExportFilter { Search = "door", Category = "Doors" }.Apply(Model);
+        var wider = new ScheduleExportFilter { Search = "door" }.Apply(Model);
 
         True("adding a clause never widens the result", narrower.Count <= wider.Count);
     }
@@ -214,7 +214,7 @@ internal static class Program
             DataRows = rows,
         };
 
-    private static void Names(string what, ScheduleFilter filter, params string[] expected)
+    private static void Names(string what, ScheduleExportFilter filter, params string[] expected)
     {
         _run++;
 

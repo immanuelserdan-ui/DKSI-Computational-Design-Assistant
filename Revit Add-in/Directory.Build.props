@@ -79,11 +79,55 @@
     <RequiresRevitApi Condition="'$(RequiresRevitApi)' == ''">true</RequiresRevitApi>
   </PropertyGroup>
 
-  <!-- Fail early and loudly rather than emitting hundreds of "type not found" errors. -->
-  <Target Name="VerifyRevitApiDir" BeforeTargets="BeforeBuild" Condition="'$(RequiresRevitApi)' == 'true'">
-    <Error Condition="!Exists('$(RevitApiDir)\RevitAPI.dll')"
-           Text="RevitAPI.dll not found at '$(RevitApiDir)'. Set RevitApiDir in Directory.Build.props to your Revit $(RevitVersion) install folder." />
+  <!--
+    Is there a real Revit install to build against?
+
+    Yes on any developer machine and on the office's machines, and that path is unchanged:
+    the add-in references RevitAPI.dll and RevitAPIUI.dll straight out of the install.
+
+    No on a CI runner, which cannot have licensed desktop software on it. Rather than
+    leaving the add-in as the one project nothing ever compiles before merge, it falls back
+    to the Nice3point reference assemblies from NuGet - see the long comment in
+    Cda.Revit.Addin.csproj for why they are referenced with ExcludeAssets="runtime", which
+    is load-bearing rather than decorative.
+  -->
+  <PropertyGroup>
+    <HasLocalRevitApi Condition="Exists('$(RevitApiDir)\RevitAPI.dll')">true</HasLocalRevitApi>
+    <HasLocalRevitApi Condition="'$(HasLocalRevitApi)' == ''">false</HasLocalRevitApi>
+
+    <!--
+      Pinned to the Revit the office actually runs - 27.1.0.45, so the 2027.1 package.
+      Keep it at or BELOW the installed build, never above: the Revit API is additive, so
+      an older reference assembly can only compile calls the installed Revit also has,
+      while a newer one lets CI go green on a method that is missing at runtime.
+    -->
+    <RevitApiPackageVersion>2027.1.0</RevitApiPackageVersion>
+  </PropertyGroup>
+
+  <!--
+    A build with no local Revit still compiles, but it can neither deploy nor prove
+    anything about the installed Revit, so it says so once rather than looking normal.
+
+    This used to be an Error. It stopped hundreds of "type not found" messages, which the
+    NuGet fallback now prevents outright - but it also caught a misconfigured RevitApiDir,
+    and that job still matters: a developer who thinks they are deploying and is silently
+    building against reference assemblies has a worse problem than a failed build. Hence
+    the warning, and hence deploying is switched off below rather than copying a DLL built
+    against assemblies that may not match the Revit on this machine.
+  -->
+  <Target Name="VerifyRevitApiDir" BeforeTargets="BeforeBuild"
+          Condition="'$(RequiresRevitApi)' == 'true' AND '$(HasLocalRevitApi)' != 'true'">
+    <Warning Text="No Revit $(RevitVersion) install at '$(RevitApiDir)' - building against NuGet reference assemblies $(RevitApiPackageVersion) instead. This compiles, but it CANNOT be deployed or debugged, and it does not prove the add-in runs on the installed Revit. If you do have Revit $(RevitVersion) here, RevitApiDir is pointing at the wrong folder - fix it in Directory.Build.props." />
   </Target>
+
+  <!--
+    No Revit means nothing to deploy to. Left on, the copy would either fail or, worse,
+    put a DLL built against reference assemblies into a Revit install this build could not
+    see well enough to reference.
+  -->
+  <PropertyGroup Condition="'$(HasLocalRevitApi)' != 'true'">
+    <DeployToRevit>false</DeployToRevit>
+  </PropertyGroup>
 
   <!--
     SINGLE VERSION ONLY. Multi-targeting this add-in would be a mistake rather than a
