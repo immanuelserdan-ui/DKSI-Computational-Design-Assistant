@@ -63,7 +63,7 @@ if (-not $SourceMsi) { $SourceMsi = Join-Path $Dist 'PaintTakeoff-1.0.1.msi' }
 . (Join-Path $PSScriptRoot 'Version.ps1')
 
 if (-not $Version) {
-    $Version = Get-NextPackageVersion -Dist $Dist -Prefix 'PaintTakeoff-' -Candidate '1.0.3'
+    $Version = Get-NextPackageVersion -Dist $Dist -Prefix 'PaintTakeoff-' -InstalledName 'Painted Material Takeoff*' -Candidate '1.0.3'
 }
 
 function Say([string]$text, [string]$colour = 'Gray') { Write-Host $text -ForegroundColor $colour }

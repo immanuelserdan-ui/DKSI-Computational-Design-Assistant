@@ -46,7 +46,7 @@ $Wix          = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
 
 if (-not $Version) {
     $Version = Get-NextPackageVersion -Dist $Dist -Prefix 'DKSI-Revit-Suite-' `
-        -Candidate ('1.0.{0}{1}' -f (Get-Date).ToString('yy'), (Get-Date).DayOfYear)
+        -InstalledName 'DKSI Revit Suite' -Candidate ('1.0.{0}{1}' -f (Get-Date).ToString('yy'), (Get-Date).DayOfYear)
 }
 
 # NEWEST BY VERSION, NEVER A HARDCODED ONE - same reason as build-inno.ps1. The default here

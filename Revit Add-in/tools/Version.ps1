@@ -13,14 +13,32 @@
 # Running either script exactly as its own header documents therefore produced a package
 # that Windows Installer treats as a DOWNGRADE. MajorUpgrade's DowngradeErrorMessage catches
 # that in an interactive install, but a silent one (`/quiet`, which is how IT deploys this)
-# ends with the old add-in still in place and a non-zero exit nobody reads. That is the
-# same class of failure this repository has already been bitten by twice: an install that
-# reports success and changes nothing.
+# ends with the old add-in still in place and a non-zero exit nobody reads.
 #
-# THE DATE-DERIVED SCHEME IS KEPT, not replaced. MSI version fields are numeric and capped
-# (0-65535 for the third field), so 1.0.<yy><day-of-year> remains the right shape: it is
-# readable, it sorts, and it cannot overflow. All this adds is a floor - if the calendar
-# says a number that has already been used, step past it instead of colliding with it.
+# TWO FLOORS, NOT ONE, AND THE SECOND IS THE IMPORTANT ONE. The first version of this file
+# looked only at dist\. That is not good enough, and it failed for real within the hour:
+# dist\ is gitignored scratch space, something cleaned roughly a hundred stale artefacts out
+# of it, and the very next build fell straight back to the date-derived 1.0.26253 - below the
+# 1.0.26262 already INSTALLED on the machine. Deleting a disposable build folder must never
+# be able to resurrect the downgrade bug, so the installed product's own DisplayVersion is
+# consulted too. That one cannot be cleaned away, because it is the thing being upgraded.
+
+function Get-InstalledProductVersion {
+    param([Parameter(Mandatory)][string]$DisplayNamePattern)
+
+    $keys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like $DisplayNamePattern -and $_.DisplayVersion } |
+        ForEach-Object {
+            $parsed = $null
+            if ([version]::TryParse($_.DisplayVersion, [ref]$parsed)) { $parsed }
+        } |
+        Sort-Object -Descending |
+        Select-Object -First 1
+}
 
 function Get-NextPackageVersion {
     param(
@@ -30,17 +48,18 @@ function Get-NextPackageVersion {
         # Filename stem before the version, e.g. 'PaintTakeoff-' or 'DKSI-Revit-Suite-'.
         [Parameter(Mandatory)][string]$Prefix,
 
-        # What the version WOULD be with nothing already built. The date-derived string for
-        # the suite; a plain floor like '1.0.1' for a package with no date meaning.
-        [Parameter(Mandatory)][string]$Candidate
+        # What the version WOULD be with nothing already built or installed.
+        [Parameter(Mandatory)][string]$Candidate,
+
+        # ARP DisplayName of the installed product this package upgrades, e.g.
+        # 'DKSI Revit Suite'. Wildcards allowed. Omit only for a package that never installs.
+        [string]$InstalledName
     )
 
     $floor = [version]$Candidate
 
-    # Every already-built package sharing this prefix, whatever the extension - .msi and .exe
-    # both matter, and the suite writes an MSI and a bundle under different names but the same
-    # version. Unparseable names are skipped rather than guessed at.
-    $highest = Get-ChildItem -Path $Dist -Filter "$Prefix*" -File -ErrorAction SilentlyContinue |
+    # Highest already built. Unparseable names are skipped rather than guessed at.
+    $built = Get-ChildItem -Path $Dist -Filter "$Prefix*" -File -ErrorAction SilentlyContinue |
         ForEach-Object {
             $stem   = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
             $parsed = $null
@@ -48,6 +67,11 @@ function Get-NextPackageVersion {
         } |
         Sort-Object -Descending |
         Select-Object -First 1
+
+    # Highest already installed - survives dist\ being emptied.
+    $installed = if ($InstalledName) { Get-InstalledProductVersion -DisplayNamePattern $InstalledName } else { $null }
+
+    $highest = @($built, $installed) | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1
 
     if ($null -eq $highest -or $floor -gt $highest) { return $floor.ToString() }
 
