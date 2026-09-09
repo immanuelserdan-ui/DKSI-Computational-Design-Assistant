@@ -92,11 +92,21 @@ public sealed class CaseworkVoidCutter
     private readonly Dictionary<long, bool> _familyAllowsCut = [];
 
     /// <summary>
-    /// Families Revit has rejected as having no unattached void to cut with. Populated from
-    /// the first refusal and then used to skip every other instance of that family, so a
-    /// mis-authored family costs one warning rather than one per instance per wall.
+    /// (Family, target category) pairs Revit has rejected as having no unattached void to cut
+    /// with. Populated from the first refusal on that pair and then used to skip every other
+    /// candidate of that SAME category for that family, so a mis-authored family costs one
+    /// warning per void kind rather than one per instance per candidate.
+    ///
+    /// KEYED BY CATEGORY, NOT JUST FAMILY — and that split is load-bearing now that a fitting
+    /// has TWO independent void geometries to test: a side void against walls, a bottom void
+    /// against floors (<see cref="CaseworkSettings.TargetCategories"/>). Whether one is
+    /// attached to the carcass (spent) tells you nothing about the other — they are separate
+    /// solids in the family. Rejecting the whole family the first time either one refused used
+    /// to mean a family with a broken bottom void lost its working side-void wall cuts too,
+    /// and vice versa, because a floor sitting directly under a cabinet is very often the
+    /// nearest candidate and so the first one tried.
     /// </summary>
-    private readonly HashSet<long> _familyVoidsRejected = [];
+    private readonly HashSet<(long Family, long Category)> _familyVoidsRejected = [];
 
     private int _cuts;
 
@@ -216,7 +226,7 @@ public sealed class CaseworkVoidCutter
     private void Process(FamilyInstance fitting)
     {
         if (!FamilyAllowsVoidCut(fitting)) return;
-        if (HasRejectedVoids(fitting)) return;
+        if (AllTargetCategoriesRejected(fitting)) return;
 
         // Resolved once and reused for every candidate: the collection is what tells an
         // already-correct model apart from one that needs work, and re-reading it per
@@ -225,6 +235,17 @@ public sealed class CaseworkVoidCutter
 
         foreach (var target in Candidates(fitting, alreadyCut))
         {
+            // CHECKED PER CANDIDATE, BY THE CANDIDATE'S OWN CATEGORY - not once for the whole
+            // instance. A fitting's side void (into walls) and bottom void (into floors) are
+            // separate solids in the family, so a rejection on one category says nothing about
+            // the other. Candidates arrive interleaved by distance (see Candidates()), not
+            // grouped by category, so this has to be re-asked for every one of them: a floor
+            // sitting directly under the fitting is often the nearest candidate and so the
+            // first one tried, and it must not be allowed to silently take the wall cuts down
+            // with it if its own void turns out to be the broken one.
+            if (target.Category is { } category && HasRejectedVoids(fitting, category.Id))
+                continue;
+
             if (alreadyCut.Contains(target.Id.Value))
             {
                 _alreadyCut++;
@@ -260,12 +281,14 @@ public sealed class CaseworkVoidCutter
             }
             catch (Autodesk.Revit.Exceptions.ArgumentException ex)
             {
-                // A FAMILY-LEVEL rejection, not a pair-level one, and the distinction is what
-                // makes this readable. Revit documents two causes for this exception: "the
-                // element cannot be cut with a void instance", which the CanBeCutWithVoid test
-                // above has already ruled out, and "the element is not a family instance with
-                // an UNATTACHED void that can cut" - which is a property of the family, so it
-                // will be true for every remaining candidate and every other instance of it.
+                // A FAMILY-AND-CATEGORY-LEVEL rejection, not a pair-level one, and the
+                // distinction is what makes this readable. Revit documents two causes for this
+                // exception: "the element cannot be cut with a void instance", which the
+                // CanBeCutWithVoid test above has already ruled out, and "the element is not a
+                // family instance with an UNATTACHED void that can cut" - which is a property
+                // of the family's void FOR THIS CANDIDATE'S CATEGORY, so it will be true for
+                // every remaining candidate of the SAME category and every other instance of
+                // this family, but says nothing about the OTHER category's void.
                 //
                 // Attached means the void is already consumed cutting a solid INSIDE the
                 // family. A void applied to the carcass with Cut Geometry in the family editor
@@ -273,12 +296,14 @@ public sealed class CaseworkVoidCutter
                 // project. It is the likelier of the two authoring faults, because it looks
                 // completely correct in the family editor.
                 //
-                // So: stop trying this instance, remember the family, and warn once. Carrying
-                // on would produce one identical warning per candidate wall per instance -
-                // hundreds of lines all saying the same thing about one family.
-                RejectFamily(fitting, ex);
+                // So: stop trying THIS CATEGORY for this instance, remember the (family,
+                // category) pair, and warn once per pair - not once per family. Continuing to
+                // the next candidate rather than returning is what lets a fitting whose bottom
+                // void is broken still get its perfectly good side-void wall cuts, and the
+                // reverse.
+                RejectFamily(fitting, target, ex);
                 Row(fitting, target, "rejected", Trim(ex.Message));
-                return;
+                continue;
             }
         }
     }
@@ -356,30 +381,62 @@ public sealed class CaseworkVoidCutter
         }
     }
 
-    /// <summary>True once Revit has refused this instance's family for want of a usable void.</summary>
-    private bool HasRejectedVoids(FamilyInstance fitting)
+    /// <summary>True once Revit has refused this instance's family for want of a usable void
+    /// AGAINST THIS CATEGORY specifically - the other category may still be perfectly usable.</summary>
+    private bool HasRejectedVoids(FamilyInstance fitting, ElementId categoryId)
     {
         var family = fitting.Symbol?.Family;
-        return family is not null && _familyVoidsRejected.Contains(family.Id.Value);
+        return family is not null &&
+               _familyVoidsRejected.Contains((family.Id.Value, categoryId.Value));
     }
 
-    private void RejectFamily(FamilyInstance fitting, Exception ex)
+    /// <summary>
+    /// True only once EVERY target category is known-rejected for this family - the fast exit
+    /// that used to fire on the first rejection of any kind, back when there was only one void
+    /// geometry to test. With two, an instance is only genuinely hopeless once both have failed;
+    /// stopping here on the first would spend nothing extra checking the rest, but "nothing
+    /// extra" is exactly the failure this whole fix removes.
+    /// </summary>
+    private bool AllTargetCategoriesRejected(FamilyInstance fitting)
     {
         var family = fitting.Symbol?.Family;
-        if (family is null)
+        if (family is null) return false;
+
+        return _settings.TargetCategories.All(
+            category => _familyVoidsRejected.Contains((family.Id.Value, (long)category)));
+    }
+
+    /// <summary>
+    /// Records that this family's void for THIS CANDIDATE'S CATEGORY is unusable, and warns
+    /// once per (family, category) pair rather than once per family - see the field doc on
+    /// <see cref="_familyVoidsRejected"/> for why the two are no longer the same thing.
+    /// </summary>
+    private void RejectFamily(FamilyInstance fitting, Element target, Exception ex)
+    {
+        var family = fitting.Symbol?.Family;
+        var category = target.Category;
+
+        if (family is null || category is null)
         {
             _warnings.Add($"Fitting {fitting.Id.Value}: {Trim(ex.Message)}");
             return;
         }
 
-        if (!_familyVoidsRejected.Add(family.Id.Value)) return;
+        if (!_familyVoidsRejected.Add((family.Id.Value, category.Id.Value))) return;
+
+        var isFloor = category.Id.Value == (long)BuiltInCategory.OST_Floors;
+        var voidKind = isFloor ? "bottom" : "side";
+        var targetWord = isFloor ? "floor" : "wall";
+        var otherTargetWord = isFloor ? "wall" : "floor";
 
         _warnings.Add(
-            $"Family '{family.Name}' has no void Revit will cut with, so every instance of it is " +
-            $"being skipped. Revit said: {Trim(ex.Message)} Usual cause: the side voids are " +
-            "ATTACHED - already applied to the carcass with Cut Geometry inside the family. A void " +
-            "that cuts a solid in the family is spent and cannot cut anything in the project. Open " +
-            "the family, uncut the side voids from the carcass, and reload.");
+            $"Family '{family.Name}' has no {voidKind} void Revit will cut with, so every " +
+            $"instance's {targetWord} candidates are being skipped - its {otherTargetWord} " +
+            $"cuts, if any, are UNAFFECTED and continue normally. Revit said: {Trim(ex.Message)} " +
+            $"Usual cause: the {voidKind} void is ATTACHED - already applied to the carcass with " +
+            "Cut Geometry inside the family. A void that cuts a solid in the family is spent and " +
+            "cannot cut anything in the project. Open the family, uncut the " +
+            $"{voidKind} void(s) from the carcass, and reload.");
     }
 
     /// <summary>
