@@ -73,7 +73,7 @@ open you get an MSB3021 copy warning and Revit keeps running the old code.
 ### Tests
 
 ```bash
-dotnet run --project "Revit Add-in/tests/Cda.ScheduleFilter.Tests"
+dotnet run --project "Revit Add-in/tests/Cda.Schedules.Tests"
 ```
 
 Each project under `tests/` is a plain console runner: it prints a line per check and exits
