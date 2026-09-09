@@ -1,0 +1,201 @@
+<Window x:Class="Cda.Revit.Addin.UI.ExportSchedulesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Export Schedules"
+        Width="900"
+        Height="660"
+        MinWidth="720"
+        MinHeight="520"
+        ShowInTaskbar="False"
+        WindowStyle="ToolWindow">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,12"
+                   Text="Choose the schedules to export. Narrow the list with the filters, then tick the ones you want — only ticked schedules are read and written to the workbook." />
+
+        <!-- The filters narrow what is LISTED. The tick boxes decide what is EXPORTED.
+             Keeping those two jobs visibly separate is what stops the usual filter-panel
+             surprise: a schedule you ticked, then filtered out of sight, still exports. -->
+        <Border Grid.Row="1"
+                BorderBrush="#FF2576B2"
+                BorderThickness="1"
+                Padding="12"
+                Margin="0,0,0,10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Row="0" Grid.Column="0">
+                    <TextBlock Text="Search" FontWeight="SemiBold" />
+                    <TextBox x:Name="SearchBox"
+                             Margin="0,4,0,0"
+                             Padding="4"
+                             ToolTip="Name, category or sheet number. Several words all have to match, so typing more narrows the list."
+                             TextChanged="OnSearchChanged" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="0" Grid.Column="2">
+                    <TextBlock Text="Category" FontWeight="SemiBold" />
+                    <ComboBox x:Name="CategoryBox"
+                              Width="190"
+                              Margin="0,4,0,0"
+                              DisplayMemberPath="Label"
+                              SelectionChanged="OnFilterChanged" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="0" Grid.Column="4">
+                    <TextBlock Text="Type" FontWeight="SemiBold" />
+                    <ComboBox x:Name="KindBox"
+                              Width="170"
+                              Margin="0,4,0,0"
+                              DisplayMemberPath="Label"
+                              SelectionChanged="OnFilterChanged" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,10,0,0">
+                    <TextBlock Text="Placed" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <ComboBox x:Name="PlacementBox"
+                              Width="150"
+                              Margin="8,0,0,0"
+                              SelectionChanged="OnFilterChanged"
+                              ToolTip="Whether the schedule view sits on a sheet.">
+                        <ComboBoxItem Content="Anywhere" Tag="Any" IsSelected="True" />
+                        <ComboBoxItem Content="On a sheet" Tag="OnSheet" />
+                        <ComboBoxItem Content="Not on a sheet" Tag="NotOnSheet" />
+                    </ComboBox>
+
+                    <TextBlock Text="Content" FontWeight="SemiBold" VerticalAlignment="Center" Margin="20,0,0,0" />
+                    <ComboBox x:Name="ContentBox"
+                              Width="150"
+                              Margin="8,0,0,0"
+                              SelectionChanged="OnFilterChanged"
+                              ToolTip="Whether the schedule has any rows under its header.">
+                        <ComboBoxItem Content="Any" Tag="Any" IsSelected="True" />
+                        <ComboBoxItem Content="Has rows" Tag="WithData" />
+                        <ComboBoxItem Content="Empty" Tag="Empty" />
+                    </ComboBox>
+                </StackPanel>
+
+                <Button Grid.Row="1" Grid.Column="4"
+                        Content="Clear filters"
+                        Width="110"
+                        Height="26"
+                        Margin="0,10,0,0"
+                        HorizontalAlignment="Right"
+                        Click="OnClearFilters" />
+            </Grid>
+        </Border>
+
+        <ListView Grid.Row="2"
+                  x:Name="ScheduleList"
+                  MouseDoubleClick="OnRowDoubleClick">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Width="60">
+                        <GridViewColumn.Header>
+                            <TextBlock Text="Export" ToolTip="Tick the schedules to write to the workbook." />
+                        </GridViewColumn.Header>
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox HorizontalAlignment="Center"
+                                          IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+                    <GridViewColumn Header="Schedule" Width="300" DisplayMemberBinding="{Binding Name}" />
+                    <GridViewColumn Header="Category" Width="150" DisplayMemberBinding="{Binding Category}" />
+                    <GridViewColumn Header="Type" Width="120" DisplayMemberBinding="{Binding Kind}" />
+                    <GridViewColumn Header="Sheet" Width="80" DisplayMemberBinding="{Binding Sheet}" />
+                    <GridViewColumn Header="Rows" Width="70" DisplayMemberBinding="{Binding Rows}" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <Grid Grid.Row="3" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" x:Name="CountLine" VerticalAlignment="Center" FontWeight="SemiBold" />
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="Only these"
+                        Width="90"
+                        Height="26"
+                        Click="OnSelectShownOnly"
+                        ToolTip="Tick everything in the list above and untick everything the filters are hiding." />
+                <Button Content="Select all" Width="90" Height="26" Margin="8,0,0,0" Click="OnSelectAll" />
+                <Button Content="Select none" Width="90" Height="26" Margin="8,0,0,0" Click="OnSelectNone" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Everything ScheduleExportSettings can already do, which until now was only
+             reachable by editing the source. -->
+        <Expander Grid.Row="4" Header="Workbook options" Margin="0,12,0,0">
+            <Grid Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="20" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <CheckBox x:Name="NumericCellsBox"
+                              Content="Write plain numbers as numbers"
+                              IsChecked="True"
+                              Margin="0,0,0,6"
+                              ToolTip="Off keeps every cell as text, exactly as the schedule displays it." />
+                    <CheckBox x:Name="ColumnHeadersBox"
+                              Content="Keep the column header row"
+                              Margin="0,0,0,6" />
+                    <CheckBox x:Name="IndexSheetBox"
+                              Content="Add an Index worksheet listing what was exported"
+                              Margin="0,0,0,6" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <CheckBox x:Name="DropBlankRowsBox"
+                              Content="Drop blank rows"
+                              IsChecked="True"
+                              Margin="0,0,0,6"
+                              ToolTip="Revit's group separator rows. Off keeps the schedule's spacing." />
+                    <CheckBox x:Name="WrapTextBox"
+                              Content="Wrap long cell text"
+                              Margin="0,0,0,6" />
+                    <CheckBox x:Name="IncludeEmptyBox"
+                              Content="Still export a ticked schedule that turns out to be empty"
+                              IsChecked="True"
+                              Margin="0,0,0,6"
+                              ToolTip="Off drops it at write time and lists it under Skipped instead." />
+                </StackPanel>
+            </Grid>
+        </Expander>
+
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="Export" IsDefault="True" Width="100" Height="28" Click="OnExport" />
+            <Button Content="Cancel" IsCancel="True" Width="100" Height="28" Margin="8,0,0,0" />
+        </StackPanel>
+
+    </Grid>
+</Window>
