@@ -1,14 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { exportScheduleToExcel } from "./exportScheduleService";
 
-const DEFAULT_CATEGORIES = [
-  "All Schedules",
+const DEFAULT_SCHEDULES = [
   "Door Schedule",
   "Window Schedule",
   "Room Schedule",
   "Wall Schedule",
   "Furniture Schedule",
   "Sheet List",
+  "Cabinet Elements",
+  "Ceiling Surface Area",
+  "Countertop",
+  "Door Casing FROM",
+  "Door Casing TO",
+  "Door Frames TO",
+  "Door Lining FROM",
+  "Door Lining TO",
 ];
 
 const STATUS_OPTIONS = ["Active", "Pending", "Completed"];
@@ -18,18 +25,17 @@ const STATUS_OPTIONS = ["Active", "Pending", "Completed"];
  *
  * @param {boolean} isOpen
  * @param {() => void} onClose
- * @param {string[]} [categories] - dropdown options, defaults to DEFAULT_CATEGORIES
+ * @param {string[]} [schedules] - checklist options, defaults to DEFAULT_SCHEDULES
  * @param {(filters: object) => Promise<any>} [onExport] - defaults to the mock service
  */
 export default function ExportScheduleDialog({
   isOpen,
   onClose,
-  categories = DEFAULT_CATEGORIES,
+  schedules = DEFAULT_SCHEDULES,
   onExport = exportScheduleToExcel,
 }) {
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [category, setCategory] = useState(categories[0]);
+  const [searchText, setSearchText] = useState("");
+  const [selectedSchedules, setSelectedSchedules] = useState({});
   const [statuses, setStatuses] = useState({
     Active: true,
     Pending: true,
@@ -57,17 +63,43 @@ export default function ExportScheduleDialog({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, isExporting, onClose]);
 
+  const filteredSchedules = useMemo(
+    () =>
+      schedules.filter((s) =>
+        s.toLowerCase().includes(searchText.trim().toLowerCase())
+      ),
+    [schedules, searchText]
+  );
+
   if (!isOpen) return null;
 
   const toggleStatus = (status) =>
     setStatuses((prev) => ({ ...prev, [status]: !prev[status] }));
 
-  const dateRangeInvalid =
-    startDate && endDate && startDate > endDate;
+  const toggleSchedule = (name) =>
+    setSelectedSchedules((prev) => ({ ...prev, [name]: !prev[name] }));
+
+  const selectedCount = filteredSchedules.filter(
+    (s) => selectedSchedules[s]
+  ).length;
+  const allFilteredSelected =
+    filteredSchedules.length > 0 && selectedCount === filteredSchedules.length;
+
+  const toggleAllFiltered = () => {
+    const nextValue = !allFilteredSelected;
+    setSelectedSchedules((prev) => {
+      const next = { ...prev };
+      filteredSchedules.forEach((s) => {
+        next[s] = nextValue;
+      });
+      return next;
+    });
+  };
 
   const handleExport = async () => {
-    if (dateRangeInvalid) {
-      setError("Start date must be before end date.");
+    const chosenSchedules = schedules.filter((s) => selectedSchedules[s]);
+    if (chosenSchedules.length === 0) {
+      setError("Select at least one schedule.");
       return;
     }
 
@@ -81,9 +113,7 @@ export default function ExportScheduleDialog({
     setIsExporting(true);
     try {
       await onExport({
-        startDate: startDate || null,
-        endDate: endDate || null,
-        category,
+        schedules: chosenSchedules,
         statuses: selectedStatuses,
       });
       onClose();
@@ -133,60 +163,56 @@ export default function ExportScheduleDialog({
         </div>
 
         <div className="space-y-4">
-          {/* Date range */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label
-                htmlFor="start-date"
-                className="mb-1 block text-sm font-medium text-gray-700"
-              >
-                Start Date
-              </label>
-              <input
-                id="start-date"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="end-date"
-                className="mb-1 block text-sm font-medium text-gray-700"
-              >
-                End Date
-              </label>
-              <input
-                id="end-date"
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-
-          {/* Category / schedule name */}
+          {/* Schedule search + checklist */}
           <div>
             <label
-              htmlFor="category"
+              htmlFor="schedule-search"
               className="mb-1 block text-sm font-medium text-gray-700"
             >
-              Category / Schedule
+              Schedules
             </label>
-            <select
-              id="category"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              {categories.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
+            <input
+              id="schedule-search"
+              type="text"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Search schedules..."
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+
+            <div className="mt-2 max-h-48 overflow-y-auto rounded-md border border-gray-300">
+              <label className="flex items-center gap-2 border-b border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  onChange={toggleAllFiltered}
+                  disabled={filteredSchedules.length === 0}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                All Schedules
+              </label>
+
+              {filteredSchedules.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-gray-400">
+                  No schedules match "{searchText}".
+                </p>
+              ) : (
+                filteredSchedules.map((name) => (
+                  <label
+                    key={name}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!selectedSchedules[name]}
+                      onChange={() => toggleSchedule(name)}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    {name}
+                  </label>
+                ))
+              )}
+            </div>
           </div>
 
           {/* Status checkboxes */}
