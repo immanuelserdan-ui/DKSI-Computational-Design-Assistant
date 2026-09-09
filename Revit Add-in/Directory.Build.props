@@ -64,8 +64,23 @@
     </AssemblyAttribute>
   </ItemGroup>
 
+  <!--
+    Which projects actually reference RevitAPI.dll. True for everything by default, because
+    the add-in is what this repository is for and a missing Revit install should be a loud
+    failure there.
+
+    The test projects set it false. They deliberately reference no Revit assembly - each
+    compiles a handful of plain-arithmetic source files out of the add-in - which is what
+    lets them run on a build machine or in CI, and the guard below was the one thing
+    stopping them: it is imported by every project under this folder, so a machine with no
+    Revit failed the tests before compiling a line of them.
+  -->
+  <PropertyGroup>
+    <RequiresRevitApi Condition="'$(RequiresRevitApi)' == ''">true</RequiresRevitApi>
+  </PropertyGroup>
+
   <!-- Fail early and loudly rather than emitting hundreds of "type not found" errors. -->
-  <Target Name="VerifyRevitApiDir" BeforeTargets="BeforeBuild">
+  <Target Name="VerifyRevitApiDir" BeforeTargets="BeforeBuild" Condition="'$(RequiresRevitApi)' == 'true'">
     <Error Condition="!Exists('$(RevitApiDir)\RevitAPI.dll')"
            Text="RevitAPI.dll not found at '$(RevitApiDir)'. Set RevitApiDir in Directory.Build.props to your Revit $(RevitVersion) install folder." />
   </Target>
