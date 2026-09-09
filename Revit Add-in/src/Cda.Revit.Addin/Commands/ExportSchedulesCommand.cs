@@ -6,12 +6,19 @@ using Autodesk.Revit.UI;
 using Cda.Revit.Addin.Excel;
 using Cda.Revit.Addin.Infrastructure;
 using Cda.Revit.Addin.Schedules;
+using Cda.Revit.Addin.UI;
 
 namespace Cda.Revit.Addin.Commands;
 
 /// <summary>
-/// Port of ExportSchedulesToExcel.dyn. Exports every schedule in the model to one .xlsx,
-/// one worksheet per schedule. Writes nothing to the model and opens no transaction.
+/// Port of ExportSchedulesToExcel.dyn. Exports schedules to one .xlsx, one worksheet per
+/// schedule. Writes nothing to the model and opens no transaction.
+///
+/// The button used to export the whole model the instant it was pressed. It now opens
+/// <see cref="ExportSchedulesWindow"/> first, so the export covers what was asked for
+/// rather than everything - which on a real project is the difference between a
+/// six-worksheet workbook and a forty-worksheet one, and between seconds and minutes of
+/// reading table data.
 ///
 /// MANUAL, NOT ReadOnly, AND THAT IS NOT AN OVERSIGHT - DO NOT "CORRECT" IT BACK.
 /// The command genuinely writes nothing, so ReadOnly reads like the honest declaration. It is
@@ -24,6 +31,11 @@ namespace Cda.Revit.Addin.Commands;
 /// Measured 2026-09-02: 73 of the model's schedules failed that way in a single run, every one
 /// of them reported as "could not read table data" and skipped, producing a workbook that was
 /// silently missing most of its worksheets.
+///
+/// THE PICKER MADE THAT MATTER MORE, NOT LESS. ScheduleExporter.FindCandidates calls
+/// GetTableData for EVERY schedule in the model to count its rows, before the user has chosen
+/// anything - so under ReadOnly the dialog itself would show "?" against every stale schedule
+/// and the count filters would quietly stop working on them.
 ///
 /// Manual mode does NOT make the command able to write. Without an open transaction it still
 /// cannot modify anything - Manual only means "this command manages its own transactions", and
@@ -38,7 +50,30 @@ public sealed class ExportSchedulesCommand : CommandBase
     {
         var doc = ctx.Document;
 
-        var settings = new ScheduleExportSettings();
+        // Listing is cheap - a few cells per schedule. The full table is only read for
+        // whatever survives the dialog, which is what makes filtering worth doing at all.
+        var candidates = new ScheduleExporter(doc, new ScheduleExportSettings()).FindCandidates();
+
+        if (candidates.Count == 0)
+        {
+            new TaskDialog(CommandName)
+            {
+                MainInstruction = "No schedules found in this model.",
+                MainContent = "Nothing matched after filtering out view templates, revision schedules and " +
+                              "Revit's own internal <angle-bracketed> schedules.",
+                CommonButtons = TaskDialogCommonButtons.Close,
+            }.Show();
+
+            return Result.Cancelled;
+        }
+
+        var picker = new ExportSchedulesWindow(candidates);
+        if (RevitWindow.ShowDialog(picker, ctx.UiApplication) != true)
+            throw new OperationCanceledException();
+
+        var settings = picker.Settings;
+        Log.Info($"Export Schedules: {picker.SelectedCount} of {candidates.Count} schedules picked");
+
         var result = new ScheduleExporter(doc, settings).Collect();
 
         if (result.Sheets.Count == 0)
@@ -52,13 +87,14 @@ public sealed class ExportSchedulesCommand : CommandBase
             var problem = new TaskDialog(CommandName)
             {
                 MainInstruction = nothingToExport
-                    ? "No schedules found in this model."
-                    : $"Found {result.Collected} schedule(s), but none could be read.",
+                    ? "None of the schedules you picked are still in the model."
+                    : $"Read {result.Collected} schedule(s), but none could be exported.",
 
                 MainContent = nothingToExport
-                    ? "Nothing matched after filtering out view templates, revision schedules and " +
-                      "Revit's own internal <angle-bracketed> schedules."
-                    : "Every schedule failed while reading its table data. The reasons are below.",
+                    ? "They were deleted or renamed between opening the dialog and pressing Export. " +
+                      "Run the command again."
+                    : "Every schedule failed while reading its table data, or was dropped as empty. " +
+                      "The reasons are below.",
 
                 ExpandedContent = result.Skipped.Count > 0
                     ? string.Join(Environment.NewLine, result.Skipped.Take(60))
@@ -86,12 +122,16 @@ public sealed class ExportSchedulesCommand : CommandBase
 
         XlsxWriter.Write(dialog.FileName, result.Sheets, settings.NumericCells, settings.WrapText);
 
-        Log.Info($"Exported {result.Sheets.Count} schedules to {dialog.FileName}");
+        // Report.Count, not Sheets.Count: an Index worksheet is a worksheet but not a
+        // schedule, and the dialog can now switch it on.
+        var exported = result.Report.Count;
+
+        Log.Info($"Exported {exported} of {candidates.Count} schedules to {dialog.FileName}");
         foreach (var line in result.Skipped) Log.Warn($"Export Schedules: {line}");
 
         var summary = new TaskDialog(CommandName)
         {
-            MainInstruction = $"Exported {result.Sheets.Count} schedules.",
+            MainInstruction = $"Exported {exported} of {candidates.Count} schedules.",
             MainContent = Path.GetFileName(dialog.FileName),
             ExpandedContent = string.Join(Environment.NewLine, result.Report) +
                               (result.Skipped.Count > 0
