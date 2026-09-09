@@ -27,11 +27,13 @@ namespace Cda.Revit.Addin;
 /// would have been stranded. Now that each command is its own top-level button, each simply
 /// carries its own availability and Time Tracking carries none. Nothing to get wrong.
 ///
-/// THREE BUTTONS COME FROM ANOTHER PRODUCT. Painted Surface Area, Painted Area (project wide)
-/// and Show / Hide Paint Areas are commands in the standalone Painted Material Takeoff
-/// assembly, not in this one. They appear here so there is one tab to learn instead of two,
-/// and they are omitted silently on a machine where that product is not installed. See
-/// PaintTakeoffPath below for how they are addressed and what happens when it is absent.
+/// THREE BUTTONS DEPEND ON ANOTHER PRODUCT. Painted Area (project wide) and Show / Hide Paint
+/// Areas are still commands in the standalone Painted Material Takeoff assembly, not this
+/// one. Painted Surface Area is now this assembly's own PaintedSurfaceAreaGateCommand, which
+/// runs a tile-material check and then invokes the vendor command itself - see that class's
+/// remarks for why the gate could not live in the vendor command directly. All three still
+/// need that product installed and are omitted silently when it is not. See PaintTakeoffPath
+/// below for how it is found and what happens when it is absent.
 /// </summary>
 internal static class RibbonBuilder
 {
@@ -56,7 +58,12 @@ internal static class RibbonBuilder
     /// as before. Adding buttons that throw "file not found" on click would be worse than a
     /// shorter panel.
     /// </summary>
-    private static readonly string? PaintTakeoffPath = FindPaintTakeoff();
+    /// <summary>
+    /// internal, not private: <see cref="Commands.PaintedSurfaceAreaGateCommand"/> needs this
+    /// same path to load and invoke the vendor's Command type by reflection, and resolving it
+    /// a second, independent way would risk the two disagreeing about which build is running.
+    /// </summary>
+    internal static readonly string? PaintTakeoffPath = FindPaintTakeoff();
 
     public static void Build(UIControlledApplication app)
     {
@@ -455,9 +462,14 @@ internal static class RibbonBuilder
     /// The icons are DKSI's own: this assembly can only load PNGs embedded in itself, and the
     /// takeoff product's icons are embedded in the takeoff product.
     ///
-    /// THE AVAILABILITY CLASS IS THEIRS, NOT OURS, and it has to be - Revit resolves it out of
-    /// the button's own assembly. See the remarks on the string-based AddButton overload for
-    /// the dialog that appears when this is got wrong.
+    /// THE AVAILABILITY CLASS IS THEIRS FOR TWO OF THE THREE, NOT OURS, and it has to be -
+    /// Revit resolves it out of the button's own assembly. See the remarks on the
+    /// string-based AddButton overload for the dialog that appears when this is got wrong.
+    ///
+    /// PAINTED SURFACE AREA IS THE EXCEPTION, since PaintedSurfaceAreaGateCommand.cs. That
+    /// button's command now lives in THIS assembly - the gate has to run before the vendor
+    /// command, in code this project builds - so by the same rule its availability class had
+    /// to move with it, to ProjectDocumentAvailability. The other two buttons are unaffected.
     /// </summary>
     private static void AddPaintTakeoffButtons(RibbonPanel panel)
     {
@@ -465,19 +477,22 @@ internal static class RibbonBuilder
 
         // PaintedMaterialTakeoff's equivalent of ProjectDocumentAvailability, living where
         // Revit will actually look for it. Verified against the assembly's metadata: it is
-        // public and implements IExternalCommandAvailability.
+        // public and implements IExternalCommandAvailability. Used by the other two buttons
+        // below, not by Painted Surface Area - see the class remarks above.
         const string availability = "PaintedMaterialTakeoff.DocumentAvailability";
 
         AddButton(panel,
             name: "CdaPaintedSurfaceArea",
             text: "Painted\nSurface Area",
-            assemblyPath: PaintTakeoffPath,
-            className: "PaintedMaterialTakeoff.Command",
+            command: typeof(Commands.PaintedSurfaceAreaGateCommand),
             tooltip: "START HERE. Room-bounded painted areas for walls, floors, ceilings and roofs - " +
                      "and it rebuilds the three surface schedules for you.",
             longDescription: "The room-bounded takeoff, in one click, and the only button most " +
                              "models ever need. Measures each painted face against the room it " +
                              "fronts, so a wall painted on both sides counts towards both rooms. " +
+                             "\n\nASKS ABOUT TILE FIRST. A short prompt checks whether Alrum/Køkken " +
+                             "and Bad/Toilet need a tile material code (ending in \"F\") before the " +
+                             "takeoff runs, and blocks it if one you said Yes to is missing theirs. " +
                              "\n\nIT ALSO BUILDS THE SCHEDULES. DKSI watches for this run and " +
                              "rebuilds the three '@V03' surface schedules straight afterwards, in " +
                              "the same undo step - so 'Repair Surface Schedules' is a fallback for " +
@@ -486,7 +501,7 @@ internal static class RibbonBuilder
                              "From the standalone Painted Material Takeoff product, not from DKSI " +
                              "Revit Tools.",
             icon: "takeoff",
-            availabilityClassName: availability);
+            availability: typeof(Infrastructure.ProjectDocumentAvailability));
 
         // NO DKSI EQUIVALENT, and that is the main reason these buttons point at the other
         // product's assembly rather than being replaced by this one's own paint commands.

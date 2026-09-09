@@ -167,8 +167,8 @@ usings (`System.Windows.Shapes.Path` would collide with `System.IO.Path`). Add
    turns exceptions into a readable dialog plus a log entry.
 4. One `AddButton(...)` call in `RibbonBuilder.Build`.
 
-`ExportRoomAreasCommand` is the read-only template; `StampReviewDateCommand` is the
-write template.
+`AuditPaintOverlapsCommand` is the read-only template; `AdjustRoomBoundariesCommand` is
+the write template.
 
 ---
 
@@ -194,9 +194,9 @@ different add-in on every machine that already has it.
 
 | Source graph | Target command | Status |
 |---|---|---|
-| `DiagnoseParams.dyn` | `DiagnoseParamsCommand` | ✅ Ported |
+| `DiagnoseParams.dyn` | — | ⚠️ Ported, then removed. `DiagnoseParamsCommand` no longer exists; restoring it means writing it again, not re-wiring a button. |
 | `ExportSchedulesToExcel.dyn` | `ExportSchedulesCommand` | ✅ Ported — OOXML written directly, no Excel or NuGet needed |
-| `MaterialToTypeParams.dyn` | `SyncMaterialParamsCommand` | ✅ Ported — preview/apply, one transaction, one undo step |
+| `MaterialToTypeParams.dyn` | — | ⚠️ Ported, then removed. `SyncMaterialParamsCommand` no longer exists; restoring it means writing it again, not re-wiring a button. |
 | `Resolve-Udvendig-Rooms_v1.0.dyn` | `ResolveUdvendigRoomsCommand` | ✅ Ported — includes the schedule column re-pointing |
 | `Resolve-Lining-Clashes_v1.0.dyn` | `ResolveLiningClashesCommand` | ✅ Ported — needs the `LeftIsFamilyPlusX` calibration run |
 | `RoomFinishAreas 7-23-26.dyn` | `FinishSurfaceAreaCommand` | ✅ Ported — all six graphs are now in the add-in |
