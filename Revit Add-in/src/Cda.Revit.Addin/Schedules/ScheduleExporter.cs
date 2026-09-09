@@ -1,5 +1,6 @@
 using Autodesk.Revit.DB;
 using Cda.Revit.Addin.Excel;
+using Cda.Revit.Addin.Finishes;
 
 namespace Cda.Revit.Addin.Schedules;
 
@@ -434,7 +435,7 @@ public sealed class ScheduleExporter
                     var cells = new List<string>();
                     for (var c = firstCol; c < firstCol + data.NumberOfColumns; c++)
                     {
-                        try { cells.Add(view.GetCellText(section, r, c)); }
+                        try { cells.Add(StripReassignedMarker(view.GetCellText(section, r, c))); }
                         catch { cells.Add(string.Empty); }
                     }
 
@@ -481,6 +482,21 @@ public sealed class ScheduleExporter
 
         return (rows, bold, dataRows);
     }
+
+    /// <summary>
+    /// Drops PaintRoomOverrides.ReassignedMarker out of a cell's text, workbook-only.
+    ///
+    /// The marker is written into the real Room Name parameter deliberately - see that
+    /// constant's own remarks - because a schedule's data rows have no other way to flag
+    /// "reassigned" on screen. That reasoning stops at the screen: once the row is in a
+    /// workbook, the marker is department jargon about which room used to own the paint, not
+    /// something the export's own reader needs. Stripping it here, rather than off the
+    /// parameter itself, keeps the on-screen flag intact for review while the exported figure
+    /// reads by room name alone. Nothing else about the row changes - it is still exported,
+    /// still counted, still totalled under whichever room it landed on.
+    /// </summary>
+    private static string StripReassignedMarker(string cellText) =>
+        cellText.Replace(PaintRoomOverrides.ReassignedMarker, string.Empty);
 
     /// <summary>
     /// How many leading Body rows are column headings rather than data.
