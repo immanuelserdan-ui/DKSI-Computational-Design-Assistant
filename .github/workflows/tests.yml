@@ -15,9 +15,15 @@ name: Tests
 # and reference assemblies carry no implementation, so nothing here says the add-in BEHAVES
 # correctly inside Revit. A green tick means it compiles and the tested logic holds.
 
+# BOTH INTEGRATION BRANCHES ARE LISTED, and that is not belt-and-braces. This trigger is
+# pinned to branch NAMES, so it does not follow the repository's default branch when that
+# is changed in Settings. Listing only revit-suite-deployment meant that making main the
+# default would have left every direct push to the default branch with no CI run at all -
+# silently, since pull_request has no branch filter and would have kept going green. A
+# check that stops running looks exactly like a check that passes.
 on:
   push:
-    branches: [revit-suite-deployment]
+    branches: [main, revit-suite-deployment]
     paths:
       - 'Revit Add-in/**'
       - '.github/workflows/tests.yml'
