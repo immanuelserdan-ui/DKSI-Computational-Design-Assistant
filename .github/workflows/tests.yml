@@ -1,0 +1,108 @@
+name: Tests
+
+# WHAT THIS DOES AND DOES NOT COVER
+#
+# It builds and runs the test projects under "Revit Add-in/tests". Those deliberately
+# reference no Revit assembly - each compiles a few plain-arithmetic source files straight
+# out of the add-in - so they run on a hosted runner like any other console app.
+#
+# The add-in itself is compiled too, in a second job. A runner cannot have Revit on it, so
+# that build uses the NuGet reference assemblies Directory.Build.props falls back to when no
+# install is found - see the comment on HasLocalRevitApi there.
+#
+# WHAT THAT DOES AND DOES NOT PROVE: it type-checks every file in the add-in, including the
+# WPF windows and their XAML, against the real Revit API surface. It does not run anything,
+# and reference assemblies carry no implementation, so nothing here says the add-in BEHAVES
+# correctly inside Revit. A green tick means it compiles and the tested logic holds.
+
+on:
+  push:
+    branches: [revit-suite-deployment]
+    paths:
+      - 'Revit Add-in/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'Revit Add-in/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Revit-free test projects
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # The SDK the repository pins, rather than whatever the runner ships.
+          global-json-file: 'Revit Add-in/global.json'
+
+      - name: Run every test project
+        working-directory: 'Revit Add-in'
+        run: |
+          # Globbed rather than listed, so a test project added later is covered without
+          # anyone remembering to edit this file.
+          shopt -s nullglob
+          projects=(tests/*/*.csproj)
+
+          if [ ${#projects[@]} -eq 0 ]; then
+            echo "No test projects found under tests/ - that is a mistake, not a pass."
+            exit 1
+          fi
+
+          # No 'set -e': every project runs even after one fails, because "which of the
+          # five broke" is the useful answer and stopping at the first hides the rest.
+          failed=()
+
+          for project in "${projects[@]}"; do
+            echo "::group::$project"
+
+            if dotnet run --project "$project" --configuration Release; then
+              echo "PASS  $project"
+            else
+              echo "FAIL  $project"
+              failed+=("$project")
+            fi
+
+            echo "::endgroup::"
+          done
+
+          echo
+          echo "${#projects[@]} test project(s) run, ${#failed[@]} failed."
+
+          if [ ${#failed[@]} -gt 0 ]; then
+            printf 'FAILED: %s\n' "${failed[@]}"
+            exit 1
+          fi
+
+  addin:
+    name: Add-in compiles
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: 'Revit Add-in/global.json'
+
+      - name: Build Cda.Revit.Addin
+        working-directory: 'Revit Add-in'
+        # EnableWindowsTargeting lets a net10.0-windows WPF project build off Windows; the
+        # Revit references come from the NuGet fallback, since the runner has no install.
+        # DeployToRevit is already forced off in that case, so nothing tries to copy anywhere.
+        run: |
+          dotnet build src/Cda.Revit.Addin/Cda.Revit.Addin.csproj \
+            --configuration Release \
+            -p:EnableWindowsTargeting=true

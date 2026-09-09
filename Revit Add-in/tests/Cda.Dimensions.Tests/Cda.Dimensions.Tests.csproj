@@ -21,6 +21,10 @@
 
     <UseWPF>false</UseWPF>
     <DeployToRevit>false</DeployToRevit>
+
+    <!-- No Revit reference, so do not demand a Revit install to build. This is what makes
+         "runs anywhere" above true rather than aspirational. -->
+    <RequiresRevitApi>false</RequiresRevitApi>
   </PropertyGroup>
 
   <ItemGroup>

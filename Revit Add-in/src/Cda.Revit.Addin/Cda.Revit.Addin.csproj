@@ -28,7 +28,24 @@
     the output folder; shipping your own copy of RevitAPI.dll causes type-identity
     mismatches ("cannot cast Element to Element") at runtime.
   -->
-  <ItemGroup>
+  <!--
+    Two ways to get those assemblies, decided by HasLocalRevitApi in Directory.Build.props.
+
+    A REAL REVIT INSTALL is used whenever there is one, and is the only thing a developer
+    or the office ever builds against. Nothing about that has changed.
+
+    NUGET REFERENCE ASSEMBLIES are the fallback, and exist for one reason: so CI can
+    compile this project at all. A hosted runner cannot have Revit on it, so until now the
+    add-in was the one thing never compiled before merge - the test projects cover the few
+    Revit-free files and nothing else.
+
+    ExcludeAssets="runtime" is not a style choice. EnableDynamicLoading above copies NuGet
+    dependencies into the output folder, so without it these would be copied to output,
+    deployed into Program Files by the target below, and cause exactly the type-identity
+    mismatch the paragraph above warns about. PrivateAssets="all" keeps them out of the
+    generated deps.json for the same reason.
+  -->
+  <ItemGroup Condition="'$(HasLocalRevitApi)' == 'true'">
     <Reference Include="RevitAPI">
       <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
       <Private>false</Private>
@@ -37,6 +54,13 @@
       <HintPath>$(RevitApiDir)\RevitAPIUI.dll</HintPath>
       <Private>false</Private>
     </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(HasLocalRevitApi)' != 'true'">
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitApiPackageVersion)"
+                      ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitApiPackageVersion)"
+                      ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

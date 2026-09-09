@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NO REVIT REFERENCE, DELIBERATELY - same reasoning as the other test projects here.
+
+    It compiles ONE source file from the add-in: ScheduleExportFilter.cs, which is written with
+    no Revit type in it precisely so this project can exist. That file decides which
+    schedules the Export Schedules dialog shows, and a filter that quietly drops a
+    schedule is invisible until someone notices a worksheet missing from a workbook they
+    already sent out. Testing the real file rather than a copy is what makes these worth
+    anything - a copied rule drifts from the shipping one and then passes forever.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cda.Schedules.Tests</RootNamespace>
+    <AssemblyName>Cda.Schedules.Tests</AssemblyName>
+
+    <UseWPF>false</UseWPF>
+    <DeployToRevit>false</DeployToRevit>
+
+    <!-- No Revit reference, so do not demand a Revit install to build. This is what makes
+         "runs anywhere" above true rather than aspirational. -->
+    <RequiresRevitApi>false</RequiresRevitApi>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Cda.Revit.Addin\Schedules\ScheduleExportFilter.cs" Link="ScheduleExportFilter.cs" />
+  </ItemGroup>
+
+</Project>

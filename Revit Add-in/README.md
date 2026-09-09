@@ -70,6 +70,30 @@ dotnet build "Revit Add-in/CdaRevitTools.slnx" -c Debug -p:DeployToRevit=false
 Revit locks the DLL once it has loaded it, so **close Revit before rebuilding**. If it is
 open you get an MSB3021 copy warning and Revit keeps running the old code.
 
+**On a machine with no Revit**, the build falls back to the Nice3point reference assemblies
+from NuGet, pinned in `Directory.Build.props` to the release the office runs. That exists so
+CI can compile the add-in at all; it warns loudly, and it switches deploying off. It proves
+the code compiles — it proves nothing about how it behaves in Revit. A machine that *does*
+have Revit never touches it, and if you see that warning on one that should, `RevitApiDir`
+is pointing at the wrong folder.
+
+### Tests
+
+```bash
+dotnet run --project "Revit Add-in/tests/Cda.Schedules.Tests"
+```
+
+Each project under `tests/` is a plain console runner: it prints a line per check and exits
+non-zero if any failed. None of them reference a Revit assembly — each compiles a handful of
+source files straight out of the add-in, so what gets tested is the shipping file rather
+than a copy that drifts away from it — which is what lets them run anywhere, Revit
+installed or not.
+
+`.github/workflows/tests.yml` runs all of them on every pull request, and compiles the
+add-in alongside them against the NuGet reference assemblies. So a compile error is caught
+before merge — but reference assemblies carry no implementation and nothing here runs inside
+Revit, so **a green tick means it compiles, not that it works**.
+
 ### Debugging
 
 `Properties/launchSettings.json` sets Revit as the start program, so <kbd>F5</kbd> in
@@ -241,6 +265,22 @@ Recorded here because they are decisions, not accidents:
   the `except` fired every time and nothing was ever filtered. The C# keeps that behaviour
   rather than silently changing what existing exports contain. Real column hiding would
   come from `ScheduleDefinition.GetField(i).IsHidden`.
+- **Export Schedules** — the graph, and the first C# port, exported every schedule in the
+  model the moment the button was pressed. It now opens a picker first
+  (`ExportSchedulesWindow`): filter by name, category, type, sheet placement or whether the
+  schedule has any rows, tick what you want, then Export. Everything starts ticked, so the
+  old "export the lot" is still one extra click and nothing else. The workbook options that
+  were only reachable by editing `ScheduleExportSettings` are on the dialog too.
+
+  Listing is cheap — a handful of cells per schedule — and only ticked schedules have their
+  full table read, so a filtered export is faster than the old unfiltered one, not slower.
+
+  There is **no date filter**, deliberately. The Revit API exposes no created-on or
+  modified-on date for a view, and a workshared model only adds *who* touched it, never
+  *when*. A date control here would have to be invented from something else, and a filter
+  that means something other than its label is worse than no filter. Sheet placement and
+  row count are the honest status axes a schedule actually has; category is the closest
+  thing it has to a department.
 - **Material sync** and **Udvendig** — preview/dry-run is now an explicit prompt on every
   run rather than a boolean left on the canvas, and the destructive option is never the
   default button.

@@ -7,5 +7,6 @@
     <Project Path="tests/Cda.Dimensions.Tests/Cda.Dimensions.Tests.csproj" />
     <Project Path="tests/Cda.Udvendig.Tests/Cda.Udvendig.Tests.csproj" />
     <Project Path="tests/Cda.Containment.Tests/Cda.Containment.Tests.csproj" />
+    <Project Path="tests/Cda.Schedules.Tests/Cda.Schedules.Tests.csproj" />
   </Folder>
 </Solution>
