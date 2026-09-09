@@ -62,11 +62,16 @@ if (-not (Test-Path $Wix)) {
     exit 1
 }
 
-if (-not (Test-Path $PaintTakeoffMsi)) {
+## EMPTY/NULL CHECKED FIRST, SEPARATELY FROM Test-Path. When dist\ has no PaintTakeoff-*.msi at
+## all, the auto-detect block above leaves $PaintTakeoffMsi empty rather than a real path - and
+## Test-Path REJECTS an empty string at parameter binding ("Cannot bind argument to parameter
+## 'Path' because it is an empty string"), before its own body ever runs. That crash pre-empted
+## this exact message for anyone hitting the case it exists to explain.
+if ([string]::IsNullOrWhiteSpace($PaintTakeoffMsi) -or -not (Test-Path $PaintTakeoffMsi)) {
     Say ""
-    Say "Painted Material Takeoff MSI not found: $PaintTakeoffMsi" 'Red'
+    Say "Painted Material Takeoff MSI not found in dist\." 'Red'
     Say "Build it first:  .\tools\build-painttakeoff.ps1" 'Red'
-    Say "Or pass one with -PaintTakeoffMsi." 'Red'
+    Say "Or pass one with -PaintTakeoffMsi <path to a PaintTakeoff .msi>." 'Red'
     exit 1
 }
 
