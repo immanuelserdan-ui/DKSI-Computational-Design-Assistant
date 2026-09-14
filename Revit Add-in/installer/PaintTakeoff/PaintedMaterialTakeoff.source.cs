@@ -4511,7 +4511,33 @@ namespace PaintedMaterialTakeoff.Core
 				// either GapColumn itself is returning null/empty, or the Union with it is
 				// failing - the earlier diagnostic never distinguished the two. This does.
 				double baseVolume = clip.Volume;
-				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, _s.InteriorClipOutsetFt);
+
+				// RULE 1 (2026-09-15): InteriorClipOutsetFt (6,1 mm) is the wrong tolerance
+				// here - it exists to stop a boolean throwing on a COINCIDENT plane, not to
+				// clear a real element's own thickness, and this column is unioned ONCE into
+				// the shared room clip that EVERY interior element's BOTH faces are then
+				// measured against.
+				//
+				// A freestanding wall standing at the gap's own edge has two faces 100+ mm
+				// apart. Measured on FM_Template, Kaelderrum 4, wall 29330864 (IV_Maal
+				// 100mm): face 0 recovered its full 1,8715 m2, face 1 only 1,5215 m2 - a
+				// 0,35 m2 shortfall that is not a sliver, it is almost exactly this wall's
+				// length times the gap's own extension height (5,906 ft x 0,656 ft = 0,36
+				// m2). One face's plate fell entirely inside the unioned column; the other,
+				// 100 mm further out, fell entirely outside its 6,1 mm-outset footprint and
+				// kept only the base, un-extended clip - a clean binary, not a partial clip,
+				// which is what a too-small outset produces: not a fuzzy edge but a face
+				// that misses the extension altogether.
+				//
+				// ProbeWallOvershootFt (0,25 ft = 76 mm) is this file's OWN existing constant
+				// for the same job elsewhere - clearing a real wall's thickness when the
+				// probe does not know it in advance - reused here rather than inventing a
+				// second number for one purpose. Widening this outset can only ever recover
+				// area that is not currently reaching the union; the material actually
+				// credited still comes from each element's own real solid via
+				// ClippedFaceSolid further down, so this cannot invent paint on anything
+				// that is not really there.
+				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, _s.ProbeWallOvershootFt);
 				string gapColumnNote = (object)gapColumn == null
 					? "GapColumn returned null"
 					: $"GapColumn volume={gapColumn.Volume:0.########} cu ft";
