@@ -7088,7 +7088,7 @@ namespace PaintedMaterialTakeoff.Core
 				Solid solid2 = GeometryUtil.TryBoolean(item3, solid, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt);
 				if ((object)solid2 != null)
 				{
-					Solid solid3 = TrimUnderOverhead(solid2, env, list);
+					Solid solid3 = TrimUnderOverhead(solid2, env, list, SafeWidth(wall));
 					if ((object)solid3 != null)
 					{
 						list2.Add(solid3);
@@ -7563,7 +7563,7 @@ namespace PaintedMaterialTakeoff.Core
 					{
 						continue;
 					}
-					Solid trimmed = TrimUnderOverhead(hit, env, trimNotes);
+					Solid trimmed = TrimUnderOverhead(hit, env, trimNotes, SafeWidth(behind));
 					if ((object)trimmed != null)
 					{
 						clipped.Add(trimmed);
@@ -8077,7 +8077,7 @@ namespace PaintedMaterialTakeoff.Core
 			return GeometryUtil.TryExtrude(new List<CurveLoop> { curveLoop }, height);
 		}
 
-		private Solid? TrimUnderOverhead(Solid slice, RoomEnvelope env, List<string> notes)
+		private Solid? TrimUnderOverhead(Solid slice, RoomEnvelope env, List<string> notes, double wallThicknessFt)
 		{
 			double zTop = (env.OverheadIsFlat ? env.ZTop : env.ZTopHighest);
 			Solid solid = FlatCut(slice, env, zTop, notes) ?? slice;
@@ -8093,7 +8093,7 @@ namespace PaintedMaterialTakeoff.Core
 			// removed too early.
 			if (env.HasCeilingGap && (object)env.GapFootprint != null)
 			{
-				Solid restored = RestoreCeilingGap(slice, env, notes);
+				Solid restored = RestoreCeilingGap(slice, env, notes, wallThicknessFt);
 				if ((object)restored != null)
 				{
 					Solid unioned = GeometryUtil.TryBoolean(solid, restored, BooleanOperationsType.Union, _s.MinSolidVolumeCuFt);
@@ -8160,7 +8160,7 @@ namespace PaintedMaterialTakeoff.Core
 		/// avoid coincident-boundary problems elsewhere - gives the union real material to
 		/// work with on both sides of the seam.
 		/// </summary>
-		private Solid? RestoreCeilingGap(Solid slice, RoomEnvelope env, List<string> notes)
+		private Solid? RestoreCeilingGap(Solid slice, RoomEnvelope env, List<string> notes, double wallThicknessFt)
 		{
 			double height = env.GapZTop - env.ZTop + _s.PrismInsetFt;
 			if (height <= 0.05 || (object)env.GapFootprint == null)
@@ -8207,16 +8207,25 @@ namespace PaintedMaterialTakeoff.Core
 			Autodesk.Revit.DB.Transform lift = Autodesk.Revit.DB.Transform.CreateTranslation(new XYZ(0.0, 0.0, env.ZTop - _s.PrismInsetFt - faceZ.Value));
 			List<CurveLoop> lifted = loops.Select((CurveLoop l) => CurveLoop.CreateViaTransform(l, lift)).ToList();
 
-			// Outset laterally for the same reason as InteriorElementCalculator.GapColumn - see
-			// its remarks for the measured evidence. A gap's own edges are the faces of
-			// whatever stands in it, so an un-outset column's sides land coplanar with those
-			// faces and the intersect below becomes the degenerate case Revit throws on. The
-			// result is still clipped to `slice`, this wall's own material, so a 6 mm wider
-			// search volume cannot pull in area that is not this wall's.
-			if (_s.InteriorClipOutsetFt > 0.0)
-			{
-				lifted = GeometryUtil.OutsetProfile(lifted, _s.InteriorClipOutsetFt);
-			}
+			// RULE 1 (2026-09-15). This was the LAST place InteriorClipOutsetFt (6,1 mm)
+			// still stood for "clear a real wall's thickness" - GapColumn (the twin of this
+			// method, for freestanding interior walls) already had this exact fix; this,
+			// its ROOM-BOUNDARY counterpart, did not, because fixing one never touched the
+			// other's own copy of the same three lines.
+			//
+			// Confirmed live, not assumed: wall 29317994 ("IV_Maal 100mm"), the region the
+			// user selected directly in Revit and pointed at by element ID - Face 0.2 R3,
+			// a ROOM-BOUNDARY segment measured through THIS method, not GapColumn's - still
+			// stopped exactly at the slab soffit (Z=-3,937 ft) while wall 29330864 (measured
+			// through GapColumn, already fixed) recovered its band in full. Same symptom,
+			// same root cause, the sibling method nobody had touched yet.
+			//
+			// wallThicknessFt is the ACTUAL wall this restoration is for - SafeWidth(wall),
+			// threaded in from Process()/MeasureWallsBehind() where the wall is already
+			// known - plus ProbeWallOvershootFt, the same margin GapColumn uses, rather than
+			// a flat constant guessed twice already this session and wrong both times.
+			double outsetFt = _s.ProbeWallOvershootFt + Math.Max(wallThicknessFt, 0.0);
+			lifted = GeometryUtil.OutsetProfile(lifted, outsetFt);
 
 			Solid column = GeometryUtil.TryExtrude(lifted, height);
 			if ((object)column == null || column.Volume <= 0.0)
