@@ -4484,7 +4484,36 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				yield break;
 			}
-			Solid clip = GeometryUtil.TryExtrude(GeometryUtil.OutsetProfile(GeometryUtil.NormalizeProfile(env.Profile, env.ZBottom), _s.InteriorClipOutsetFt), num);
+
+			// RULE 1 (2026-09-15), SECOND HALF OF THE SAME FIX. The GapColumn outset fixed
+			// nothing here, and that is exactly the evidence that pointed here: widening it
+			// (6,1 mm to 76 mm) grew the Union(clip, gapColumn) volume for real (600.22 to
+			// 603.23 cu ft, measured) but left wall 29330864's face#1 at IDENTICALLY 1.5215
+			// m2, to four decimal places, while its clip box already comfortably contained
+			// both of the wall's faces (Y range 28.99..36.66 against faces at Y=32.93 and
+			// 33.258, 0,33 ft apart). A generous bounding box that still produces zero change
+			// means the boundary doing the cutting is not the box, and is not the gap column
+			// - it is THIS clip's own true shape, built here, before any gap column is ever
+			// unioned in.
+			//
+			// This is the room's OWN 2D boundary (env.Profile, from room.GetBoundarySegments)
+			// outset by the same InteriorClipOutsetFt - 6,1 mm, the coincident-plane
+			// tolerance, not a real-thickness one. A boundary line drawn along or near one
+			// face of a 100 mm freestanding wall standing close to the room's own edge - which
+			// is exactly where a closure wall at a stair opening stands - leaves the FAR face,
+			// 100 mm further out, outside that 6,1 mm margin. This is the case
+			// ProbeWallOvershootFt already exists for elsewhere in this file; reused here for
+			// the same reason as the GapColumn fix, not a new number for a second problem.
+			//
+			// This is the base clip every interior element in EVERY room measures against,
+			// gap or no gap - a wider reach here, not only in GapColumn. Same safety property
+			// as that fix: this clip only says how far the room's own reach extends: what
+			// gets CREDITED still comes from each element's real solid via ClippedFaceSolid,
+			// so widening it can only recover area that is not currently reaching the clip -
+			// it cannot invent paint on an element that is not really there, and it cannot
+			// reattribute an element to a different room, since candidacy for THIS room's
+			// interiorElements list is decided upstream of this method entirely.
+			Solid clip = GeometryUtil.TryExtrude(GeometryUtil.OutsetProfile(GeometryUtil.NormalizeProfile(env.Profile, env.ZBottom), _s.ProbeWallOvershootFt), num);
 			if ((object)clip == null)
 			{
 				yield break;
