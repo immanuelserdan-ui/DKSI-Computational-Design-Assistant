@@ -1,4 +1,5 @@
 using Autodesk.Revit.DB;
+using Cda.Revit.Addin.Infrastructure;
 
 namespace Cda.Revit.Addin.Finishes;
 
@@ -309,6 +310,11 @@ public sealed class FinishGeometry
                     total += direct;
                     materials.Add(FaceMaterialKey(owner, hostFace), direct);
                 }
+                else if (ClippedToRoomZRange(roomFace, hostFace, roomNormal) is { } bandDirect)
+                {
+                    total += bandDirect;
+                    materials.Add(FaceMaterialKey(owner, hostFace), bandDirect);
+                }
                 else
                 {
                     materials.Drop();
@@ -330,6 +336,11 @@ public sealed class FinishGeometry
                 {
                     total += recovered;
                     materials.Add(FaceMaterialKey(owner, hostFace), recovered);
+                }
+                else if (ClippedToRoomZRange(roomFace, hostFace, roomNormal) is { } bandRecovered)
+                {
+                    total += bandRecovered;
+                    materials.Add(FaceMaterialKey(owner, hostFace), bandRecovered);
                 }
                 else
                 {
@@ -414,6 +425,143 @@ public sealed class FinishGeometry
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// RULE 1, applied where RegionArea structurally cannot be: the part of an ordinary
+    /// wall's face that overlaps the room's real boundary extent on this plane, measured as
+    /// a genuine PARTIAL overlap rather than an all-or-nothing containment test.
+    ///
+    /// WHY RegionArea DECLINES EVERY CALL THIS RECOVERS
+    ///   RegionArea's own guard is "every vertex of the HOST region must already project
+    ///   inside the room's subface" - built for a small split-face region that genuinely
+    ///   might straddle a room boundary, where returning its whole area on a false positive
+    ///   would double-bill a neighbour. That guard is correct for that case and wrong for
+    ///   this one: an ORDINARY, un-split wall's own face spans the wall's FULL height, while
+    ///   the room subface being measured against it is a THIN band - a slab's own thickness,
+    ///   commonly under 200 mm - so virtually every vertex of the wall's face sits above or
+    ///   below the band and RegionArea declines on the first one it checks, every time. The
+    ///   wall is not shared with a neighbouring room in that band; it simply extends past it
+    ///   on both sides, exactly the case RULE 1 requires a partial measurement for: any part
+    ///   of a painted face inside the room's boundary volume counts, any part outside it does
+    ///   not, and "outside" here is the wall's OWN extent beyond the band - not another room.
+    ///
+    /// WHY A NEW CLIP SOLID RATHER THAN RETRYING THE SAME TWO LOOPS
+    ///   The primary attempt above already intersected roomFace's own loop against hostFace's
+    ///   own loop and failed - retrying identical inputs fails identically. A band whose
+    ///   height is a single slab's thickness, run the wall's full length, with its top or
+    ///   bottom edge sitting exactly on a real seam (the slab's own soffit or top plane - the
+    ///   very thing that BOUNDS the band), is close to the shape most likely to defeat
+    ///   Revit's boolean solver on coincident-edge geometry.
+    ///
+    ///   So this builds a SIMPLE, always-well-formed clip solid instead: a four-straight-line
+    ///   rectangle spanning the room subface's OWN already-established Z-range - read
+    ///   directly off its geometry, not re-derived from a slab or opening lookup, so this
+    ///   stays correct for whatever put that boundary there - padded generously in plan off
+    ///   the HOST face's own extent so only Z ever does the clipping. This is the exact
+    ///   technique RoomFinishCalculator.ClippedToRoomHeight already uses in production, for
+    ///   the same reason: a clean box succeeds where two independently-derived loops do not.
+    ///
+    /// VERTICAL WALLS ONLY, ON PURPOSE. A flat Z-range box is the right clip for an ordinary
+    /// wall's horizontal normal; it is the WRONG clip for a sloped or raking face - a stair
+    /// soffit, say - where the same box would silently include or exclude area that does not
+    /// track the real boundary. Declining there is correct: Rule 1 forbids inventing area as
+    /// firmly as it forbids losing it, and a technique whose assumptions do not hold must
+    /// decline rather than guess.
+    ///
+    /// CANNOT MAKE A WORKING MEASUREMENT WORSE. This only ever runs after BOTH the primary
+    /// boolean and RegionArea have already declined - a face measured successfully, or
+    /// already recovered by RegionArea, never reaches this. It can only recover area that
+    /// was previously falling to the unpainted arithmetic bucket; it cannot reduce or corrupt
+    /// an already-successful measurement.
+    /// </summary>
+    private static double? ClippedToRoomZRange(Face roomFace, Face hostFace, XYZ normal)
+    {
+        if (Math.Abs(normal.Z) > 0.1) return null;
+
+        var roomBounds = FaceBounds(roomFace);
+        if (roomBounds is not { } rb) return null;
+
+        var clipHeight = rb.Max.Z - rb.Min.Z;
+        if (clipHeight <= FinishSettings.CoplanarTolerance) return null;
+
+        var hostBounds = FaceBounds(hostFace);
+        if (hostBounds is not { } hb) return null;
+
+        var padding = Measure.FromMillimetres(500.0);
+        var z0 = rb.Min.Z;
+
+        try
+        {
+            CurveLoop clipLoop = new();
+            XYZ[] corners =
+            [
+                new XYZ(hb.Min.X - padding, hb.Min.Y - padding, z0),
+                new XYZ(hb.Max.X + padding, hb.Min.Y - padding, z0),
+                new XYZ(hb.Max.X + padding, hb.Max.Y + padding, z0),
+                new XYZ(hb.Min.X - padding, hb.Max.Y + padding, z0),
+            ];
+
+            for (var i = 0; i < corners.Length; i++)
+                clipLoop.Append(Line.CreateBound(corners[i], corners[(i + 1) % corners.Length]));
+
+            var hostSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
+                hostFace.GetEdgesAsCurveLoops(), normal, FinishSettings.ExtrudeThickness);
+
+            var clipSolid = GeometryCreationUtilities.CreateExtrusionGeometry(
+                [clipLoop], XYZ.BasisZ, clipHeight);
+
+            var clipped = BooleanOperationsUtils.ExecuteBooleanOperation(
+                hostSolid, clipSolid, BooleanOperationsType.Intersect);
+
+            if (clipped is null || clipped.Volume <= 1e-9) return null;
+
+            var area = clipped.Volume / FinishSettings.ExtrudeThickness;
+            return area > 1e-9 ? area : null;
+        }
+        catch
+        {
+            // A failed clip must fall through to the caller's own materials.Drop(), the
+            // same honest "could not measure" as every other boolean in this file - never
+            // a confident zero standing in for an area that was never actually computed.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// World-space min/max corner of a face, via triangulation - Face.GetBoundingBox is in
+    /// UV parameter space and says nothing about world coordinates, the same reason the Room
+    /// Subface Dump diagnostic reads a face's Z-range this way rather than trusting it.
+    /// </summary>
+    private static (XYZ Min, XYZ Max)? FaceBounds(Face face)
+    {
+        XYZ? min = null;
+        XYZ? max = null;
+
+        try
+        {
+            var mesh = face.Triangulate();
+            if (mesh is null) return null;
+
+            for (var i = 0; i < mesh.Vertices.Count; i++)
+            {
+                var v = mesh.Vertices[i];
+
+                min = min is null
+                    ? v
+                    : new XYZ(Math.Min(min.X, v.X), Math.Min(min.Y, v.Y), Math.Min(min.Z, v.Z));
+
+                max = max is null
+                    ? v
+                    : new XYZ(Math.Max(max.X, v.X), Math.Max(max.Y, v.Y), Math.Max(max.Z, v.Z));
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return min is not null && max is not null ? (min, max) : null;
     }
 
     /// <summary>
