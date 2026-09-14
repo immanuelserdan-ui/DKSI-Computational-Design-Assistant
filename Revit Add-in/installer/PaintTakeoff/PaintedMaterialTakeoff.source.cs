@@ -1567,6 +1567,14 @@ namespace PaintedMaterialTakeoff.Model
 
 		public double ZTopFt { get; init; }
 
+		/// <summary>
+		/// How high this room's wall area is allowed to reach where a gap in the ceiling
+		/// lets it through, or 0 when the ceiling covers the room. ZTopFt is one uniform
+		/// height for the whole room, so on its own it cannot say whether a row standing
+		/// taller than that is a defect or the ceiling-gap measurement working as intended.
+		/// </summary>
+		public double GapZTopFt { get; init; }
+
 		public double MeasuredHeightFt { get; init; }
 
 		public SurfaceGroup Group { get; init; } = SurfaceGroup.Other;
@@ -4308,6 +4316,7 @@ namespace PaintedMaterialTakeoff.Core
 						NominalAreaSqFt = env.BoundaryPlanArea(_s),
 						ZBottomFt = env.ZBottom,
 						ZTopFt = env.ZTop,
+						GapZTopFt = env.HasCeilingGap ? env.GapZTop : 0.0,
 						TopSource = ((kind == SurfaceKind.Floor) ? ((OverheadKind?)null) : new OverheadKind?(env.TopSource)),
 						Shape = ((value4.Shape.Count > 0) ? value4.Shape : null)
 					};
@@ -4350,6 +4359,7 @@ namespace PaintedMaterialTakeoff.Core
 				NominalAreaSqFt = env.BoundaryPlanArea(_s),
 				ZBottomFt = env.ZBottom,
 				ZTopFt = env.ZTop,
+				GapZTopFt = env.HasCeilingGap ? env.GapZTop : 0.0,
 				TopSource = ((kind == SurfaceKind.Floor) ? ((OverheadKind?)null) : new OverheadKind?(env.TopSource)),
 				Notes = note
 			};
@@ -5083,6 +5093,7 @@ namespace PaintedMaterialTakeoff.Core
 						JambAreaSqFt = ((item == FaceRole.Underside) ? materialBucket2.Area : 0.0),
 						ZBottomFt = env.ZBottom,
 						ZTopFt = env.ZTop,
+						GapZTopFt = env.HasCeilingGap ? env.GapZTop : 0.0,
 						MeasuredHeightFt = env.ClearHeight,
 						TopSource = ((isUnderside && !isWall) ? OverheadKind.FloorAbove : env.TopSource),
 						Notes = notes,
@@ -6530,10 +6541,20 @@ namespace PaintedMaterialTakeoff.Core
 				string value = $"{item.RoomNumber} {item.RoomName} / {item.SegmentKey}";
 				if (item.MeasuredHeightFt > 0.0 && item.ZTopFt > item.ZBottomFt)
 				{
-					double num = item.ZTopFt - item.ZBottomFt;
+					// The ceiling this row is actually allowed to reach. Where the room's
+					// ceiling has a real gap in it, wall area measured up through that gap is
+					// the ceiling-gap feature working, not a clip that failed - so comparing
+					// against the room's one uniform ZTop reports a correct measurement as an
+					// error. Confirmed against the live model 2026-09-15: Kaelderrum 4's three
+					// gap-bordering walls each recovered the 206 mm slab-thickness band the
+					// user identified as missing, and every one was flagged here for it.
+					double num = Math.Max(item.ZTopFt, item.GapZTopFt) - item.ZBottomFt;
 					if (item.MeasuredHeightFt - num > 0.02)
 					{
-						list.Add(new ValidationIssue(IssueSeverity.Error, "overhead clip", $"{value}: measured {toM(item.MeasuredHeightFt):0.###} m exceeds clear height {toM(num):0.###} m — area extends past the ceiling underside."));
+						string value2 = (item.GapZTopFt > item.ZTopFt)
+							? $"{value}: measured {toM(item.MeasuredHeightFt):0.###} m exceeds {toM(num):0.###} m — past even the ceiling gap's own top at {toM(item.GapZTopFt):0.###} m."
+							: $"{value}: measured {toM(item.MeasuredHeightFt):0.###} m exceeds clear height {toM(num):0.###} m — area extends past the ceiling underside.";
+						list.Add(new ValidationIssue(IssueSeverity.Error, "overhead clip", value2));
 					}
 				}
 				if (item.NominalAreaSqFt > 0.0 && Exceeds(item.NetAreaSqFt, item.NominalAreaSqFt))
@@ -7481,9 +7502,16 @@ namespace PaintedMaterialTakeoff.Core
 				double item2 = tuple.Max;
 				num7 = Math.Max(num7, item2 - item);
 			}
-			if (num7 - env.ClearHeight > 0.02)
+			// Same gap-aware height as TakeoffValidator's own overhead-clip check - see its
+			// remarks. Without this the CSV contradicted itself on a gap row, carrying both
+			// "Extended N mm above the ceiling into a gap in it" and "the overhead clip did
+			// not apply" against the same measurement.
+			double allowedHeight = env.HasCeilingGap
+				? Math.Max(env.ClearHeight, env.GapZTop - env.ZBottom)
+				: env.ClearHeight;
+			if (num7 - allowedHeight > 0.02)
 			{
-				list.Add($"Measured height {GeometryUtil.ToM(num7):0.###} m exceeds the room's clear height {GeometryUtil.ToM(env.ClearHeight):0.###} m — the overhead clip did not apply.");
+				list.Add($"Measured height {GeometryUtil.ToM(num7):0.###} m exceeds the room's clear height {GeometryUtil.ToM(allowedHeight):0.###} m — the overhead clip did not apply.");
 			}
 			if (num3 > _s.MinFaceAreaSqFt)
 			{
@@ -7554,6 +7582,7 @@ namespace PaintedMaterialTakeoff.Core
 					NominalAreaSqFt = nominalAreaSqFt,
 					ZBottomFt = env.ZBottom,
 					ZTopFt = env.ZTop,
+					GapZTopFt = env.HasCeilingGap ? env.GapZTop : 0.0,
 					MeasuredHeightFt = num7,
 					JambAreaSqFt = num4,
 					JambFaceKey = value5.JambFaceKey,
@@ -7732,6 +7761,7 @@ namespace PaintedMaterialTakeoff.Core
 						NominalAreaSqFt = nominalAreaSqFt,
 						ZBottomFt = env.ZBottom,
 						ZTopFt = env.ZTop,
+						GapZTopFt = env.HasCeilingGap ? env.GapZTop : 0.0,
 						MeasuredHeightFt = env.ClearHeight - measuredHeightFt,
 						SegmentLengthFt = segmentLengthFt,
 						TopSource = env.TopSource,
@@ -8589,6 +8619,7 @@ namespace PaintedMaterialTakeoff.Core
 				NominalAreaSqFt = curve.Length * env.ClearHeight,
 				ZBottomFt = env.ZBottom,
 				ZTopFt = env.ZTop,
+				GapZTopFt = env.HasCeilingGap ? env.GapZTop : 0.0,
 				SegmentLengthFt = curve.Length,
 				TopSource = env.TopSource,
 				Notes = note
