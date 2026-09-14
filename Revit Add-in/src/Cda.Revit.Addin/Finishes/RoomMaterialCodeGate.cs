@@ -6,7 +6,8 @@ namespace Cda.Revit.Addin.Finishes;
 /// Pre-flight check for "Painted Surface Area": does a room already carry a material whose
 /// office code ends in a given letter - "F" for Fliser (tile), by the same convention
 /// <see cref="MaterialKey.Describe"/> already reads for the finish engine (the material's own
-/// Code / Mark / Keynote parameter, first non-empty).
+/// Code / Mark / Keynote parameter, first non-empty) - OR the material's NAME, which is
+/// where this office actually keeps the code (materials named VBF, GBF, VBJ).
 ///
 /// DELIBERATELY LIGHTER THAN RoomFinishCalculator. That engine intersects every boundary
 /// subface against the host's real solid to get NET areas - the right tool for a takeoff, and
@@ -31,7 +32,7 @@ public static class RoomMaterialCodeGate
     /// <summary>
     /// Every room whose Name or Department contains one of <paramref name="roomKeywords"/>
     /// (case-insensitive substring, matching SkirtingSettings' own convention) and carries no
-    /// material whose Code/Mark/Keynote ends in <paramref name="codeSuffix"/>.
+    /// material whose Code/Mark/Keynote OR NAME ends in <paramref name="codeSuffix"/>.
     ///
     /// A room whose geometry cannot be calculated is skipped rather than failed - this gate
     /// answers "was the required code found", and "could not look" is not the same claim as
@@ -132,8 +133,28 @@ public static class RoomMaterialCodeGate
                 {
                     if (!checkedMaterialIds.Add(materialId.Value)) continue;
 
-                    var code = MaterialKey.Of(materialId, painted: false).Describe(doc).Code;
-                    if (code.EndsWith(codeSuffix, StringComparison.OrdinalIgnoreCase))
+                    // THE CODE IS THE MATERIAL'S NAME IN THIS OFFICE, and checking only
+                    // Describe().Code made this gate impossible to satisfy.
+                    //
+                    // Measured against the office template (FM_Template 2027V1.00_EN) rather
+                    // than assumed. Materials there carry NO 'Code' parameter at all; 'Keynote'
+                    // is empty; and 'Mark', where it is filled, holds an SfB classification
+                    // like "(41)37.05" - never a letter code. Describe() reads exactly those
+                    // three, so it returned "" for every material in the model, and
+                    // "".EndsWith("F") is false.
+                    //
+                    // Meanwhile the codes this gate exists to find are right there as material
+                    // NAMES: the template contains materials named "VBF", "GBF" and "VBJ" -
+                    // the same codes MaterialKey's own summary and this class's dialog cite as
+                    // examples. So the check looked in the three places the code never is, and
+                    // not in the one place it always is.
+                    //
+                    // Code first, name second: a project that DOES fill Code/Mark/Keynote
+                    // keeps working unchanged, and one that follows the naming convention now
+                    // works at all.
+                    var described = MaterialKey.Of(materialId, painted: false).Describe(doc);
+
+                    if (EndsWith(described.Code, codeSuffix) || EndsWith(described.Name, codeSuffix))
                         return true;
                 }
             }
@@ -159,6 +180,15 @@ public static class RoomMaterialCodeGate
 
         return layerIds.Concat(paintIds);
     }
+
+    /// <summary>
+    /// Suffix test used for both the material's code and its name. Trimmed, because a code
+    /// typed into a parameter or a material name with a trailing space is still that code, and
+    /// an untrimmed comparison fails it for a reason nobody can see on screen.
+    /// </summary>
+    private static bool EndsWith(string? value, string suffix) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.TrimEnd().EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
 
     private static bool MatchesKeywords(Autodesk.Revit.DB.Architecture.Room room, IReadOnlyList<string> keywords)
     {

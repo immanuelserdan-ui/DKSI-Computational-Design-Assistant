@@ -132,7 +132,9 @@ public sealed class PaintedSurfaceAreaGateCommand : IExternalCommand
                                "code ending in \"F\" (e.g. LIF, VBF, GBF) was found on it:" +
                                Environment.NewLine + Environment.NewLine + lines +
                                Environment.NewLine + Environment.NewLine +
-                               "Assign the tile material's Code (or Mark/Keynote) parameter so it " +
+                               "Name the tile material so it ends in \"F\" (the office convention - " +
+                               "the template already carries VBF, GBF and VBJ), or assign its " +
+                               "Code/Mark/Keynote parameter so it " +
                                "ends in \"F\", or answer No if this room genuinely has none, then run again.",
                 CommonButtons = TaskDialogCommonButtons.Close,
             }.Show();
