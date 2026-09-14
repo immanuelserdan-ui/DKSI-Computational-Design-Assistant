@@ -6208,7 +6208,29 @@ namespace PaintedMaterialTakeoff.Core
 				foreach (Solid item in GeometryUtil.GetSolids(el, s.MinSolidVolumeCuFt))
 				{
 					var (zMin, zMax) = GeometryUtil.ZRange(item);
-					if (zMin <= ZTopHighest + s.MinOverheadClearanceFt)
+
+					// RULE 1 (2026-09-14): an opening straight through a SINGLE slab has no
+					// second, separate element above it at all - that slab's own top, on the
+					// far side of its own thickness, IS the room's real cover. Its zMin is, by
+					// definition, this room's current ceiling (ZTopHighest), so the old
+					// zMin-only test below rejected exactly the one candidate that is
+					// correct, before its zMax - the actual answer - was ever looked at.
+					//
+					// Confirmed live in FM_Template: Kaelderrum 4's own trace read "GAP FOUND:
+					// ~1.91 m2" then "NOTHING found above it (Roofs/Floors/Ceilings all empty
+					// within 1.156 ft)" - even though the Terraen slab, the very slab the gap
+					// is a hole IN, sits 0.656 ft away, well inside that search budget. The
+					// gap detection was never the problem; this qualifying test was.
+					//
+					// Rejected now only when BOTH ends fail to clear the ceiling - nothing
+					// about the candidate rises meaningfully above it at all. That keeps the
+					// ORIGINAL exclusion intact for what it was actually built for - a duct or
+					// beam running through the same shaft at the same level, whose zMax sits
+					// at that level too, same as its zMin - and admits the one case it wrongly
+					// excluded: a slab this room already opens through, whose far side is real
+					// material this room's paint genuinely continues onto.
+					if (zMin <= ZTopHighest + s.MinOverheadClearanceFt
+						&& zMax <= ZTopHighest + s.MinOverheadClearanceFt)
 					{
 						continue;
 					}
