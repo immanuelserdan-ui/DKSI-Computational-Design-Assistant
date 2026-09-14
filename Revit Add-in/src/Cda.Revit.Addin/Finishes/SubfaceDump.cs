@@ -61,7 +61,45 @@ public sealed class SubfaceRow
     public bool HostPainted { get; set; }
 }
 
-/// <summary>What one room says about the band above it.</summary>
+/// <summary>
+/// A room-facing face belonging to a Stair element - a second, unrelated way the same
+/// symptom (real paint, reported as zero) can happen.
+///
+/// WHY THIS IS NOT ANOTHER BandVerdict
+///   The slab-thickness band above is about geometry Revit DOES try to bound the room with,
+///   routed or clipped wrong. This is about geometry Revit CANNOT bound a room with AT ALL:
+///   FinishSettings.CeilingFallbackTiers' own comment says it plainly - "Revit cannot produce
+///   a stair at all, stairs being outside the room-bounding categories entirely." No subface
+///   is ever generated for a Stair face, so there is nothing for RoomFinishCalculator's main
+///   pass to decline or misroute. And OST_Stairs is absent from every OTHER pass too:
+///   MeasureInteriorWalls/_interiorWalls is OST_Walls only, MeasureInteriorSlabs/_interiorSlabs
+///   is OST_Floors only, OccludingElements' candidates are Walls and Floors only. The ONE
+///   exception is CeilingFallback's stair tier - and it calls _geometry.BottomFaces(candidate)
+///   exclusively (CeilingFallback.cs), so it reaches the underside of a flight for the room
+///   below and nothing else: not a raking closed-string panel, not a vertical spandrel wall
+///   built into the stair assembly, not a tread-top.
+///
+///   So a room can score a clean BandVerdict.NoOpening - no slab-band problem at all - and
+///   still be missing real, painted, stair-owned wall area a few feet away. The two questions
+///   are independent and this room can fail either, neither, or both.
+/// </summary>
+public sealed class StairSideHit
+{
+    public required long StairId { get; init; }
+    public required string StairName { get; init; }
+    public required double AreaSqFt { get; init; }
+    public required double NormalZ { get; init; }
+
+    /// <summary>|NormalZ| &lt;= 0.5 - a raking or vertical closure/spandrel face, the shape
+    /// the reported defect actually looks like, as opposed to a flat tread or landing top.</summary>
+    public required bool Vertical { get; init; }
+
+    /// <summary>Same test MeasureInteriorWalls applies before crediting a wall face - paint,
+    /// not finish. An unpainted stair face missing from the takeoff is correct, not a defect.</summary>
+    public required bool Painted { get; init; }
+}
+
+/// <summary>What one room says about the band above it, and about any stair standing beside it.</summary>
 public sealed class RoomBandFinding
 {
     public required long RoomId { get; init; }
@@ -91,12 +129,21 @@ public sealed class RoomBandFinding
 
     /// <summary>Band subfaces that are vertical AND carry paint - the area actually at risk.</summary>
     public IEnumerable<SubfaceRow> PaintedBand => Band.Where(r => r.Vertical && r.HostPainted);
+
+    /// <summary>Every non-underside face of a nearby stair that fronts this room, reachable
+    /// by no measurement pass in the engine - see the remarks on <see cref="StairSideHit"/>.</summary>
+    public List<StairSideHit> StairSides { get; } = [];
+
+    /// <summary>The ones actually costing paint: raking/vertical AND painted.</summary>
+    public IEnumerable<StairSideHit> PaintedStairSides =>
+        StairSides.Where(h => h.Vertical && h.Painted);
 }
 
 public sealed class SubfaceDumpResult
 {
     public List<RoomBandFinding> Rooms { get; } = [];
     public List<SubfaceRow> Subfaces { get; } = [];
+    public List<StairSideHit> StairSideHits { get; } = [];
     public List<string> Notes { get; } = [];
     public int SkippedUnplaced { get; set; }
 
@@ -104,6 +151,9 @@ public sealed class SubfaceDumpResult
         Rooms.Where(r => r.Verdict is BandVerdict.BandEmpty
                               or BandVerdict.BandFallbackRouted
                               or BandVerdict.BandWallResolved);
+
+    public IEnumerable<RoomBandFinding> WithPaintedStairSide =>
+        Rooms.Where(r => r.PaintedStairSides.Any());
 
     public int Count(BandVerdict verdict) => Rooms.Count(r => r.Verdict == verdict);
 }
@@ -152,11 +202,20 @@ public sealed class SubfaceDumpResult
 ///   Room volumes are the same story. Volume is zero unless the model has volume computation
 ///   switched on, and switching it on is a write. Rooms without it are reported as
 ///   VolumesUnavailable rather than silently scoring zero open area and reading as innocent.
+///
+/// A SECOND, INDEPENDENT QUESTION LIVES HERE TOO: STAIR-OWNED FACES
+///   Screenshots of a raking closure panel beside a flight - a triangular board where the
+///   circled surface visibly carries paint but the room boundary is open there - could not be
+///   told apart from the slab-band case by looking at the picture alone. They are different
+///   defects. See the remarks on <see cref="StairSideHit"/> for why OST_Stairs geometry is
+///   invisible to every pass except CeilingFallback's own downward-only tier, and why that
+///   makes this closer to a structural gap than a routing bug.
 /// </summary>
 public sealed class SubfaceDump
 {
     private readonly Document _doc;
     private readonly FinishGeometry _geometry;
+    private readonly List<Element> _stairs;
 
     /// <summary>
     /// Tighter than FinishSettings.LimitMargin (0.5 ft) on purpose: the band under test is a
@@ -165,10 +224,20 @@ public sealed class SubfaceDump
     /// </summary>
     private const double Tolerance = FinishSettings.CoplanarTolerance;
 
+    /// <summary>
+    /// How far a stair's own bounding box may sit from a room's before it is worth walking its
+    /// geometry for that room. Generous on purpose - a closure panel is the stair's OWN face,
+    /// not the room's, so its box can clear the room's by a wall's thickness or more and still
+    /// be the thing painted on that room's side. Cheap pre-filter only: FaceFrontsRoom below,
+    /// the same probe the engine's own FaceFrontsRoom uses, is what actually decides ownership.
+    /// </summary>
+    private static readonly double StairSearchPadding = Measure.FromMillimetres(1000.0);
+
     public SubfaceDump(Document doc)
     {
         _doc = doc;
         _geometry = new FinishGeometry(doc);
+        _stairs = Collect(BuiltInCategory.OST_Stairs);
     }
 
     public SubfaceDumpResult Run(IReadOnlyCollection<ElementId>? scopeRoomIds = null)
@@ -236,6 +305,12 @@ public sealed class SubfaceDump
             BaseZ = roomBox.Min.Z,
             RoomTopZ = roomBox.Max.Z,
         };
+
+        // INDEPENDENT OF EVERYTHING BELOW, deliberately run before any of the band verdict's
+        // early returns. A room with no slab-band problem at all (NoOpening, or no slab above
+        // it in the first place) can still stand beside a stair whose closure panel is
+        // painted and reachable by nothing - the two questions do not share an answer.
+        ExamineStairSides(room, roomBox, finding, result);
 
         // The slab that caps this room, found the way RoomFfsCap finds it - lowest floor
         // above, decided by undersides - so this agrees with the tool that already acts on
@@ -375,6 +450,82 @@ public sealed class SubfaceDump
     }
 
     /// <summary>
+    /// Every face of every nearby stair that fronts THIS room and is not already the one
+    /// shape CeilingFallback reaches - a downward-facing (normal.Z &lt;= -0.5) underside.
+    ///
+    /// NOT GATED ON A SLAB, NOT GATED ON AN OPENING. Unlike the band above, a stair-owned
+    /// closure panel needs no hole in a floor to go unmeasured - it is unreachable purely
+    /// because of its element category, regardless of what is or is not above the room.
+    ///
+    /// BOTH ORIENTATIONS ARE RECORDED, ONLY ONE IS THE HEADLINE. A raking or vertical face
+    /// (Vertical = true) is the shape the reported defect actually looks like - a closed
+    /// string or spandrel panel standing beside the flight. An upward face this picks up too
+    /// (a landing nosing, a winder top) is real and just as unreachable, but is not what
+    /// anyone pointed a camera at, so PaintedStairSides filters to Vertical and callers read
+    /// the full StairSides list only if they want the complete picture.
+    /// </summary>
+    private void ExamineStairSides(
+        Room room, BoundingBoxXYZ roomBox, RoomBandFinding finding, SubfaceDumpResult result)
+    {
+        var search = new BoundingBoxXYZ
+        {
+            Min = roomBox.Min - new XYZ(StairSearchPadding, StairSearchPadding, StairSearchPadding),
+            Max = roomBox.Max + new XYZ(StairSearchPadding, StairSearchPadding, StairSearchPadding),
+        };
+
+        foreach (var stair in _stairs)
+        {
+            try
+            {
+                var stairBox = SafeBox(stair);
+                if (stairBox is null || !BoxesOverlap(stairBox, search)) continue;
+
+                foreach (var face in _geometry.ElementFaces(stair))
+                {
+                    var normal = NormalOf(face);
+                    if (normal is null) continue;
+
+                    // THE ONE SHAPE ALREADY COVERED. CeilingFallback.Resolve calls
+                    // _geometry.BottomFaces(candidate) for exactly this stair category - see
+                    // the remarks on StairSideHit - so re-flagging its underside here would
+                    // report a false defect on a face the engine already measures correctly.
+                    if (normal.Z <= -0.5) continue;
+
+                    var centroid = FinishGeometry.FaceCentroid(face);
+                    if (centroid is null) continue;
+
+                    // SAME PROBE THE ENGINE'S OWN FaceFrontsRoom USES - a short step off the
+                    // face along its own normal, then asked of the room. This is what decides
+                    // OWNERSHIP: a stair between two rooms can front both, correctly.
+                    var probe = centroid + normal.Normalize() * FinishSettings.FaceProbe;
+                    if (!TryPointInRoom(room, probe)) continue;
+
+                    var painted = false;
+                    try { painted = _doc.IsPainted(stair.Id, face); }
+                    catch { /* unresolvable reference; leave false rather than guess */ }
+
+                    var hit = new StairSideHit
+                    {
+                        StairId = stair.Id.Value,
+                        StairName = SafeName(stair),
+                        AreaSqFt = SafeArea(face),
+                        NormalZ = normal.Z,
+                        Vertical = Math.Abs(normal.Z) <= 0.5,
+                        Painted = painted,
+                    };
+
+                    finding.StairSides.Add(hit);
+                    result.StairSideHits.Add(hit);
+                }
+            }
+            catch
+            {
+                // One stair failing must not stop the room's other findings.
+            }
+        }
+    }
+
+    /// <summary>
     /// The verdict, which is the only line most readers need.
     ///
     /// Decided on VERTICAL band subfaces alone, deliberately. A Top subface sitting in the
@@ -398,6 +549,22 @@ public sealed class SubfaceDump
     }
 
     // ------------------------------------------------------------------ helpers
+
+    private List<Element> Collect(BuiltInCategory category) =>
+        [.. new FilteredElementCollector(_doc)
+            .OfCategory(category)
+            .WhereElementIsNotElementType()];
+
+    private static bool BoxesOverlap(BoundingBoxXYZ a, BoundingBoxXYZ b) =>
+        a.Min.X <= b.Max.X && a.Max.X >= b.Min.X &&
+        a.Min.Y <= b.Max.Y && a.Max.Y >= b.Min.Y &&
+        a.Min.Z <= b.Max.Z && a.Max.Z >= b.Min.Z;
+
+    private static bool TryPointInRoom(Room room, XYZ point)
+    {
+        try { return room.IsPointInRoom(point); }
+        catch { return false; }
+    }
 
     /// <summary>
     /// Openings in the slab, counted as the inner loops of its bottom face. The largest loop

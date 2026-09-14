@@ -367,7 +367,8 @@ internal static class RibbonBuilder
             name: "CdaDumpRoomSubfaces",
             text: "Room Subface\nDump",
             command: typeof(Commands.DumpRoomSubfacesCommand),
-            tooltip: "Lists every room boundary subface and flags the wall band a slab opening exposes.",
+            tooltip: "Lists every room boundary subface, flags the wall band a slab opening " +
+                     "exposes, and flags any nearby stair's painted faces that no pass reaches.",
             longDescription: "Read-only. Runs the same SpatialElementGeometryCalculator the " +
                              "finish engine uses, at the same boundary location, and reports " +
                              "what it hands back BEFORE anything is done with it.\n\n" +
@@ -377,6 +378,12 @@ internal static class RibbonBuilder
                              "never gets there; FALLBACK-ROUTED means the subface exists but " +
                              "resolves to something that is not a Wall, so the exact path " +
                              "declines it and the unpainted fallback bucket takes it.\n\n" +
+                             "SEPARATELY, it walks every nearby stair's own geometry directly " +
+                             "and flags any painted, room-facing face that is not the stair's " +
+                             "underside - the one shape CeilingFallback already reaches. A " +
+                             "raking closure panel beside a flight is real, painted wall area " +
+                             "with no fix on the routing side: OST_Stairs bounds no room in " +
+                             "Revit, so no subface is ever produced for it to begin with.\n\n" +
                              "Whole model unless rooms are selected first.",
             icon: "finish",
             availability: typeof(ProjectDocumentAvailability));

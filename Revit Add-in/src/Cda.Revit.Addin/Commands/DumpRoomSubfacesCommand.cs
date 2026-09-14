@@ -8,7 +8,8 @@ namespace Cda.Revit.Addin.Commands;
 
 /// <summary>
 /// Dumps every room boundary subface, and says for each room whether the wall band a slab
-/// opening exposes is reachable by the measuring engine at all.
+/// opening exposes is reachable by the measuring engine at all - and, separately, whether any
+/// nearby stair carries a painted face that is invisible to every pass regardless.
 ///
 /// WHY THIS IS A COMMAND AND NOT A LOG LINE IN THE ENGINE
 ///   Because the engine cannot see what it never received. The whole question is what
@@ -16,6 +17,13 @@ namespace Cda.Revit.Addin.Commands;
 ///   soffit and its top - and by the time RoomFinishCalculator has routed a subface into a
 ///   bucket, the distinction between "arrived and was declined" and "never arrived" is gone.
 ///   This reads the calculator's output before anything is done with it.
+///
+/// THE STAIR-SIDE FINDING IS A DIFFERENT QUESTION WEARING THE SAME SYMPTOM. A raking closure
+/// panel beside a flight - real, painted wall area the takeoff reports as zero - was first
+/// told apart from the slab-band case by a screenshot; the two look identical from a photo and
+/// are opposite kinds of defect. OST_Stairs is outside the room-bounding categories entirely
+/// (see the remarks on SubfaceDump.StairSideHit), so this walks every nearby stair's own
+/// geometry directly rather than waiting on a subface Revit will never produce.
 ///
 /// WHOLE MODEL BY DEFAULT, like every other automation here, because a band loss is a
 /// per-opening defect and the opening you did not think to select is the one worth finding.
@@ -73,20 +81,26 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
             CommonButtons = TaskDialogCommonButtons.Close,
         };
 
-        // Selecting the walls whose painted band is at risk is worth more than quoting their
-        // ids: the point of the dump is to go and look at the surface it is talking about.
+        // Selecting the elements at risk is worth more than quoting their ids: the point of
+        // the dump is to go and look at the surface it is talking about. Walls and slabs from
+        // the band, stairs from the second finding - one list, because the dialog only offers
+        // one command link and a user does not care which finding put an element on it.
         var atRisk = result.WithOpening
             .SelectMany(r => r.PaintedBand)
             .Where(s => s.HostId is not null)
             .Select(s => s.HostId!.Value)
+            .Concat(result.WithPaintedStairSide
+                .SelectMany(r => r.PaintedStairSides)
+                .Select(h => h.StairId))
             .Distinct()
             .ToList();
 
         if (atRisk.Count > 0)
         {
             dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1,
-                $"Select the {atRisk.Count} host(s) with painted band area",
-                "Selects the walls and slabs whose painted surface falls in the band.");
+                $"Select the {atRisk.Count} element(s) at risk",
+                "Selects the walls, slabs and stairs whose painted surface falls in the band " +
+                "or is invisible to every pass.");
         }
 
         if (dialog.Show() == TaskDialogResult.CommandLink1)
@@ -107,26 +121,41 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
 
     /// <summary>
     /// The headline is the verdict tally, because the entire purpose of running this is to
-    /// learn which of two fixes to build - and that is one word per room.
+    /// learn which fix to build - and that is one word per room. Two independent questions
+    /// live in one dialog now, so each contributes its own fragment; either can be silent
+    /// while the other is not, and a genuinely clean run says so plainly rather than picking
+    /// one finding to lead with.
     /// </summary>
     private static string Headline(SubfaceDumpResult result)
     {
+        var parts = new List<string>();
+
         var empty = result.Count(BandVerdict.BandEmpty);
         var routed = result.Count(BandVerdict.BandFallbackRouted);
         var wall = result.Count(BandVerdict.BandWallResolved);
 
-        if (empty + routed + wall == 0) return "No room has an opening in the slab above it.";
+        if (empty + routed + wall > 0)
+        {
+            // Reported in the order that decides the work, most structural first: an empty
+            // band needs a new pass, a routed one needs a routing change, a wall-resolved one
+            // means neither and the loss is further down in the clip.
+            parts.Add(empty > 0 && routed == 0 && wall == 0
+                ? $"BAND EMPTY in all {empty} room(s) with an opening"
+                : routed > 0 && empty == 0 && wall == 0
+                    ? $"BAND FALLBACK-ROUTED in all {routed} room(s) with an opening"
+                    : $"band: {empty} empty, {routed} fallback-routed, {wall} wall-resolved");
+        }
 
-        // Reported in the order that decides the work, most structural first: an empty band
-        // needs a new pass, a routed one needs a routing change, a wall-resolved one means
-        // neither and the loss is further down in the clip.
-        if (empty > 0 && routed == 0 && wall == 0)
-            return $"BAND EMPTY in all {empty} room(s) with an opening - the room solid does not reach it.";
+        var stairRooms = result.WithPaintedStairSide.Count();
+        if (stairRooms > 0)
+        {
+            var faces = result.StairSideHits.Count(h => h.Vertical && h.Painted);
+            parts.Add($"{faces} painted stair-owned face(s) unreachable beside {stairRooms} room(s)");
+        }
 
-        if (routed > 0 && empty == 0 && wall == 0)
-            return $"BAND FALLBACK-ROUTED in all {routed} room(s) with an opening - the subface exists.";
-
-        return $"Mixed: {empty} band-empty, {routed} fallback-routed, {wall} wall-resolved.";
+        return parts.Count > 0
+            ? string.Join("  ·  ", parts)
+            : "No slab opening and no painted stair-owned face found near any room.";
     }
 
     private static List<string> BuildSummary(SubfaceDumpResult result, IReadOnlyCollection<ElementId>? scope)
@@ -146,6 +175,15 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
             $"  no slab above ............. {result.Count(BandVerdict.NoSlabAbove)}",
             $"  volumes unavailable ....... {result.Count(BandVerdict.VolumesUnavailable)}",
         };
+
+        var stairRoomsChecked = result.Rooms.Count(r => r.StairSides.Count > 0);
+        if (stairRoomsChecked > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(
+                $"{result.StairSideHits.Count} stair face(s) checked beyond CeilingFallback's " +
+                $"own underside tier, across {stairRoomsChecked} room(s) with a stair nearby.");
+        }
 
         var interesting = result.WithOpening.OrderByDescending(r => r.OpenArea).ToList();
 
@@ -183,6 +221,43 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
 
             if (interesting.Count > 8)
                 lines.Add($"  ... and {interesting.Count - 8} more in the report.");
+        }
+
+        var stairFindings = result.WithPaintedStairSide
+            .OrderByDescending(r => r.PaintedStairSides.Sum(h => h.AreaSqFt))
+            .ToList();
+
+        if (stairFindings.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("STAIR-OWNED FACES INVISIBLE TO EVERY PASS, LARGEST FIRST:");
+            lines.Add(
+                "  (OST_Stairs bounds no room in Revit, so no subface is ever produced for " +
+                "these - see the SubfaceDump.StairSideHit remarks. Only CeilingFallback's own " +
+                "downward-facing tier reaches any part of a stair; these do not.)");
+
+            foreach (var room in stairFindings.Take(8))
+            {
+                var hits = room.PaintedStairSides.ToList();
+                var totalArea = hits.Sum(h => h.AreaSqFt);
+
+                lines.Add(
+                    $"  {room.Label} - {hits.Count} painted face(s), " +
+                    $"{Measure.ToSquareMetres(totalArea):0.00} m2 total, " +
+                    $"{room.StairSides.Count(s => !s.Painted)} unpainted stair face(s) also checked");
+
+                foreach (var hit in hits.Take(4))
+                {
+                    lines.Add(
+                        $"      stair {hit.StairId} \"{hit.StairName}\" · " +
+                        $"{Measure.ToSquareMetres(hit.AreaSqFt):0.00} m2 · normal Z {hit.NormalZ:0.00}");
+                }
+
+                if (hits.Count > 4) lines.Add($"      ... and {hits.Count - 4} more in the report.");
+            }
+
+            if (stairFindings.Count > 8)
+                lines.Add($"  ... and {stairFindings.Count - 8} more in the report.");
         }
 
         if (result.Count(BandVerdict.VolumesUnavailable) > 0)
@@ -298,11 +373,44 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
                 });
             }
 
+            // A SECOND TABLE IN THE SAME FILE, not a second file. ReportWriter.WriteCsv joins
+            // rows verbatim with no header enforcement, so a blank divider row plus a new
+            // header row reads cleanly by eye and by spreadsheet without inventing a second
+            // report path for a question this command answers in one run anyway.
+            if (result.StairSideHits.Count > 0)
+            {
+                rows.Add([""]);
+                rows.Add(new[]
+                {
+                    "Room id", "Room", "Stair id", "Stair name",
+                    "Area m2", "Normal Z", "Vertical", "Painted",
+                });
+
+                foreach (var room in result.Rooms.OrderBy(r => r.Label))
+                {
+                    foreach (var hit in room.StairSides)
+                    {
+                        rows.Add(new[]
+                        {
+                            room.RoomId.ToString(),
+                            room.Label,
+                            hit.StairId.ToString(),
+                            hit.StairName,
+                            Measure.ToSquareMetres(hit.AreaSqFt).ToString("0.0000"),
+                            hit.NormalZ.ToString("0.000"),
+                            hit.Vertical ? "yes" : "no",
+                            hit.Painted ? "yes" : "no",
+                        });
+                    }
+                }
+            }
+
             ReportWriter.WriteCsv(path, rows);
 
             var log = new List<string>
             {
-                $"ROOM SUBFACE DUMP - {result.Rooms.Count} room(s), {result.Subfaces.Count} subface(s).",
+                $"ROOM SUBFACE DUMP - {result.Rooms.Count} room(s), {result.Subfaces.Count} subface(s), " +
+                $"{result.StairSideHits.Count} stair face(s) checked.",
                 "Boundary location: Finish (identical to RoomFinishCalculator).",
                 "Read-only: room limits and volumes were read AS THEY STAND, not adjusted first.",
                 string.Empty,
@@ -310,6 +418,11 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
 
             foreach (var room in result.Rooms.OrderBy(r => r.Label))
             {
+                var stairNote = room.StairSides.Count == 0
+                    ? string.Empty
+                    : $" | stair faces {room.StairSides.Count} " +
+                      $"({room.PaintedStairSides.Count()} painted, vertical/raking)";
+
                 log.Add(
                     $"{room.Label} (id {room.RoomId}) [{Describe(room.Verdict)}] " +
                     $"base {room.BaseZ:0.000} top {room.RoomTopZ:0.000} " +
@@ -318,7 +431,7 @@ public sealed class DumpRoomSubfacesCommand : CommandBase
                     $"opening {Measure.ToSquareMetres(room.OpenArea):0.00} m2 " +
                     $"loops {room.HoleLoops} " +
                     $"band subfaces {room.Band.Count} ({room.Band.Count(s => s.Vertical)} vertical, " +
-                    $"{room.PaintedBand.Count()} painted)");
+                    $"{room.PaintedBand.Count()} painted)" + stairNote);
             }
 
             if (result.Notes.Count > 0)
