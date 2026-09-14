@@ -41,7 +41,56 @@ public sealed class PaintedSurfaceAreaGateCommand : IExternalCommand
         "Painted Material Takeoff is not installed, or was uninstalled since Revit started. " +
         "Restart Revit if it was just installed.";
 
+    /// <summary>
+    /// NOT a <see cref="CommandBase"/>, for the reason the class remarks give: the button it
+    /// backs must carry an availability class from this assembly. That trade has a cost —
+    /// CommandBase's catch-all is what turns a fault into a readable dialog and a log line, and
+    /// nothing inherits it here — so this class has to provide the same guarantee itself, the
+    /// same way <see cref="TimeTrackingCommand"/> does.
+    ///
+    /// THIS USED TO GUARD ONLY <see cref="RunVendorCommand"/>. The gate that runs BEFORE it —
+    /// the dialog and the room sweep — was outside any handler, so a fault there escaped into
+    /// Revit's own error dialog with nothing written to the log and <c>message</c> never set.
+    /// That is the one path in the add-in where that could happen, and it was on the most-used
+    /// button on the tab.
+    /// </summary>
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        try
+        {
+            return RunGate(commandData, ref message, elements);
+        }
+        catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+        {
+            // Backing out of a Revit-side prompt is not a failure - same two catches, and the
+            // same order, as CommandBase.
+            Log.Info("Painted Surface Area: cancelled by user.");
+            return Result.Cancelled;
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Info("Painted Surface Area: cancelled by user.");
+            return Result.Cancelled;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Painted Surface Area: the tile-material gate failed", ex);
+            message = ex.Message;
+
+            new TaskDialog("Painted Surface Area")
+            {
+                MainInstruction = "The tile-material check could not complete.",
+                MainContent = ex.Message,
+                ExpandedContent = ex.ToString(),
+                FooterText = $"Details written to {Log.CurrentFile}",
+                CommonButtons = TaskDialogCommonButtons.Close,
+            }.Show();
+
+            return Result.Failed;
+        }
+    }
+
+    private static Result RunGate(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
         var uiApp = commandData.Application;
         var doc = uiApp.ActiveUIDocument?.Document;

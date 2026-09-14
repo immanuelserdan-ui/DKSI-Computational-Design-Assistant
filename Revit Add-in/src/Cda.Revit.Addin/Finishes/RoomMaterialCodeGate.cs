@@ -55,19 +55,32 @@ public static class RoomMaterialCodeGate
 
         foreach (var room in rooms)
         {
-            if (room.Area <= 0) continue; // unplaced
-            if (!MatchesKeywords(room, roomKeywords)) continue;
-            if (!SpatialElementGeometryCalculator.CanCalculateGeometry(room)) continue;
-
             bool found;
             try
             {
+                // ALL THREE READS INSIDE THE TRY, not above it. Room.Area and
+                // CanCalculateGeometry both reach into the model and can throw on a room Revit
+                // cannot fully resolve - a redundant or not-enclosed room, or one whose element
+                // is not checked out in a workshared file.
+                //
+                // Found by inspection rather than by a report from a model, so no known file
+                // triggers it - but the consequence if one does is out of proportion to the
+                // cause: a single unreadable room would abandon the entire sweep rather than
+                // being skipped, because the throw leaves this method altogether.
+                //
+                // The contract this method documents is that a room it CANNOT check is
+                // skipped, so the reads that decide whether it can be checked have to be
+                // covered by the same guard as the check itself.
+                if (room.Area <= 0) continue; // unplaced
+                if (!MatchesKeywords(room, roomKeywords)) continue;
+                if (!SpatialElementGeometryCalculator.CanCalculateGeometry(room)) continue;
+
                 found = RoomHasMaterialCodeEndingIn(doc, room, calculator, codeSuffix);
             }
             catch
             {
-                // Same reasoning as CanCalculateGeometry above: a room this failed for was
-                // never actually checked, so it is not reported as missing the code.
+                // A room this failed for was never actually checked, so it is not reported as
+                // missing the code - "could not look" is not "did not find it".
                 continue;
             }
 
