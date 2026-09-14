@@ -4461,6 +4461,37 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				yield break;
 			}
+
+			// RULE 1 (2026-09-15), THIRD ATTEMPT AT THE SAME NUMBER - AND THE LAST ONE THAT
+			// GUESSES. ProbeWallOvershootFt (0,25 ft = 76 mm) looked like a safe, generous,
+			// already-established constant when it replaced InteriorClipOutsetFt (6,1 mm)
+			// in both the base clip below and GapColumn. It was not generous enough: wall
+			// 29330864 (IV_Maal 100mm) measures 0,328 ft thick - genuinely wider than the
+			// 0,25 ft meant to clear it - and its face#1 sat at IDENTICALLY 1,5215 m2, eight
+			// decimal places of clippedVolume unchanged, across BOTH the GapColumn fix and
+			// the base-clip fix that followed it. Two different widenings, two different
+			// call sites, zero movement either time - the arithmetic explains why an
+			// outward-growing outset smaller than the very thing it has to clear can never
+			// help, no matter how many times the same fixed number is swapped in.
+			//
+			// So this stops picking a fixed number and measures instead. The widest REAL
+			// wall standing among this room's own interior elements, plus the same
+			// ProbeWallOvershootFt margin this file already uses elsewhere for "the probe
+			// does not know the thickness in advance" - except here it does, because
+			// interiorElements is already the exact list about to be measured against
+			// whatever this outset produces. A room with no interior walls at all (only a
+			// mezzanine slab, say) falls back to ProbeWallOvershootFt alone, unchanged from
+			// before - nothing here narrows what used to work.
+			double interiorOutsetFt = _s.ProbeWallOvershootFt + interiorElements
+				.OfType<Wall>()
+				.Select(delegate (Wall w)
+				{
+					try { return w.Width; }
+					catch { return 0.0; }
+				})
+				.DefaultIfEmpty(0.0)
+				.Max();
+
 			// REVERTED (2026-09-08), the same day it was added. A wall resting flush on the
 			// room's ceiling - base coincident with env.ZTop, not hanging below it into open
 			// room air - has an "underside face" that is a B-rep artifact, not a real surface:
@@ -4513,7 +4544,10 @@ namespace PaintedMaterialTakeoff.Core
 			// it cannot invent paint on an element that is not really there, and it cannot
 			// reattribute an element to a different room, since candidacy for THIS room's
 			// interiorElements list is decided upstream of this method entirely.
-			Solid clip = GeometryUtil.TryExtrude(GeometryUtil.OutsetProfile(GeometryUtil.NormalizeProfile(env.Profile, env.ZBottom), _s.ProbeWallOvershootFt), num);
+			//
+			// interiorOutsetFt, not the flat ProbeWallOvershootFt - see its own remarks
+			// above for why a fixed constant already failed here once.
+			Solid clip = GeometryUtil.TryExtrude(GeometryUtil.OutsetProfile(GeometryUtil.NormalizeProfile(env.Profile, env.ZBottom), interiorOutsetFt), num);
 			if ((object)clip == null)
 			{
 				yield break;
@@ -4558,15 +4592,13 @@ namespace PaintedMaterialTakeoff.Core
 				// which is what a too-small outset produces: not a fuzzy edge but a face
 				// that misses the extension altogether.
 				//
-				// ProbeWallOvershootFt (0,25 ft = 76 mm) is this file's OWN existing constant
-				// for the same job elsewhere - clearing a real wall's thickness when the
-				// probe does not know it in advance - reused here rather than inventing a
-				// second number for one purpose. Widening this outset can only ever recover
-				// area that is not currently reaching the union; the material actually
-				// credited still comes from each element's own real solid via
-				// ClippedFaceSolid further down, so this cannot invent paint on anything
-				// that is not really there.
-				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, _s.ProbeWallOvershootFt);
+				// interiorOutsetFt again, not a flat constant - a fixed 0,25 ft already
+				// proved too small for this exact wall once (see the remarks where it is
+				// computed, above). Widening this outset can only ever recover area that is
+				// not currently reaching the union; the material actually credited still
+				// comes from each element's own real solid via ClippedFaceSolid further
+				// down, so this cannot invent paint on anything that is not really there.
+				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, interiorOutsetFt);
 				string gapColumnNote = (object)gapColumn == null
 					? "GapColumn returned null"
 					: $"GapColumn volume={gapColumn.Volume:0.########} cu ft";
@@ -4673,10 +4705,37 @@ namespace PaintedMaterialTakeoff.Core
 				XYZ? wallXYNormal = ((xYZ.X * xYZ.X + xYZ.Y * xYZ.Y) > 0.0025) ? new XYZ(xYZ.X, xYZ.Y, 0.0) : null;
 				if (isWall && element is Wall hostWall && wallXYNormal != null)
 				{
-					double alignment = Math.Abs(wallXYNormal.Normalize().DotProduct(hostWall.Orientation));
-					// A genuine bevel is co-planar with the wall's own run, so its XY direction
-					// is parallel (or anti-parallel, for the far face) to Orientation - not
-					// oblique to it the way a hip/gable END cut or a true flat cap would be.
+					// RULE 1 (2026-09-15), CORRECTING THIS COMMENT'S OWN ORIGINAL CLAIM. It
+					// called a "hip/gable END cut" oblique to Orientation and treated it the
+					// same as a true flat cap - deliberately, not an oversight. That is right
+					// for a roof-framing end cut, which stands against the roof structure it
+					// was cut to fit and is not a visible interior surface at all. It is wrong
+					// for a FREESTANDING interior wall's own end, cut on a diagonal to close a
+					// stair opening's headroom line - which has no roof against it, stands in
+					// open room air, and is exactly as paintable as the wall's own long faces.
+					//
+					// Confirmed real and confirmed missing, by the user, against this exact
+					// case: wall 29330864 (IV_Maal 100mm), face#6, normal=(0.6,0,-0.8), 0,1772
+					// m2 - a bevel tilting along the wall's own RUN (its normal's XY part
+					// points along X, the wall's own length direction here), not across its
+					// thickness. Orientation is perpendicular to a wall's run by definition, so
+					// this alignment was always going to read as "oblique" against it - not
+					// because the face is ambiguous, but because the test only ever checked
+					// ONE of a wall's two natural in-plane directions.
+					//
+					// A wall has exactly two: Orientation (across its thickness - the dormer
+					// case this test was built for) and the run itself, perpendicular to
+					// Orientation in the same horizontal plane (this case). A face bevelled
+					// along EITHER is still squarely part of the wall's own envelope; testing
+					// both and keeping the better alignment is not a looser threshold, it is
+					// asking the SAME question - "does this face still belong to the wall's own
+					// run" - about the direction that was missing. A face oblique to BOTH - the
+					// genuinely ambiguous case the original comment meant to guard against -
+					// still fails and is still excluded, unchanged.
+					XYZ runDirection = new XYZ(-hostWall.Orientation.Y, hostWall.Orientation.X, 0.0);
+					double alignment = Math.Max(
+						Math.Abs(wallXYNormal.Normalize().DotProduct(hostWall.Orientation)),
+						Math.Abs(wallXYNormal.Normalize().DotProduct(runDirection)));
 					// 0.9 keeps roughly 25 degrees of slack either side of parallel, the same
 					// order of tolerance FaceNormalDot already uses elsewhere in this file.
 					flag = alignment < 0.9;
