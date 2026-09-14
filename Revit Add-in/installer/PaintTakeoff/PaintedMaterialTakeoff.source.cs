@@ -4615,16 +4615,80 @@ namespace PaintedMaterialTakeoff.Core
 				}
 			}
 
+			// RULE 2 (2026-09-15): collected once per room, not per face - see IsBackedByRoof's
+			// own remarks for why this exists at all. A room with no roof anywhere near it
+			// (the ordinary case) costs one empty collector, not one per element.
+			IReadOnlyList<Element> roofOccluders = CollectNearbyRoofs(env);
+
 			foreach (Element interiorElement in interiorElements)
 			{
-				foreach (PaintRecord item in Measure(env, interiorElement, clip))
+				foreach (PaintRecord item in Measure(env, interiorElement, clip, roofOccluders))
 				{
 					yield return item;
 				}
 			}
 		}
 
-		private IEnumerable<PaintRecord> Measure(RoomEnvelope env, Element element, Solid clip)
+		/// <summary>
+		/// Roof elements standing anywhere near this room, widened by a flat margin rather
+		/// than measured exactly - this only feeds IsBackedByRoof's own boolean-intersect
+		/// test, which is exact, so a generous net here costs nothing beyond one extra
+		/// element to boolean against.
+		/// </summary>
+		private IReadOnlyList<Element> CollectNearbyRoofs(RoomEnvelope env)
+		{
+			BoundingBoxXYZ box = env.Room.get_BoundingBox(null);
+			if (box == null)
+			{
+				return Array.Empty<Element>();
+			}
+			Outline outline = new Outline(box.Min - new XYZ(3.0, 3.0, 3.0), box.Max + new XYZ(3.0, 3.0, 3.0));
+			return new FilteredElementCollector(_doc)
+				.OfCategory(BuiltInCategory.OST_Roofs)
+				.WhereElementIsNotElementType()
+				.WherePasses(new BoundingBoxIntersectsFilter(outline))
+				.ToElements()
+				.ToList();
+		}
+
+		/// <summary>
+		/// Whether real roof structure sits immediately outside this face, along its own
+		/// outward normal - the difference between a wall's raking end cut standing in open
+		/// room air (paintable) and the same shape of cut sealed flush against the roof deck
+		/// it was cut to fit (not paintable: not exposed to the room at all). See the RULE 2
+		/// (2026-09-15) comment at this method's one call site for why alignment direction
+		/// alone cannot tell the two apart.
+		///
+		/// A thin skin built at the face itself and pushed OcclusionGapFt+OcclusionLayerFt
+		/// outward - the same probe band already trusted elsewhere in this file
+		/// (HorizontalSurfaceCalculator.OccludedArea, WallSegmentCalculator's own twin) - not
+		/// a new tolerance invented for this one test.
+		/// </summary>
+		private bool IsBackedByRoof(Face face, XYZ normal, IReadOnlyList<Element> roofOccluders)
+		{
+			if (roofOccluders.Count == 0)
+			{
+				return false;
+			}
+			Solid probe = GeometryUtil.TryPlate(face, normal, _s.OcclusionGapFt + _s.OcclusionLayerFt);
+			if ((object)probe == null)
+			{
+				return false;
+			}
+			foreach (Element roof in roofOccluders)
+			{
+				foreach (Solid roofSolid in GeometryUtil.GetSolids(roof, _s.MinSolidVolumeCuFt))
+				{
+					if ((object)GeometryUtil.TryBoolean(probe, roofSolid, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt) != null)
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		private IEnumerable<PaintRecord> Measure(RoomEnvelope env, Element element, Solid clip, IReadOnlyList<Element> roofOccluders)
 		{
 			List<Solid> solids = GeometryUtil.GetSolids(element, _s.MinSolidVolumeCuFt);
 
@@ -4733,12 +4797,31 @@ namespace PaintedMaterialTakeoff.Core
 					// genuinely ambiguous case the original comment meant to guard against -
 					// still fails and is still excluded, unchanged.
 					XYZ runDirection = new XYZ(-hostWall.Orientation.Y, hostWall.Orientation.X, 0.0);
-					double alignment = Math.Max(
-						Math.Abs(wallXYNormal.Normalize().DotProduct(hostWall.Orientation)),
-						Math.Abs(wallXYNormal.Normalize().DotProduct(runDirection)));
+					double orientationAlign = Math.Abs(wallXYNormal.Normalize().DotProduct(hostWall.Orientation));
+					double runAlign = Math.Abs(wallXYNormal.Normalize().DotProduct(runDirection));
+					double alignment = Math.Max(orientationAlign, runAlign);
 					// 0.9 keeps roughly 25 degrees of slack either side of parallel, the same
 					// order of tolerance FaceNormalDot already uses elsewhere in this file.
 					flag = alignment < 0.9;
+
+					// RULE 2 (2026-09-15), THE GAP THIS FIX LEFT OPEN. Confirmed by the user
+					// against the live model, again: a dormer's own hip/gable end cut - the
+					// SAME shape of oblique face as Kaelderrum 4's stair-opening wall, aligned
+					// along runDirection the same way - is not open room air, it is sealed
+					// flush against the roof deck it was cut to fit. Testing alignment alone
+					// cannot tell "freestanding wall end standing in open air" apart from "end
+					// cut standing against real roof structure" - both point the same way.
+					// Reached only when runDirection, not Orientation, is what kept the face
+					// (runAlign > orientationAlign): the dormer's own SLOPED PANEL - the case
+					// this whole test was built for, aligned with Orientation - never reaches
+					// this branch and is unaffected. Only excludes what real roof geometry is
+					// actually found behind, so this cannot lose a genuinely open-air face
+					// that happens to be run-aligned, and cannot exclude anything this fix
+					// would previously have missed rather than gained.
+					if (!flag && runAlign > orientationAlign && IsBackedByRoof(item2, xYZ, roofOccluders))
+					{
+						flag = true;
+					}
 				}
 				else
 				{
