@@ -359,35 +359,6 @@ internal static class RibbonBuilder
             icon: "takeoff",
             availability: typeof(ProjectDocumentAvailability));
 
-        // A DIAGNOSTIC, sitting in Reporting because it changes nothing and produces a report -
-        // the one thing everything on this panel has in common. It answers a question no other
-        // tool here can: whether a surface the takeoff reports as zero was declined or was
-        // never offered, which is the difference between two opposite fixes.
-        AddButton(reporting,
-            name: "CdaDumpRoomSubfaces",
-            text: "Room Subface\nDump",
-            command: typeof(Commands.DumpRoomSubfacesCommand),
-            tooltip: "Lists every room boundary subface, flags the wall band a slab opening " +
-                     "exposes, and flags any nearby stair's painted faces that no pass reaches.",
-            longDescription: "Read-only. Runs the same SpatialElementGeometryCalculator the " +
-                             "finish engine uses, at the same boundary location, and reports " +
-                             "what it hands back BEFORE anything is done with it.\n\n" +
-                             "For each room it finds the slab above, measures the band between " +
-                             "that slab's soffit and its finished top, and says whether any " +
-                             "vertical subface reaches into it: BAND EMPTY means the room solid " +
-                             "never gets there; FALLBACK-ROUTED means the subface exists but " +
-                             "resolves to something that is not a Wall, so the exact path " +
-                             "declines it and the unpainted fallback bucket takes it.\n\n" +
-                             "SEPARATELY, it walks every nearby stair's own geometry directly " +
-                             "and flags any painted, room-facing face that is not the stair's " +
-                             "underside - the one shape CeilingFallback already reaches. A " +
-                             "raking closure panel beside a flight is real, painted wall area " +
-                             "with no fix on the routing side: OST_Stairs bounds no room in " +
-                             "Revit, so no subface is ever produced for it to begin with.\n\n" +
-                             "Whole model unless rooms are selected first.",
-            icon: "finish",
-            availability: typeof(ProjectDocumentAvailability));
-
         // NO AVAILABILITY CLASS. Log.Verbose is a process-wide switch with no document of its
         // own, so this has to be clickable from the Revit start screen too - the same reason
         // Time Tracking below has none. TransactionMode.ReadOnly because it never touches a
