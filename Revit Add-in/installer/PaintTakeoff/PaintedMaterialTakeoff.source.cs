@@ -4484,7 +4484,36 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				yield break;
 			}
-			Solid clip = GeometryUtil.TryExtrude(GeometryUtil.OutsetProfile(GeometryUtil.NormalizeProfile(env.Profile, env.ZBottom), _s.InteriorClipOutsetFt), num);
+
+			// RULE 1 (2026-09-15), SECOND HALF OF THE SAME FIX. The GapColumn outset fixed
+			// nothing here, and that is exactly the evidence that pointed here: widening it
+			// (6,1 mm to 76 mm) grew the Union(clip, gapColumn) volume for real (600.22 to
+			// 603.23 cu ft, measured) but left wall 29330864's face#1 at IDENTICALLY 1.5215
+			// m2, to four decimal places, while its clip box already comfortably contained
+			// both of the wall's faces (Y range 28.99..36.66 against faces at Y=32.93 and
+			// 33.258, 0,33 ft apart). A generous bounding box that still produces zero change
+			// means the boundary doing the cutting is not the box, and is not the gap column
+			// - it is THIS clip's own true shape, built here, before any gap column is ever
+			// unioned in.
+			//
+			// This is the room's OWN 2D boundary (env.Profile, from room.GetBoundarySegments)
+			// outset by the same InteriorClipOutsetFt - 6,1 mm, the coincident-plane
+			// tolerance, not a real-thickness one. A boundary line drawn along or near one
+			// face of a 100 mm freestanding wall standing close to the room's own edge - which
+			// is exactly where a closure wall at a stair opening stands - leaves the FAR face,
+			// 100 mm further out, outside that 6,1 mm margin. This is the case
+			// ProbeWallOvershootFt already exists for elsewhere in this file; reused here for
+			// the same reason as the GapColumn fix, not a new number for a second problem.
+			//
+			// This is the base clip every interior element in EVERY room measures against,
+			// gap or no gap - a wider reach here, not only in GapColumn. Same safety property
+			// as that fix: this clip only says how far the room's own reach extends: what
+			// gets CREDITED still comes from each element's real solid via ClippedFaceSolid,
+			// so widening it can only recover area that is not currently reaching the clip -
+			// it cannot invent paint on an element that is not really there, and it cannot
+			// reattribute an element to a different room, since candidacy for THIS room's
+			// interiorElements list is decided upstream of this method entirely.
+			Solid clip = GeometryUtil.TryExtrude(GeometryUtil.OutsetProfile(GeometryUtil.NormalizeProfile(env.Profile, env.ZBottom), _s.ProbeWallOvershootFt), num);
 			if ((object)clip == null)
 			{
 				yield break;
@@ -4511,7 +4540,33 @@ namespace PaintedMaterialTakeoff.Core
 				// either GapColumn itself is returning null/empty, or the Union with it is
 				// failing - the earlier diagnostic never distinguished the two. This does.
 				double baseVolume = clip.Volume;
-				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, _s.InteriorClipOutsetFt);
+
+				// RULE 1 (2026-09-15): InteriorClipOutsetFt (6,1 mm) is the wrong tolerance
+				// here - it exists to stop a boolean throwing on a COINCIDENT plane, not to
+				// clear a real element's own thickness, and this column is unioned ONCE into
+				// the shared room clip that EVERY interior element's BOTH faces are then
+				// measured against.
+				//
+				// A freestanding wall standing at the gap's own edge has two faces 100+ mm
+				// apart. Measured on FM_Template, Kaelderrum 4, wall 29330864 (IV_Maal
+				// 100mm): face 0 recovered its full 1,8715 m2, face 1 only 1,5215 m2 - a
+				// 0,35 m2 shortfall that is not a sliver, it is almost exactly this wall's
+				// length times the gap's own extension height (5,906 ft x 0,656 ft = 0,36
+				// m2). One face's plate fell entirely inside the unioned column; the other,
+				// 100 mm further out, fell entirely outside its 6,1 mm-outset footprint and
+				// kept only the base, un-extended clip - a clean binary, not a partial clip,
+				// which is what a too-small outset produces: not a fuzzy edge but a face
+				// that misses the extension altogether.
+				//
+				// ProbeWallOvershootFt (0,25 ft = 76 mm) is this file's OWN existing constant
+				// for the same job elsewhere - clearing a real wall's thickness when the
+				// probe does not know it in advance - reused here rather than inventing a
+				// second number for one purpose. Widening this outset can only ever recover
+				// area that is not currently reaching the union; the material actually
+				// credited still comes from each element's own real solid via
+				// ClippedFaceSolid further down, so this cannot invent paint on anything
+				// that is not really there.
+				Solid gapColumn = GapColumn(env, _s.PrismInsetFt, _s.ProbeWallOvershootFt);
 				string gapColumnNote = (object)gapColumn == null
 					? "GapColumn returned null"
 					: $"GapColumn volume={gapColumn.Volume:0.########} cu ft";
@@ -6208,7 +6263,29 @@ namespace PaintedMaterialTakeoff.Core
 				foreach (Solid item in GeometryUtil.GetSolids(el, s.MinSolidVolumeCuFt))
 				{
 					var (zMin, zMax) = GeometryUtil.ZRange(item);
-					if (zMin <= ZTopHighest + s.MinOverheadClearanceFt)
+
+					// RULE 1 (2026-09-14): an opening straight through a SINGLE slab has no
+					// second, separate element above it at all - that slab's own top, on the
+					// far side of its own thickness, IS the room's real cover. Its zMin is, by
+					// definition, this room's current ceiling (ZTopHighest), so the old
+					// zMin-only test below rejected exactly the one candidate that is
+					// correct, before its zMax - the actual answer - was ever looked at.
+					//
+					// Confirmed live in FM_Template: Kaelderrum 4's own trace read "GAP FOUND:
+					// ~1.91 m2" then "NOTHING found above it (Roofs/Floors/Ceilings all empty
+					// within 1.156 ft)" - even though the Terraen slab, the very slab the gap
+					// is a hole IN, sits 0.656 ft away, well inside that search budget. The
+					// gap detection was never the problem; this qualifying test was.
+					//
+					// Rejected now only when BOTH ends fail to clear the ceiling - nothing
+					// about the candidate rises meaningfully above it at all. That keeps the
+					// ORIGINAL exclusion intact for what it was actually built for - a duct or
+					// beam running through the same shaft at the same level, whose zMax sits
+					// at that level too, same as its zMin - and admits the one case it wrongly
+					// excluded: a slab this room already opens through, whose far side is real
+					// material this room's paint genuinely continues onto.
+					if (zMin <= ZTopHighest + s.MinOverheadClearanceFt
+						&& zMax <= ZTopHighest + s.MinOverheadClearanceFt)
 					{
 						continue;
 					}
