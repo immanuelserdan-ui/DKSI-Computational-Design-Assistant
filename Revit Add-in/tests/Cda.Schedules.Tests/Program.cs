@@ -18,15 +18,15 @@ internal static class Program
 
     private static readonly ScheduleCandidate[] Model =
     [
-        Make(1, "Door Schedule - 1st Floor", "Doors", sheet: "A-201", rows: 42),
-        Make(2, "Door Schedule - 2nd Floor", "Doors", sheet: "A-202", rows: 38),
-        Make(3, "Window Schedule", "Windows", sheet: "A-203", rows: 17),
-        Make(4, "Room Finish Schedule", "Rooms", rows: 96),
-        Make(5, "WORKING - scratch counts", "Doors", rows: 0),
+        Make(1, "Door Schedule - 1st Floor", "Doors", sheet: "A-201", rows: 42, phase: "New Construction"),
+        Make(2, "Door Schedule - 2nd Floor", "Doors", sheet: "A-202", rows: 38, phase: "New Construction"),
+        Make(3, "Window Schedule", "Windows", sheet: "A-203", rows: 17, phase: "New Construction"),
+        Make(4, "Room Finish Schedule", "Rooms", rows: 96, phase: "Existing"),
+        Make(5, "WORKING - scratch counts", "Doors", rows: 0, phase: "New Construction"),
         Make(6, "Door Hardware Set", "Doors", kind: ScheduleKind.KeySchedule, rows: 12),
-        Make(7, "Paint Takeoff", "Walls", kind: ScheduleKind.MaterialTakeoff, sheet: "A-901", rows: 310),
+        Make(7, "Paint Takeoff", "Walls", kind: ScheduleKind.MaterialTakeoff, sheet: "A-901", rows: 310, phase: "New Construction"),
         Make(8, "Sheet Index", "Sheets", kind: ScheduleKind.SheetList, sheet: "A-001", rows: 24),
-        Make(9, "Corrupt Door Count", "Doors", rows: null),
+        Make(9, "Corrupt Door Count", "Doors", rows: null, phase: "New Construction"),
     ];
 
     private static int Main()
@@ -39,6 +39,7 @@ internal static class Program
         Kind();
         Placement();
         Content();
+        Phase();
         UnknownRowCountsSurvive();
         ClausesCombine();
 
@@ -155,6 +156,28 @@ internal static class Program
                 .Any(c => c.Name == "WORKING - scratch counts"));
     }
 
+    private static void Phase()
+    {
+        Section("phase");
+
+        Names("existing",
+            new ScheduleExportFilter { Phase = "Existing" },
+            "Room Finish Schedule");
+
+        Names("new construction",
+            new ScheduleExportFilter { Phase = "New Construction" },
+            "Door Schedule - 1st Floor", "Door Schedule - 2nd Floor", "Window Schedule",
+            "WORKING - scratch counts", "Paint Takeoff", "Corrupt Door Count");
+
+        Names("case insensitive", new ScheduleExportFilter { Phase = "existing" }, "Room Finish Schedule");
+
+        // Key schedules and sheet/view lists carry no Phase parameter at all - picking a
+        // real phase must not accidentally sweep them in as if blank meant "matches anything".
+        True("schedules with no phase parameter are excluded from a specific phase",
+            !new ScheduleExportFilter { Phase = "New Construction" }.Apply(Model)
+                .Any(c => c.Name is "Door Hardware Set" or "Sheet Index"));
+    }
+
     private static void UnknownRowCountsSurvive()
     {
         Section("a row count that could not be read");
@@ -203,7 +226,8 @@ internal static class Program
         string category,
         ScheduleKind kind = ScheduleKind.Schedule,
         string sheet = "",
-        int? rows = 0) =>
+        int? rows = 0,
+        string phase = "") =>
         new()
         {
             Id = id,
@@ -212,6 +236,7 @@ internal static class Program
             Kind = kind,
             SheetNumber = sheet,
             DataRows = rows,
+            Phase = phase,
         };
 
     private static void Names(string what, ScheduleExportFilter filter, params string[] expected)
