@@ -529,6 +529,75 @@ public sealed class FinishGeometry
     }
 
     /// <summary>
+    /// The portion of <paramref name="face"/>'s area that actually sits inside
+    /// <paramref name="roomSolid"/> - the room's own real, already-clipped volume from
+    /// <see cref="SpatialElementGeometryCalculator"/> - rather than spilling past it in ANY
+    /// direction, plan or height.
+    ///
+    /// USED FOR NON-ROOM-BOUNDING ELEMENTS (mezzanine slabs, freestanding walls), whose faces
+    /// reach this method through a coarse bounding-box / point-in-room pre-filter upstream
+    /// that only proves the element is SOMEWHERE near the room - never that the whole face
+    /// lies inside it. Without this clip, an element that only partly overlaps the room - a
+    /// slab or partition continuing past the room's real boundary into a stairwell, a
+    /// neighbouring room, or a non-bounding dormer/monitor whose footprint only grazes this
+    /// one - has its FULL face area billed to this one room. That is the "painted area
+    /// outside the room boundary" leak.
+    ///
+    /// STRADDLES THE FACE SYMMETRICALLY (+/- thickness/2 along its own normal), the same
+    /// technique <see cref="ExactSubfaceArea"/>'s own boolean uses, so the clip is correct
+    /// regardless of which way the face happens to point.
+    ///
+    /// CHEAP REJECT BEFORE THE BOOLEAN, mirroring <see cref="ClippedToRoomZRange"/>: Revit's
+    /// boolean engine can throw on a pair of solids that do not overlap at all, which the
+    /// catch below would otherwise answer the wrong way - a face nowhere near the room
+    /// falling back to its own full area instead of zero. A plain bounding-box test catches
+    /// that case cheaply and correctly before any geometry is touched.
+    ///
+    /// FALLS BACK TO face.Area when <paramref name="roomBox"/> is unavailable, or when the
+    /// boolean ITSELF fails (an exception) - never when it cleanly returns nothing. An
+    /// unclipped area is the number this method replaces, so a genuine failure here is never
+    /// worse than before this fix existed - the same discipline <see cref="ClippedToRoomZRange"/>
+    /// already applies.
+    /// </summary>
+    public double ClipFaceToRoomSolid(
+        Face face, Solid roomSolid, BoundingBoxXYZ? roomBox, double thickness = FinishSettings.ExtrudeThickness)
+    {
+        if (roomBox is null) return face.Area;
+
+        var (origin, normal) = PlanarData(face);
+        if (origin is null || normal is null) return face.Area;
+
+        var faceBounds = FaceBounds(face);
+        if (faceBounds is { } fb &&
+            (fb.Max.X < roomBox.Min.X || fb.Min.X > roomBox.Max.X ||
+             fb.Max.Y < roomBox.Min.Y || fb.Min.Y > roomBox.Max.Y ||
+             fb.Max.Z < roomBox.Min.Z || fb.Min.Z > roomBox.Max.Z))
+        {
+            return 0.0;   // no overlap at all - cheap, certain, and safe before any boolean
+        }
+
+        try
+        {
+            var loops = face.GetEdgesAsCurveLoops();
+            var slabPos = GeometryCreationUtilities.CreateExtrusionGeometry(loops, normal, thickness / 2.0);
+            var slabNeg = GeometryCreationUtilities.CreateExtrusionGeometry(loops, normal, -thickness / 2.0);
+            var slab = BooleanOperationsUtils.ExecuteBooleanOperation(slabPos, slabNeg, BooleanOperationsType.Union);
+            if (slab is null) return 0.0;
+
+            var intersection = BooleanOperationsUtils.ExecuteBooleanOperation(
+                slab, roomSolid, BooleanOperationsType.Intersect);
+            if (intersection is null || intersection.Volume <= 1e-9) return 0.0;
+
+            var area = intersection.Volume / thickness;
+            return area < face.Area ? area : face.Area;
+        }
+        catch
+        {
+            return face.Area;
+        }
+    }
+
+    /// <summary>
     /// World-space min/max corner of a face, via triangulation - Face.GetBoundingBox is in
     /// UV parameter space and says nothing about world coordinates, the same reason the Room
     /// Subface Dump diagnostic reads a face's Z-range this way rather than trusting it.

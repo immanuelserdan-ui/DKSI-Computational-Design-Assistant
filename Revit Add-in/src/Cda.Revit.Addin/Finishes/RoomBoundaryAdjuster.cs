@@ -143,7 +143,7 @@ public sealed class RoomBoundaryAdjuster
                 var roomBox = room.get_BoundingBox(null);
                 if (roomBox is null) continue;
 
-                var neededTop = HighestCapTop(topBoxes, roomBox);
+                var neededTop = HighestCapTop(topBoxes, room, roomBox);
 
                 // A FLAGGED ROOM STILL GOES THROUGH, even with no cap to raise for. The
                 // raise-only path has nothing to do when HighestCapTop finds nothing, but the
@@ -198,14 +198,19 @@ public sealed class RoomBoundaryAdjuster
     /// a full pass, a bounding-box query per room for the incremental one.
     /// </param>
     internal static double? HighestCapTop(
-        IEnumerable<BoundingBoxXYZ> capBoxes, BoundingBoxXYZ roomBox)
+        IEnumerable<BoundingBoxXYZ> capBoxes, Room room, BoundingBoxXYZ roomBox)
     {
         var baseZ = roomBox.Min.Z;
+
+        // Just above the room's own base - inside the room's real footprint, never inside
+        // the candidate itself.
+        var probeZ = baseZ + 0.5;
         double? neededTop = null;
 
         foreach (var box in capBoxes)
         {
-            // Plan (XY) overlap with the room?
+            // Plan (XY) overlap with the room's BOUNDING BOX - a cheap reject before the
+            // real footprint test below.
             if (box.Max.X < roomBox.Min.X || box.Min.X > roomBox.Max.X ||
                 box.Max.Y < roomBox.Min.Y || box.Min.Y > roomBox.Max.Y) continue;
 
@@ -213,6 +218,41 @@ public sealed class RoomBoundaryAdjuster
             // own floor slab) and within a sane band (avoids grabbing storeys far above
             // and ballooning the room upward).
             if (box.Min.Z < baseZ + 1.0 || box.Min.Z > baseZ + FinishSettings.ScanBand) continue;
+
+            // REAL FOOTPRINT OVERLAP. A bbox-vs-bbox pass alone is not enough: an L-shaped or
+            // offset room's rectangular bounding box, or a small dormer/monitor sitting near
+            // one corner, can share bounding rectangles without the two shapes ever actually
+            // touching. Sampling the candidate's own footprint corners (+ centre) against the
+            // room's true, possibly concave boundary is what a rectangle-vs-rectangle test
+            // cannot do - only a genuine hit may raise this room's limit into that element's
+            // airspace. Without it, an unrelated ceiling/roof/dormer drags this room's volume
+            // - and later, via MeasureInteriorSlabs/MeasureInteriorWalls, that element's OWN
+            // faces too - into a room it never actually bounds.
+            XYZ[] corners =
+            [
+                new(box.Min.X, box.Min.Y, probeZ),
+                new(box.Max.X, box.Min.Y, probeZ),
+                new(box.Min.X, box.Max.Y, probeZ),
+                new(box.Max.X, box.Max.Y, probeZ),
+                new((box.Min.X + box.Max.X) / 2.0, (box.Min.Y + box.Max.Y) / 2.0, probeZ),
+            ];
+
+            var hit = false;
+            foreach (var point in corners)
+            {
+                try
+                {
+                    if (!room.IsPointInRoom(point)) continue;
+                    hit = true;
+                    break;
+                }
+                catch
+                {
+                    // Undecidable point; try the next one.
+                }
+            }
+
+            if (!hit) continue;
 
             var top = box.Max.Z + FinishSettings.LimitMargin;
             if (neededTop is null || top > neededTop) neededTop = top;

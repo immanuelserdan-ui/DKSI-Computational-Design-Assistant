@@ -952,10 +952,17 @@ public sealed class RoomFinishCalculator
 
         var ceilingSource = FinishSettings.CeilingSourceOrder.ToDictionary(k => k, _ => 0.0);
 
+        // Kept past the try block so MeasureInteriorSlabs/MeasureInteriorWalls can clip
+        // against the room's own real, already-bounded volume instead of a raw face.Area -
+        // see FinishGeometry.ClipFaceToRoomSolid. Guaranteed non-null once the try below
+        // completes without throwing, since a throw returns false before either is called.
+        Solid? roomSolid = null;
+
         try
         {
             var results = calculator.CalculateSpatialElementGeometry(room);
             var solid = results.GetGeometry();
+            roomSolid = solid;
 
             foreach (Face face in solid.Faces)
             {
@@ -1272,12 +1279,15 @@ public sealed class RoomFinishCalculator
         // TIMED (2026-09-08), three discrete per-room phases, so a slow room's cost can be
         // attributed to a specific phase rather than to "MeasureRoom" as a whole. Log.Debug
         // is a no-op unless Log.Verbose is on - see Log.cs - so this costs nothing normally.
+        var roomBox = SafeBoundingBox(room);
+
         var phaseTimer = System.Diagnostics.Stopwatch.StartNew();
-        var (mezzFloor, mezzCeiling, mezzCount) = MeasureInteriorSlabs(room, AddMaterials, ceilingClaimed);
+        var (mezzFloor, mezzCeiling, mezzCount) =
+            MeasureInteriorSlabs(room, AddMaterials, ceilingClaimed, roomSolid, roomBox);
         Log.Debug($"MeasureInteriorSlabs room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {mezzCount} slab(s).");
 
         phaseTimer.Restart();
-        var (hangingArea, hangingCount) = MeasureInteriorWalls(room, AddMaterials);
+        var (hangingArea, hangingCount) = MeasureInteriorWalls(room, AddMaterials, roomSolid, roomBox);
         Log.Debug($"MeasureInteriorWalls room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {hangingCount} wall(s).");
 
         phaseTimer.Restart();
@@ -1527,7 +1537,11 @@ public sealed class RoomFinishCalculator
     /// <summary>
     /// Mezzanine slabs inside this room's volume. Probe a point just above the slab's top
     /// (or below its bottom): if that air belongs to this room, the slab lives inside it.
-    /// Real faces are summed, so voids and stair openings are already excluded.
+    /// Real faces are clipped to the room's own solid before being summed (see
+    /// <see cref="FinishGeometry.ClipFaceToRoomSolid"/>), so a slab that only partly
+    /// overlaps this room - continuing past its boundary into a stairwell, a neighbouring
+    /// room, or a non-bounding dormer floor whose footprint only grazes it - is no longer
+    /// billed for the whole face; voids and stair openings are already excluded either way.
     /// </summary>
     /// <param name="ceilingClaimed">
     /// Slabs whose underside the ceiling fallback already measured for this room.
@@ -1545,7 +1559,8 @@ public sealed class RoomFinishCalculator
     /// independently of the fallback.
     /// </param>
     private (double Floor, double Ceiling, int Count) MeasureInteriorSlabs(
-        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, HashSet<long> ceilingClaimed)
+        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, HashSet<long> ceilingClaimed,
+        Solid? roomSolid, BoundingBoxXYZ? roomBox)
     {
         double floor = 0.0, ceiling = 0.0;
         var count = 0;
@@ -1577,20 +1592,35 @@ public sealed class RoomFinishCalculator
 
                 if (!above && !below) continue;
 
+                // CLIPPED TO THE ROOM'S REAL VOLUME, not taken whole. The point probes above
+                // only prove the slab is SOMEWHERE near this room - a mezzanine deck or a
+                // non-bounding dormer floor can still continue past the room's actual
+                // boundary into a stairwell, a neighbouring room, or open air the room does
+                // not occupy. Without the clip, that whole face was billed to this one room
+                // regardless of how much of it actually sat outside. See
+                // FinishGeometry.ClipFaceToRoomSolid; falls back to the raw face.Area when
+                // the room's solid is unavailable for some reason (the pre-fix behaviour).
+                double FaceArea(Face f) =>
+                    roomSolid is not null ? _geometry.ClipFaceToRoomSolid(f, roomSolid, roomBox) : f.Area;
+
                 var topLedger = new MaterialLedger();
                 var topArea = 0.0;
                 foreach (var face in _geometry.TopFaces(slab))
                 {
-                    topArea += face.Area;
-                    topLedger.Add(_geometry.FaceMaterialKey(slab, face), face.Area);
+                    var a = FaceArea(face);
+                    if (a <= 0) continue;
+                    topArea += a;
+                    topLedger.Add(_geometry.FaceMaterialKey(slab, face), a);
                 }
 
                 var bottomLedger = new MaterialLedger();
                 var bottomArea = 0.0;
                 foreach (var face in _geometry.BottomFaces(slab))
                 {
-                    bottomArea += face.Area;
-                    bottomLedger.Add(_geometry.FaceMaterialKey(slab, face), face.Area);
+                    var a = FaceArea(face);
+                    if (a <= 0) continue;
+                    bottomArea += a;
+                    bottomLedger.Add(_geometry.FaceMaterialKey(slab, face), a);
                 }
 
                 if (topArea <= 0 && bottomArea <= 0) continue;
@@ -1638,23 +1668,23 @@ public sealed class RoomFinishCalculator
     /// face is painted, count ONLY painted faces; otherwise count the single face whose
     /// normal points most toward the room centre. Never both - that doubles the quantity.
     ///
-    /// CLIPPED TO THE ROOM'S OWN VERTICAL EXTENT, not the wall's. A hanging wall's face
-    /// area used to be taken whole - <c>face.Area</c>, the wall's real height end to end -
-    /// on the reasoning that this method exists specifically for partitions that stand
-    /// inside a room, so the whole visible face belongs to it. That reasoning holds only
-    /// while the wall's own height matches the room's: a wall drawn taller than the room it
-    /// stands in - reaching up through where a ceiling would normally stop it, exactly the
-    /// case a mis-joined or over-height hanging wall produces - was counting the slice above
-    /// the room as this room's paint too. Nothing bounds a freestanding wall the way a
-    /// ceiling bounds a room-bounding one, so nothing was catching it.
+    /// CLIPPED TO THE ROOM'S OWN REAL VOLUME - plan and height both - not the wall's own
+    /// extent. A hanging wall's face area used to be taken whole - <c>face.Area</c>, the
+    /// wall's real footprint end to end - on the reasoning that this method exists
+    /// specifically for partitions that stand inside a room, so the whole visible face
+    /// belongs to it. That reasoning holds only while the wall's own footprint matches the
+    /// room's: a wall drawn taller than the room - reaching up through where a ceiling would
+    /// normally stop it - or running past the room in plan - past a corner, into a
+    /// neighbouring room, outside the building envelope entirely - was counting the part
+    /// outside the room as this room's paint too. Nothing bounds a freestanding wall the way
+    /// a ceiling or a wall corner bounds a room-bounding one, so nothing was catching it.
+    /// See <see cref="FinishGeometry.ClipFaceToRoomSolid"/>.
     /// </summary>
     private (double Area, int Count) MeasureInteriorWalls(
-        Room room, Action<string, MaterialLedger, ElementId?> addMaterials)
+        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, Solid? roomSolid, BoundingBoxXYZ? roomBox)
     {
         var total = 0.0;
         var count = 0;
-
-        var roomBox = SafeBoundingBox(room);
 
         foreach (var wall in _interiorWalls)
         {
@@ -1770,7 +1800,19 @@ public sealed class RoomFinishCalculator
 
                 foreach (var face in use)
                 {
-                    var faceArea = ClippedToRoomHeight(face, box, roomBox);
+                    // CLIPPED TO THE ROOM'S REAL VOLUME - plan AND height, not height alone.
+                    // ClippedToRoomHeight used to be the only clip here, and it deliberately
+                    // preserves the wall's own full horizontal footprint as its clip box (see
+                    // its remarks) - so a hanging/freestanding wall running PAST the room in
+                    // plan, past a corner, into a neighbouring room, or outside the building
+                    // envelope entirely, still counted in full once the single bbox-centre
+                    // point-in-room gate above passed. The room's own solid already knows its
+                    // real plan shape as well as its height, so clipping against it catches
+                    // both at once. Falls back to the height-only clip if the room's solid is
+                    // unavailable for some reason - the same conservative default as before.
+                    var faceArea = roomSolid is not null
+                        ? _geometry.ClipFaceToRoomSolid(face, roomSolid, roomBox)
+                        : ClippedToRoomHeight(face, box, roomBox);
 
                     area += faceArea;
                     var key = _geometry.FaceMaterialKey(wall, face);
