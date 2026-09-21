@@ -87,10 +87,14 @@ public sealed class AdjustRoomBoundariesCommand : CommandBase
             if (result.RoomsAdjusted > 0)
                 lines.Add($"{result.RoomsAdjusted} room(s) had their upper limit raised.");
 
+            if (result.RoomsLowered > 0)
+                lines.Add($"{result.RoomsLowered} room(s) had an over-raised limit corrected back down.");
+
             lines.Add(
-                "\nRaise-only: no room's limit was lowered, so a room that was already bounded " +
-                "correctly is untouched. The ceiling still clips the volume, so the extra " +
-                "headroom above it changes nothing you can measure.");
+                "\nRaising is the normal case and never lowers a correct room. The one exception " +
+                "is a limit an EARLIER run raised too far - past the room's own ceiling to " +
+                "something a storey above - which is brought back down to just clear the ceiling " +
+                "that actually bounds the room. Nothing is lowered below what the room needs.");
         }
 
         lines.Add("\nNo parameters were bound and no areas were measured - this command only " +

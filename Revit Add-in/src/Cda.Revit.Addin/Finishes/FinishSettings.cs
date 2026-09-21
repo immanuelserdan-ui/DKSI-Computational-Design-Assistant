@@ -329,6 +329,29 @@ public sealed class FinishSettings
     public const double LimitMargin = 0.5;
 
     /// <summary>
+    /// How far above a room's own ceiling an overhead face may sit and still count as that
+    /// room's ceiling, ~300 mm.
+    ///
+    /// WHAT IT SEPARATES. A room whose ceiling has a gap - a shaft or dormer passing through -
+    /// has its volume rise through that gap, so whatever caps the shaft a storey up is reported
+    /// by Revit as a genuine Top boundary face of the room. On FM_Template that is an exterior
+    /// canopy roof ('Baldakin') at Z 0..3.125 against a kitchen ceiling at -4.101, and it was
+    /// contributing 8.95 m2 of ceiling finish to a basement kitchen. Nothing is wrong with the
+    /// geometry or the clipping; the face is simply not that room's ceiling.
+    ///
+    /// WHY NOT ZERO TOLERANCE. A stepped or coffered ceiling is genuinely at two heights in one
+    /// room, and both are that room's ceiling. Excluding anything above the dominant plane
+    /// would delete the smaller step - an under-count, which is the failure that costs money.
+    /// 1 ft clears any coffer in this model by a wide margin while still leaving 3 ft of
+    /// daylight to the canopy, so neither case is close to the line.
+    ///
+    /// A height test, not a shape test. If a project ever has a ceiling step deeper than this,
+    /// the honest fix is to compare FOOTPRINTS - does this face cap the room, or does it cap a
+    /// shaft passing through it - not to keep enlarging the number.
+    /// </summary>
+    public const double CeilingStepTolerance = 1.0;
+
+    /// <summary>
     /// Reveal-coverage slab thickness, deliberately thin (~6 mm) so a lining sitting
     /// against the reveal fully spans it, while a leaf offset into the opening does not
     /// get falsely counted. Larger would under-deduct thin linings.
