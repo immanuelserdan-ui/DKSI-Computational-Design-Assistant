@@ -8,10 +8,10 @@ using Cda.Revit.Addin.Infrastructure;
 namespace Cda.Revit.Addin.Automation;
 
 /// <summary>
-/// Runs the casework side- and bottom-void cutter off the same DocumentChanged →
+/// Runs the casework side-, bottom- and top-void cutter off the same DocumentChanged →
 /// ExternalEvent pipeline that keeps finish areas current, so placing a fitting cuts the
-/// walls and floors its voids reach without anybody reaching for Modify → Cut → Cut
-/// Geometry.
+/// walls, floors and ceilings its voids reach without anybody reaching for Modify → Cut →
+/// Cut Geometry.
 ///
 /// TWO TRIGGERS, DELIBERATELY DIFFERENT, because the two things that create a missing cut
 /// are not equally cheap to react to.
@@ -20,10 +20,10 @@ namespace Cda.Revit.Addin.Automation;
 ///   the case the tool exists for and the one where an instant answer is worth having: the
 ///   cut appears while the user is still looking at what they just placed.
 ///
-///   A WALL OR FLOOR IS MOVED INTO OR OUT OF A FITTING'S VOID. Deferred to the next save, or
-///   to the same idle-quiet moment <see cref="Finishes.FinishAutomation"/>'s own full pass
-///   already waits for - see the <c>allowSweep</c> parameter on <see cref="Run"/>. Walls and
-///   floors are edited constantly, an edit to one tells us nothing about WHICH fitting is now
+///   A WALL, FLOOR OR CEILING IS MOVED INTO OR OUT OF A FITTING'S VOID. Deferred to the next
+///   save, or to the same idle-quiet moment <see cref="Finishes.FinishAutomation"/>'s own
+///   full pass already waits for - see the <c>allowSweep</c> parameter on <see cref="Run"/>.
+///   These are edited constantly, an edit to one tells us nothing about WHICH fitting is now
 ///   affected without a spatial query per changed element, and running a whole-model sweep on
 ///   every nudge would put a pause in the middle of ordinary drafting. Save is where this
 ///   add-in already puts work that must be right but need not be instant, for the same
@@ -121,15 +121,15 @@ internal static class CaseworkCutAutomation
     /// </summary>
     private static readonly DocumentScoped<DocumentFlags> Flags = new();
 
-    /// <summary>Work the ExternalEvent should pick up now. Wall and floor edits deliberately do not qualify.</summary>
+    /// <summary>Work the ExternalEvent should pick up now. Wall, floor and ceiling edits deliberately do not qualify.</summary>
     public static bool IsDirty(Document doc) =>
         PendingFittings.Has(doc) && PendingFittings.For(doc).Count > 0;
 
     /// <summary>
-    /// A wall or floor edit (or a deletion) is owed a whole-model sweep in THIS document and
-    /// none has run yet. Exposed so <see cref="Finishes.FinishAutomation"/> can decide whether
-    /// THIS flush is allowed to pay for that sweep - see <see cref="Run"/>'s <c>allowSweep</c>
-    /// parameter.
+    /// A wall, floor or ceiling edit (or a deletion) is owed a whole-model sweep in THIS
+    /// document and none has run yet. Exposed so <see cref="Finishes.FinishAutomation"/> can
+    /// decide whether THIS flush is allowed to pay for that sweep - see <see cref="Run"/>'s
+    /// <c>allowSweep</c> parameter.
     /// </summary>
     public static bool SweepOwed(Document doc) => Flags.For(doc).CaseworkSweepOwed;
 
@@ -146,9 +146,9 @@ internal static class CaseworkCutAutomation
 
         var flags = Flags.For(doc);
 
-        // A deletion cannot be classified - the element is gone. It may have been a wall or
-        // floor standing in a void, so the sweep is owed; it is never a reason to run right
-        // now, because deleting the FITTING already took its cuts with it.
+        // A deletion cannot be classified - the element is gone. It may have been a wall,
+        // floor or ceiling standing in a void, so the sweep is owed; it is never a reason to
+        // run right now, because deleting the FITTING already took its cuts with it.
         if (deletedCount > 0) flags.CaseworkSweepOwed = true;
 
         var pending = PendingFittings.For(doc);
@@ -165,7 +165,8 @@ internal static class CaseworkCutAutomation
             }
 
             if (category == (long)BuiltInCategory.OST_Walls ||
-                category == (long)BuiltInCategory.OST_Floors) flags.CaseworkSweepOwed = true;
+                category == (long)BuiltInCategory.OST_Floors ||
+                category == (long)BuiltInCategory.OST_Ceilings) flags.CaseworkSweepOwed = true;
         }
     }
 
@@ -174,8 +175,8 @@ internal static class CaseworkCutAutomation
     /// <summary>
     /// Cuts what is owed and returns THE ELEMENTS THAT WERE CUT, so the caller can decide
     /// whether the finish areas it is about to publish are now stale, and - crucially - WHICH
-    /// rooms that staleness belongs to. They are stale: taking a bite out of a wall or floor
-    /// changes the painted or floor-finish area of the room it faces.
+    /// rooms that staleness belongs to. They are stale: taking a bite out of a wall, floor or
+    /// ceiling changes the painted, floor-finish or ceiling area of the room it faces.
     ///
     /// IT USED TO RETURN A COUNT, and the count was not enough. FinishAutomation turned a
     /// non-zero count into a bare "finish work is owed" flag with no rooms attached, while the
@@ -186,8 +187,8 @@ internal static class CaseworkCutAutomation
     /// that was missing rather than a convenience.
     ///
     /// MUST be called from inside <c>FinishAutomation.WithoutSelfTriggering</c>. Every write
-    /// here lands on a wall or floor, and both are in the change updater's own trigger
-    /// filter, so an unsuppressed pass re-dirties exactly what it just cleaned.
+    /// here lands on a wall, floor or ceiling, and all three are in the change updater's own
+    /// trigger filter, so an unsuppressed pass re-dirties exactly what it just cleaned.
     /// </summary>
     /// <param name="force">
     /// Sweep the whole model regardless of what is queued. Used on save and by the ribbon
@@ -200,10 +201,10 @@ internal static class CaseworkCutAutomation
     /// comment did not anticipate: <c>force</c> already means "sweep unconditionally", but
     /// before this parameter existed a plain reactive call - "a fitting was placed, react
     /// NOW" - would ALSO sweep the whole model whenever <see cref="_sweepOwed"/> happened to
-    /// already be true from an earlier, unrelated wall or floor edit. That silently broke the
-    /// class's own documented contract ("A WALL OR FLOOR IS MOVED INTO OR OUT OF A FITTING'S
-    /// VOID. Deferred to the next save.") every time a wall nudge and a fitting nudge landed
-    /// in the same working session, which in practice is most sessions - turning what was
+    /// already be true from an earlier, unrelated wall, floor or ceiling edit. That silently
+    /// broke the class's own documented contract ("A WALL, FLOOR OR CEILING IS MOVED INTO OR
+    /// OUT OF A FITTING'S VOID. Deferred to the next save.") every time a wall nudge and a
+    /// fitting nudge landed in the same working session, which in practice is most sessions - turning what was
     /// supposed to be an instant, cheap, single-fitting cut into a full CaseworkVoidCutter
     /// pass over every casework instance in the model, on a call site that had no reason to
     /// expect one.
@@ -264,7 +265,7 @@ internal static class CaseworkCutAutomation
             // sitting in front of. Transactions.Run's own documentation calls this out as the
             // difference between a batch pass that finishes and one that blocks forever;
             // errors still surface and still roll the transaction back.
-            Transactions.Run(doc, transactionPrefix + "cut walls and floors with casework voids",
+            Transactions.Run(doc, transactionPrefix + "cut walls, floors and ceilings with casework voids",
                 () => result = new CaseworkVoidCutter(doc, CurrentSettings).Run(scope),
                 swallowWarnings: true);
 
@@ -275,7 +276,7 @@ internal static class CaseworkCutAutomation
             // read at all.
             if (cuts > 0)
             {
-                Log.Info($"Casework automation: {cuts} cut(s) created (walls/floors) because {reason}. " +
+                Log.Info($"Casework automation: {cuts} cut(s) created (walls/floors/ceilings) because {reason}. " +
                          $"{result.FittingsExamined} fitting(s) examined in {watch.ElapsedMilliseconds} ms " +
                          $"({result.AlreadyCut} already cut, {result.NoIntersection} out of reach).");
             }

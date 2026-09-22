@@ -17,7 +17,7 @@ namespace Cda.Revit.Addin.Commands;
 [Transaction(TransactionMode.Manual)]
 public sealed class CutCaseworkVoidsCommand : CommandBase
 {
-    protected override string CommandName => "Cut Walls with Casework Voids";
+    protected override string CommandName => "Cut Walls, Floors & Ceilings with Casework Voids";
 
     protected override Result Run(CommandContext ctx)
     {
@@ -31,14 +31,14 @@ public sealed class CutCaseworkVoidsCommand : CommandBase
 
         var choice = new TaskDialog(CommandName)
         {
-            MainInstruction = "Cut walls and floors with casework voids?",
+            MainInstruction = "Cut walls, floors and ceilings with casework voids?",
             MainContent =
-                "Every wall or floor within " + $"{settings.ReachMm:0} mm of a casework fitting is " +
-                "offered to Revit as a cut - side voids into walls, bottom voids down into the floor " +
-                "finish and slab underneath - and Revit accepts the ones the family's voids genuinely " +
-                "reach and refuses the rest. Host walls are already cut when the fitting is placed and " +
-                "are left alone, and an element already cut by that fitting is skipped - so this is " +
-                "safe to re-run as often as you like.\n\n" +
+                "Every wall, floor or ceiling within " + $"{settings.ReachMm:0} mm of a casework " +
+                "fitting is offered to Revit as a cut - side voids into walls, bottom voids down into " +
+                "the floor finish and slab underneath, top voids up into a ceiling above - and Revit " +
+                "accepts the ones the family's voids genuinely reach and refuses the rest. Host walls " +
+                "are already cut when the fitting is placed and are left alone, and an element already " +
+                "cut by that fitting is skipped - so this is safe to re-run as often as you like.\n\n" +
                 "Nothing is ever un-cut. Put '" + settings.SkipComment + "' in an instance's Comments " +
                 "to have it ignored.",
             CommonButtons = TaskDialogCommonButtons.Cancel,

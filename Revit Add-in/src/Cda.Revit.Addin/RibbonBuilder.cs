@@ -144,18 +144,19 @@ internal static class RibbonBuilder
         // dry run, and the only way to sweep a model that was drawn before the tool existed.
         AddButton(model,
             name: "CdaCutCaseworkVoids",
-            text: "Cut Walls & Floors\nwith Casework Voids",
+            text: "Cut Walls, Floors & Ceilings\nwith Casework Voids",
             command: typeof(Commands.CutCaseworkVoidsCommand),
-            tooltip: "Cuts every wall a casework fitting's side voids reach into, and every floor " +
-                     "its bottom voids reach down into, replacing the manual Cut Geometry step.",
+            tooltip: "Cuts every wall a casework fitting's side voids reach into, every floor its " +
+                     "bottom voids reach down into, and every ceiling its top voids reach up into, " +
+                     "replacing the manual Cut Geometry step.",
             longDescription: "Revit cuts a fitting's HOST wall by itself; the side voids that reach " +
-                             "into adjacent and intersecting walls, and the bottom voids that reach " +
-                             "down into the floor finish and the slab beneath it, are the ones " +
-                             "nobody gets for free. Each nearby wall or floor is offered to Revit " +
-                             "and only the ones the voids genuinely reach are cut, so a dry run and " +
-                             "the real run can never disagree. Never removes a cut. Safe to re-run: " +
-                             "elements already cut by that fitting are left alone, and the whole run " +
-                             "is one Ctrl+Z.",
+                             "into adjacent and intersecting walls, the bottom voids that reach down " +
+                             "into the floor finish and the slab beneath it, and the top voids that " +
+                             "reach up into a ceiling above, are the ones nobody gets for free. Each " +
+                             "nearby wall, floor or ceiling is offered to Revit and only the ones the " +
+                             "voids genuinely reach are cut, so a dry run and the real run can never " +
+                             "disagree. Never removes a cut. Safe to re-run: elements already cut by " +
+                             "that fitting are left alone, and the whole run is one Ctrl+Z.",
             icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 
