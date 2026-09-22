@@ -5506,6 +5506,168 @@ namespace PaintedMaterialTakeoff.Core
 	/// silently removes paint somebody is priced against; keeping a doubtful one leaves a
 	/// number that can at least be seen and argued with. The asymmetry is deliberate.
 	/// </summary>
+	/// <summary>
+	/// RULE 9 - trims each measured face to the room's real volume instead of keeping or
+	/// dropping it whole.
+	///
+	/// WHY A TRIM AND NOT A FILTER. Every gate in this file is binary: a face touches the room
+	/// or it does not, and it is kept entire or deleted entire. Real geometry is not like that.
+	/// A wall that runs half inside a room and half past it must report HALF its area - not all
+	/// of it, which bills a room for surfaces it does not contain, and not none of it, which
+	/// deletes paint somebody is priced against. Both failures were produced, in that order,
+	/// trying to approximate this with filters.
+	///
+	/// THE SKIN OFFSET IS WHY THE OBVIOUS VERSION FAILS. A carrier is the painted face rendered
+	/// SkinThicknessFt (~5 mm) thick, sitting just OUTSIDE the room boundary - it is the finish
+	/// on the wall, not a slice of the room's air. Intersecting it with the room solid directly
+	/// returns nothing for every legitimate wall in the model. So the wafer is stepped INTO the
+	/// room along its own normal before the intersection and stepped back afterwards: the shape
+	/// that comes out sits where it always did, but the question asked was about the room's air
+	/// just inside it, which is the right question.
+	///
+	/// DIRECTION IS MEASURED, NOT ASSUMED. Both directions are tried and the larger result wins.
+	/// A wall carrier faces sideways, a floor's up, a ceiling's down, a jamb's along the
+	/// opening; guessing would be wrong a quarter of the time and silently.
+	///
+	/// AREA IS SCALED BY VOLUME RATIO, not recomputed from a thickness. Not every carrier is a
+	/// wafer of the same depth - jambs and edge faces are not - and a ratio needs no assumption
+	/// about which.
+	/// </summary>
+	internal static class RoomTrim
+	{
+		public static PaintRecord? Trim(Solid roomSolid, PaintRecord record, double skinFt, out double removedSqFt)
+		{
+			removedSqFt = 0.0;
+
+			List<GeometryObject>? shape = record.Shape;
+			if (shape == null || shape.Count == 0 || (object)roomSolid == null)
+			{
+				return record;   // nothing to trim against, or nothing to trim
+			}
+
+			double before = 0.0;
+			double after = 0.0;
+			List<GeometryObject> kept = new List<GeometryObject>();
+
+			foreach (GeometryObject geometryObject in shape)
+			{
+				if (!(geometryObject is Solid solid) || solid.Volume <= 1E-09)
+				{
+					kept.Add(geometryObject);
+					continue;
+				}
+
+				before += solid.Volume;
+
+				Solid trimmed = TrimSolid(solid, roomSolid, skinFt);
+				if ((object)trimmed != null && trimmed.Volume > 1E-09)
+				{
+					after += trimmed.Volume;
+					kept.Add(trimmed);
+				}
+			}
+
+			if (before <= 1E-09)
+			{
+				return record;   // no measurable geometry - no evidence either way
+			}
+
+			double ratio = after / before;
+
+			// WHOLLY OUTSIDE. Nothing of this face is in the room.
+			if (ratio <= 0.001)
+			{
+				removedSqFt = record.NetAreaSqFt;
+				return null;
+			}
+
+			// WHOLLY INSIDE, within a thousandth. Returned untouched rather than rebuilt, so an
+			// ordinary face keeps its original geometry and area exactly - no boolean rounding
+			// creeping into numbers that were already right.
+			if (ratio >= 0.999)
+			{
+				return record;
+			}
+
+			removedSqFt = record.NetAreaSqFt * (1.0 - ratio);
+
+			PaintRecord result = record with { Shape = kept };
+			result.NetAreaSqFt = record.NetAreaSqFt * ratio;
+			return result;
+		}
+
+		private static Solid? TrimSolid(Solid wafer, Solid roomSolid, double skinFt)
+		{
+			XYZ normal = DominantNormal(wafer);
+			if (normal == null)
+			{
+				return GeometryUtil.TryBoolean(wafer, roomSolid, BooleanOperationsType.Intersect, 1E-09);
+			}
+
+			double step = Math.Max(skinFt * 2.0, 0.02);
+			Solid best = null;
+			double bestVolume = 0.0;
+
+			foreach (double distance in new double[2] { step, 0.0 - step })
+			{
+				try
+				{
+					Autodesk.Revit.DB.Transform transform =
+						Autodesk.Revit.DB.Transform.CreateTranslation(normal.Multiply(distance));
+					Solid moved = SolidUtils.CreateTransformed(wafer, transform);
+					Solid hit = GeometryUtil.TryBoolean(moved, roomSolid, BooleanOperationsType.Intersect, 1E-09);
+
+					if ((object)hit != null && hit.Volume > bestVolume)
+					{
+						bestVolume = hit.Volume;
+						best = SolidUtils.CreateTransformed(hit, transform.Inverse);
+					}
+				}
+				catch
+				{
+					// This direction cannot be tested; the other one still can.
+				}
+			}
+
+			return best;
+		}
+
+		/// <summary>The normal of the largest planar face - on a wafer that is the painted
+		/// surface itself, not one of the slivers around its edge.</summary>
+		private static XYZ? DominantNormal(Solid solid)
+		{
+			XYZ best = null;
+			double bestArea = 0.0;
+
+			try
+			{
+				foreach (Face face in solid.Faces)
+				{
+					if (!(face is PlanarFace planarFace))
+					{
+						continue;
+					}
+
+					double area;
+					try { area = face.Area; }
+					catch { continue; }
+
+					if (area > bestArea)
+					{
+						bestArea = area;
+						best = planarFace.FaceNormal;
+					}
+				}
+			}
+			catch
+			{
+				return null;
+			}
+
+			return best;
+		}
+	}
+
 	internal static class RoomVolumeGate
 	{
 		/// <summary>
@@ -5824,40 +5986,75 @@ namespace PaintedMaterialTakeoff.Core
 				// after the interior pass, because it must cover every path that can produce a
 				// record for this room - boundary walls, jambs, horizontal surfaces and the
 				// ceiling-gap path alike - and this is the single point they all funnel through.
+				// RULE 9 - TRIM TO THE ROOM, rather than keep or drop whole. See RoomTrim.
 				if (_s.RestrictToRoomVolume)
 				{
-					int before = list2.Count;
-					double droppedSqFt = 0.0;
-					List<PaintRecord> kept = new List<PaintRecord>(list2.Count);
-					List<string> droppedKeys = new List<string>();
-
-					foreach (PaintRecord candidate in list2)
+					Solid roomSolid = null;
+					try
 					{
-						if (RoomVolumeGate.Touches(roomEnvelope.Room, candidate, _s.RoomTouchProbeFt, roomEnvelope.ZTop))
+						SpatialElementBoundaryOptions boundaryOptions = new SpatialElementBoundaryOptions
 						{
-							kept.Add(candidate);
-							continue;
-						}
-
-						droppedSqFt += candidate.NetAreaSqFt;
-						if (droppedKeys.Count < 12)
-						{
-							droppedKeys.Add(candidate.SegmentKey);
-						}
+							SpatialElementBoundaryLocation = SpatialElementBoundaryLocation.Finish
+						};
+						roomSolid = new SpatialElementGeometryCalculator(_doc, boundaryOptions)
+							.CalculateSpatialElementGeometry(roomEnvelope.Room).GetGeometry();
+					}
+					catch (Exception exRoomSolid)
+					{
+						takeoffResult.Warnings.Add(
+							$"Room {roomEnvelope.RoomNumber} '{roomEnvelope.RoomName}': the room's own " +
+							$"volume could not be built ({exRoomSolid.Message}), so faces were measured " +
+							"without trimming to it. Areas may include surface outside the room.");
 					}
 
-					if (kept.Count != before)
+					if ((object)roomSolid != null)
 					{
+						int before = list2.Count;
+						double removedTotal = 0.0;
+						int trimmedCount = 0;
+						List<PaintRecord> kept = new List<PaintRecord>(list2.Count);
+						List<string> changedKeys = new List<string>();
+
+						foreach (PaintRecord candidate in list2)
+						{
+							PaintRecord result = RoomTrim.Trim(
+								roomSolid, candidate, _s.SkinThicknessFt, out double removedSqFt);
+
+							if (removedSqFt > 0.0)
+							{
+								removedTotal += removedSqFt;
+								if (changedKeys.Count < 12)
+								{
+									changedKeys.Add(candidate.SegmentKey);
+								}
+							}
+
+							if (result == null)
+							{
+								continue;   // wholly outside the room
+							}
+
+							if (!ReferenceEquals(result, candidate))
+							{
+								trimmedCount++;
+							}
+
+							kept.Add(result);
+						}
+
 						list2 = kept;
-						takeoffResult.Warnings.Add(
-							$"Room {roomEnvelope.RoomNumber} '{roomEnvelope.RoomName}': " +
-							$"{before - kept.Count} measured face(s) totalling " +
-							$"{GeometryUtil.ToSqM(droppedSqFt):0.###} m² did not touch this room's " +
-							"volume and were excluded - a face belongs to a room only if it " +
-							"reaches that room's air. Typically a shaft or dormer wall standing " +
-							"above the ceiling, reached through the ceiling-gap path. Segment(s): " +
-							string.Join(", ", droppedKeys) +
-							((before - kept.Count > droppedKeys.Count) ? ", ..." : string.Empty));
+
+						if (removedTotal > 0.0)
+						{
+							takeoffResult.Warnings.Add(
+								$"Room {roomEnvelope.RoomNumber} '{roomEnvelope.RoomName}': " +
+								$"{GeometryUtil.ToSqM(removedTotal):0.###} m² trimmed off measured faces " +
+								$"that reach past this room's volume - {before - kept.Count} face(s) " +
+								$"removed outright, {trimmedCount} cut back to the part inside the room. " +
+								"A face is counted for the portion that lies within the room boundary " +
+								"and no more. Segment(s): " + string.Join(", ", changedKeys) +
+								((changedKeys.Count >= 12) ? ", ..." : string.Empty));
+						}
 					}
 				}
 
@@ -7565,7 +7762,7 @@ namespace PaintedMaterialTakeoff.Core
 				}
 				return Single(env, loopIndex, segmentIndex, curve, SurfaceKind.Wall, wall.Category?.Name ?? "Walls", wall.Id, TypeNameOf(wall), "Curtain wall — no paintable solid face.");
 			}
-			Curve curve2 = ExtendAcrossWallRun(loop, segmentIndex, wall, curve, out var bridged, out var supersededByEarlier);
+			Curve curve2 = ExtendAcrossWallRun(loop, segmentIndex, wall, curve, out var bridged, out var supersededByEarlier, env);
 			if (supersededByEarlier)
 			{
 				return Single(env, loopIndex, segmentIndex, curve, SurfaceKind.Wall, wall.Category?.Name ?? "Walls", wall.Id, TypeNameOf(wall), "Part of a longer run of this wall in this room; measured by the run's first segment so the area is not counted twice.");
@@ -8359,7 +8556,54 @@ namespace PaintedMaterialTakeoff.Core
 			}
 		}
 
-		private Curve? ExtendAcrossWallRun(IList<BoundarySegment> loop, int index, Wall wall, Curve curve, out int bridged, out bool supersededByEarlier)
+		/// <summary>
+		/// Does the room still reach this gap? Probed to BOTH sides of the boundary line,
+		/// because the line itself lies on the boundary where IsPointInRoom is a coin toss,
+		/// and the caller has no inward normal at this stage - either side being inside is
+		/// enough to prove the wall still bounds the room here.
+		///
+		/// Probed at the room's own mid-height rather than at the boundary curve's elevation,
+		/// which sits on the floor plane and is subject to the same ambiguity.
+		///
+		/// RETURNS TRUE WHEN IT CANNOT TELL. This only ever removes a bridge, and a bridge that
+		/// was previously made unconditionally; a room that will not answer containment must
+		/// not silently start splitting wall runs that used to measure as one.
+		/// </summary>
+		private bool GapInsideRoom(RoomEnvelope env, XYZ gapMid)
+		{
+			Room room = env.Room;
+			if (room == null || gapMid == null)
+			{
+				return true;
+			}
+
+			double z = env.ZBottom + Math.Min(1.0, Math.Max(0.1, (env.ZTop - env.ZBottom) * 0.5));
+			double step = _s.ProbeWallOvershootFt;
+
+			foreach (XYZ offset in new[]
+			{
+				XYZ.Zero,
+				new XYZ(step, 0.0, 0.0), new XYZ(0.0 - step, 0.0, 0.0),
+				new XYZ(0.0, step, 0.0), new XYZ(0.0, 0.0 - step, 0.0)
+			})
+			{
+				try
+				{
+					if (room.IsPointInRoom(new XYZ(gapMid.X + offset.X, gapMid.Y + offset.Y, z)))
+					{
+						return true;
+					}
+				}
+				catch
+				{
+					return true;   // cannot tell - keep the previous behaviour
+				}
+			}
+
+			return false;
+		}
+
+		private Curve? ExtendAcrossWallRun(IList<BoundarySegment> loop, int index, Wall wall, Curve curve, out int bridged, out bool supersededByEarlier, RoomEnvelope env)
 		{
 			bridged = 0;
 			supersededByEarlier = false;
@@ -8394,7 +8638,22 @@ namespace PaintedMaterialTakeoff.Core
 			for (int num3 = 1; num3 < list.Count; num3++)
 			{
 				double num4 = list[num3].Item2 - num;
-				if (num4 > 0.02 && !GapCoveredByInsert(wall, endPoint + xYZ * (num + num4 * 0.5)))
+				XYZ gapMid = endPoint + xYZ * (num + num4 * 0.5);
+
+				// AN INSERT IS NOT EVIDENCE THAT THE ROOM IS STILL THERE.
+				//
+				// GapCoveredByInsert answers "is a door or window hosted in this wall at this
+				// point", and nothing more. Bridging on that alone assumes the only reason a
+				// wall stops bounding a room mid-run is an opening in it - which is false
+				// wherever a wall leaves the room and comes back: a niche, a partition crossing
+				// it, another room taking over the middle of the run. Put an opening anywhere
+				// in that stretch and the run bridges straight across space this room does not
+				// bound, producing ONE continuous slice over it.
+				//
+				// Asking the room as well costs one IsPointInRoom per gap and makes the bridge
+				// mean what it was always documented to mean: the wall continues to bound this
+				// room across the opening.
+				if (num4 > 0.02 && (!GapCoveredByInsert(wall, gapMid) || !GapInsideRoom(env, gapMid)))
 				{
 					break;
 				}

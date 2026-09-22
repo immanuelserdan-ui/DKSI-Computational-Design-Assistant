@@ -703,9 +703,11 @@ public sealed class RoomFinishCalculator
                 $"ABOVE THE CEILING, NOT MEASURED: {_aboveCeilingElements.Count} wall(s) across " +
                 $"{_aboveCeilingFaces} face(s), totalling " +
                 $"{Measure.ToSquareMetres(_aboveCeilingArea):0.00} m², present a " +
-                "boundary face above its room's ceiling - a wall standing in a ceiling gap, or " +
-                "a roof or slab a storey up that caps the shaft rather than the room - and none " +
-                "of it was counted as that room's finish or paint. These are real faces of the " +
+                "boundary face that sits entirely above its room's ceiling - the side wall of a " +
+                "shaft or dormer standing on it - and none of it was counted as that room's " +
+                "finish or paint. The thing CAPPING that shaft is a different matter and is " +
+                "still counted: it is this room's ceiling over the gap. These are real faces " +
+                "of the room's " +
                 "volume - a room with a ceiling gap wraps up around a shaft or dormer, so Revit " +
                 "reports those walls as bounding it, and Room Bounding is correctly set on them. " +
                 "They are simply above the ceiling, where nobody in the room can see or paint " +
@@ -1195,30 +1197,23 @@ public sealed class RoomFinishCalculator
                                 continue;
                             }
 
-                            // A STOREY UP IS NOT THIS ROOM'S CEILING.
+                            // NO HEIGHT TEST ON OVERHEAD FACES, and that is a decision, not an
+                            // omission. A cap over a ceiling gap IS this room's ceiling there:
+                            // the shaft is open to the room, and a roof sits on top of it, so
+                            // looking up through the gap you see that soffit enclosing this
+                            // room's air. On FM_Template that is roof 29336815 over Køkken's
+                            // 0.72 m² shaft - the case PaintedMaterialTakeoff's own gap-cap
+                            // path exists to capture, and confirmed as wanted by the office.
                             //
-                            // The same leak as the wall rule below, arriving through the Top
-                            // path instead. A ceiling gap lets the room's volume rise around a
-                            // shaft, so whatever caps the shaft is reported as a genuine Top
-                            // boundary face of the room and measured in full. On FM_Template
-                            // that was an exterior canopy roof at Z 0..3.125 handing 8.95 m2 of
-                            // ceiling finish to a kitchen whose ceiling is at -4.101.
+                            // A height rule was tried here and removed the same day. It read
+                            // "more than a foot above the dominant ceiling plane is a storey
+                            // up, not this room's ceiling", which is true of an unrelated slab
+                            // and false of exactly the cap this room needs - and the two are
+                            // indistinguishable by height alone.
                             //
-                            // Deliberately NOT the blanket exemption the wall rule gives
-                            // horizontal surfaces. That exemption exists because a ceiling
-                            // carrier sits AT the ceiling plane and testing it against that
-                            // plane would delete every ceiling in the model - true at the
-                            // plane, and no reason to extend it a storey. CeilingStepTolerance
-                            // is what keeps a genuine stepped ceiling while rejecting this.
-                            if (ceilingZ is { } capZ &&
-                                FaceMinZ(subfaceFace) is { } topBottom &&
-                                topBottom > capZ + FinishSettings.CeilingStepTolerance)
-                            {
-                                _aboveCeilingArea += area;
-                                _aboveCeilingFaces++;
-                                _aboveCeilingElements.Add(element.Id.Value);
-                                continue;
-                            }
+                            // The WALL rule below still applies, and the asymmetry is the
+                            // point: the shaft's own side walls are not this room's walls,
+                            // while the thing capping the shaft is this room's ceiling.
 
                             var measured = _settings.UseGeometric
                                 ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element,
@@ -1279,18 +1274,10 @@ public sealed class RoomFinishCalculator
                     var categoryId = element.Category?.Id;
                     if (categoryId == _ceilingCategory || categoryId == _roofCategory)
                     {
-                        // Same rule as the Top path: a steeply sloped roof reached through a
-                        // ceiling gap arrives here rather than as a Top subface, and is no more
-                        // this room's ceiling for being classified sideways.
-                        if (ceilingZ is { } slopedCapZ &&
-                            FaceMinZ(subfaceFace) is { } slopedBottom &&
-                            slopedBottom > slopedCapZ + FinishSettings.CeilingStepTolerance)
-                        {
-                            _aboveCeilingArea += area;
-                            _aboveCeilingFaces++;
-                            _aboveCeilingElements.Add(element.Id.Value);
-                            continue;
-                        }
+                        // No height test here either - see the Top path. A sloped roof reached
+                        // through a ceiling gap is this room's ceiling over that gap, and
+                        // arriving as a Side subface rather than a Top one does not change
+                        // what it caps.
 
                         var measured = _settings.UseGeometric
                             ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element,
