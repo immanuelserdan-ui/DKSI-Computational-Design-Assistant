@@ -120,19 +120,6 @@ public sealed class RoomFinishCalculator
     /// <summary>Walls carrying more than one paint colour on their room face.</summary>
     private readonly HashSet<long> _multipaintWalls = [];
 
-    /// <summary>
-    /// Walls whose room-facing boundary face sits entirely ABOVE the room's ceiling, and was
-    /// therefore not measured for it. A shaft or dormer wall standing in a ceiling gap is a
-    /// real boundary face of the room's volume - the room genuinely wraps around it - but it
-    /// is above the ceiling, where nobody in that room can see or paint it.
-    /// </summary>
-    private readonly HashSet<long> _aboveCeilingElements = [];
-
-    /// <summary>Boundary area excluded by the above-the-ceiling rule, and how many faces.</summary>
-    private double _aboveCeilingArea;
-
-    private int _aboveCeilingFaces;
-
     /// <summary>Elements another user holds, so this pass could not write to them.</summary>
     private readonly HashSet<long> _lockedElements = [];
 
@@ -697,26 +684,6 @@ public sealed class RoomFinishCalculator
                     : "Every candidate boolean resolved cleanly."));
         }
 
-        if (_aboveCeilingElements.Count > 0)
-        {
-            _report.Add(
-                $"ABOVE THE CEILING, NOT MEASURED: {_aboveCeilingElements.Count} wall(s) across " +
-                $"{_aboveCeilingFaces} face(s), totalling " +
-                $"{Measure.ToSquareMetres(_aboveCeilingArea):0.00} m², present a " +
-                "boundary face that sits entirely above its room's ceiling - the side wall of a " +
-                "shaft or dormer standing on it - and none of it was counted as that room's " +
-                "finish or paint. The thing CAPPING that shaft is a different matter and is " +
-                "still counted: it is this room's ceiling over the gap. These are real faces " +
-                "of the room's " +
-                "volume - a room with a ceiling gap wraps up around a shaft or dormer, so Revit " +
-                "reports those walls as bounding it, and Room Bounding is correctly set on them. " +
-                "They are simply above the ceiling, where nobody in the room can see or paint " +
-                "them. A wall that CROSSES the ceiling keeps its whole face; only faces wholly " +
-                "above it are dropped. Element Ids: " +
-                string.Join(", ", _aboveCeilingElements.Order().Take(50)) +
-                (_aboveCeilingElements.Count > 50 ? ", ..." : string.Empty));
-        }
-
         if (_multipaintWalls.Count > 0)
         {
             _report.Add($"QC - MULTI-PAINT WALLS: {_multipaintWalls.Count} wall(s) carry more than one " +
@@ -1029,59 +996,6 @@ public sealed class RoomFinishCalculator
             var solid = results.GetGeometry();
             roomSolid = solid;
 
-            // WHERE THIS ROOM'S CEILING IS, found before anything is measured against it.
-            //
-            // BY AREA, NOT BY HEIGHT - and neither "lowest" nor "highest" works, which is the
-            // whole difficulty. Take the HIGHEST Top subface and a room with a ceiling gap
-            // answers with whatever caps the gap a storey up, so nothing is ever above it and
-            // the rule does nothing. Take the LOWEST and a room-bounding MEZZANINE - like slab
-            // 29317163 standing inside this very room - becomes the "ceiling", and every wall
-            // face above the mezzanine is deleted as though it were outside the room. That is
-            // the same mistake as picking a room's cap by height in RoomBoundaryAdjuster: an
-            // obstruction INSIDE the room is not the thing that caps it, and height alone
-            // cannot tell the two apart.
-            //
-            // Area can. A ceiling covers the room; a gap's cap and a mezzanine each cover only
-            // part of it. So the Top subfaces are grouped by height and the plane carrying the
-            // most area wins. Grouped to the millimetre, because a ceiling delivered as several
-            // subfaces at one height must sum rather than compete with itself.
-            //
-            // A room with no top boundary at all yields null, and the rule below then does not
-            // apply - no evidence, no exclusion.
-            double? ceilingZ = null;
-            var capAreaByHeight = new Dictionary<long, (double Z, double Area)>();
-
-            foreach (Face capFace in solid.Faces)
-            {
-                foreach (var capInfo in results.GetBoundaryFaceInfo(capFace))
-                {
-                    if (capInfo.SubfaceType != SubfaceType.Top) continue;
-
-                    var capSubface = capInfo.GetSubface();
-                    if (FaceMinZ(capSubface) is not { } z) continue;
-
-                    double capArea;
-                    try { capArea = capSubface.Area; }
-                    catch { continue; }
-
-                    if (capArea <= 0) continue;
-
-                    // ~1 mm buckets, so one ceiling split across several subfaces sums.
-                    var key = (long)Math.Round(z / 0.00328084);
-
-                    var existing = capAreaByHeight.TryGetValue(key, out var found)
-                        ? found
-                        : (Z: z, Area: 0.0);
-
-                    capAreaByHeight[key] = (existing.Z, existing.Area + capArea);
-                }
-            }
-
-            if (capAreaByHeight.Count > 0)
-            {
-                ceilingZ = capAreaByHeight.Values.OrderByDescending(c => c.Area).First().Z;
-            }
-
             foreach (Face face in solid.Faces)
             {
                 foreach (var subface in results.GetBoundaryFaceInfo(face))
@@ -1308,35 +1222,25 @@ public sealed class RoomFinishCalculator
                         continue;
                     }
 
-                    // ABOVE THE CEILING IS NOT THIS ROOM'S PAINT.
+                    // NO "ABOVE THE CEILING" TEST HERE, and this is a REVERSAL - the same one
+                    // the overhead-ceiling path already went through. A rule excluding wall
+                    // faces starting at or above the dominant ceiling plane shipped, then broke
+                    // exactly the case it was meant to fix.
                     //
-                    // THE LEAK THIS CLOSES, measured on FM_Template rather than reasoned. Køkken
-                    // 1 has a ceiling gap where a shaft passes through, so its volume genuinely
-                    // extends up around the shaft to +1.718 while its ceiling sits at -4.101.
-                    // SpatialElementGeometryCalculator therefore reports the four shaft walls
-                    // (29336568-71) as perfectly legitimate Side boundary faces of the kitchen -
-                    // they ARE faces of its volume - and this engine measured them in full,
-                    // filing 18.4 sq ft each against Rum = Køkken. A wall a storey up, painted
-                    // for a basement kitchen.
+                    // Køkken 1's shaft walls (29336568-71) start at the ceiling and rise into a
+                    // gap that a roof caps. This engine's OWN comment on this block, before the
+                    // rule existed, already said why that is not a bug: "SpatialElementGeometryCalculator
+                    // reports the four shaft walls as perfectly legitimate Side boundary faces
+                    // of the kitchen - they ARE faces of its volume." ExactSubfaceArea clips
+                    // every wall face against the room's REAL subface via boolean intersection -
+                    // it was already measuring exactly the portion of these walls that
+                    // genuinely belongs to the room, correctly, before this rule started
+                    // discarding that measurement wholesale.
                     //
-                    // No room-bounding check can catch it: those walls have Room Bounding = Yes
-                    // and are correctly bounding. Nothing is wrong with the geometry either. The
-                    // face is simply above the ceiling, where nobody in this room can see or
-                    // paint it, and the ceiling is the only thing that says so.
-                    //
-                    // ENTIRELY above, never partly: a wall crossing the ceiling plane keeps its
-                    // whole face rather than being trimmed here. Trimming is a different, larger
-                    // change, and a partial-height wall measured whole is the pre-existing
-                    // behaviour - this must not quietly start removing area from ordinary walls.
-                    if (element is Wall && ceilingZ is { } roomCapZ &&
-                        FaceMinZ(subfaceFace) is { } faceBottom &&
-                        faceBottom >= roomCapZ - FinishSettings.CoplanarTolerance)
-                    {
-                        _aboveCeilingArea += area;
-                        _aboveCeilingFaces++;
-                        _aboveCeilingElements.Add(element.Id.Value);
-                        continue;
-                    }
+                    // The office rule, confirmed directly: a cap over a gap, with a roof on top
+                    // of it, IS that room's ceiling there - and the walls enclosing that same
+                    // air are that room's walls. A height test cannot express that; only the
+                    // room's own computed geometry can, and ExactSubfaceArea already asks it.
 
                     var wallResult = _settings.UseGeometric && element is Wall
                         ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.CachedFaces(element), element,
@@ -1646,36 +1550,6 @@ public sealed class RoomFinishCalculator
     {
         try { return element.get_BoundingBox(null); }
         catch { return null; }
-    }
-
-    /// <summary>
-    /// The lowest world Z of a face, via triangulation.
-    ///
-    /// Face.GetBoundingBox is in UV parameter space and says nothing about world coordinates -
-    /// the same trap FinishGeometry.FaceBounds documents - so the mesh is the honest source.
-    /// Null when the face cannot be triangulated, which callers must treat as "unknown" rather
-    /// than as a height.
-    /// </summary>
-    private static double? FaceMinZ(Face face)
-    {
-        try
-        {
-            var mesh = face.Triangulate();
-            if (mesh is null || mesh.Vertices.Count == 0) return null;
-
-            var min = double.MaxValue;
-            for (var i = 0; i < mesh.Vertices.Count; i++)
-            {
-                var z = mesh.Vertices[i].Z;
-                if (z < min) min = z;
-            }
-
-            return min is double.MaxValue ? null : min;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     /// <summary>
