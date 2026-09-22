@@ -80,6 +80,13 @@ public sealed class ScheduleCandidate
     /// </summary>
     public int? DataRows { get; init; }
 
+    /// <summary>
+    /// The schedule's own Phase setting - the same one shown on its Phasing tab in
+    /// Schedule Properties. Key schedules and sheet/view lists carry no element data and
+    /// have no such setting, and get an empty string rather than an invented one.
+    /// </summary>
+    public string Phase { get; init; } = string.Empty;
+
     public bool IsOnSheet => !string.IsNullOrWhiteSpace(SheetNumber);
 
     public string KindLabel => ScheduleKinds.Label(Kind);
@@ -106,8 +113,8 @@ public sealed class ScheduleCandidate
 /// NOTE ON DATE RANGE: Revit's API exposes no created-on or modified-on date for a view,
 /// and workshared models only add who touched it, never when. A date filter here would
 /// have to be invented from something else - and a filter that quietly means something
-/// other than what its label says is worse than no filter at all. Placement and content
-/// are the honest "status" axes a schedule actually has.
+/// other than what its label says is worse than no filter at all. Placement, content and
+/// phase are the honest "status" axes a schedule actually has.
 /// </summary>
 public sealed class ScheduleExportFilter
 {
@@ -128,13 +135,17 @@ public sealed class ScheduleExportFilter
 
     public ScheduleContent Content { get; set; } = ScheduleContent.Any;
 
+    /// <summary>Exact phase name, or null for any. See <see cref="ScheduleCandidate.Phase"/>.</summary>
+    public string? Phase { get; set; }
+
     /// <summary>True when nothing is being filtered out - used to word the dialog's count line.</summary>
     public bool IsUnfiltered =>
         string.IsNullOrWhiteSpace(Search) &&
         Category is null &&
         Kind is null &&
         Placement == SheetPlacement.Any &&
-        Content == ScheduleContent.Any;
+        Content == ScheduleContent.Any &&
+        Phase is null;
 
     public bool Matches(ScheduleCandidate candidate)
     {
@@ -143,6 +154,9 @@ public sealed class ScheduleExportFilter
             return false;
 
         if (Kind is { } kind && candidate.Kind != kind) return false;
+
+        if (Phase is not null && !string.Equals(candidate.Phase, Phase, StringComparison.OrdinalIgnoreCase))
+            return false;
 
         switch (Placement)
         {
