@@ -5969,6 +5969,31 @@ namespace PaintedMaterialTakeoff.Core
 					takeoffResult.Warnings.Add("Room " + roomEnvelope.RoomNumber + " interior walls: " + ex3.Message);
 				}
 
+				// Floors and ceilings/roof (Overhead) join list2 here, BEFORE the RoomTrim
+				// pass below, instead of being added to takeoffResult.Records afterward as
+				// they used to be. They were never gated on RestrictToRoomVolume at all -
+				// only wall segments and interior elements ran through RoomTrim - so a
+				// horizontal face that a room's boundary loop resolves as this room's
+				// ceiling, but that geometrically overshoots the room's real volume, was
+				// kept in full. Same Rule 9 fix as the wall path, same reason: trim to what
+				// the room's own solid actually contains, not keep-or-drop whole.
+				try
+				{
+					list2.AddRange(horizontalSurfaceCalculator.Floors(roomEnvelope));
+				}
+				catch (Exception ex4a)
+				{
+					takeoffResult.Warnings.Add("Room " + roomEnvelope.RoomNumber + " floor: " + ex4a.Message);
+				}
+				try
+				{
+					list2.AddRange(horizontalSurfaceCalculator.Overhead(roomEnvelope));
+				}
+				catch (Exception ex5a)
+				{
+					takeoffResult.Warnings.Add("Room " + roomEnvelope.RoomNumber + " overhead: " + ex5a.Message);
+				}
+
 				// The second half of the harvest - see the note beside warningsHarvested above.
 				// Everything Measure() appended during the interior pass lands here; without
 				// this it stays in roomEnvelope.Warnings, which nothing downstream reads.
@@ -6090,22 +6115,6 @@ namespace PaintedMaterialTakeoff.Core
 				if (roomBoundaryAudit.Expected.HasValue && !roomBoundaryAudit.Passed)
 				{
 					takeoffResult.Warnings.Add($"Room {roomBoundaryAudit.RoomNumber} '{roomBoundaryAudit.RoomName}': {roomBoundaryAudit.Verdict}. Revit reported {roomBoundaryAudit.Segments} boundary segment(s) across {roomBoundaryAudit.BoundingWalls} wall(s), {roomBoundaryAudit.NonWallBoundaries} non-wall boundary(ies).");
-				}
-				try
-				{
-					takeoffResult.Records.AddRange(horizontalSurfaceCalculator.Floors(roomEnvelope));
-				}
-				catch (Exception ex4)
-				{
-					takeoffResult.Warnings.Add("Room " + roomEnvelope.RoomNumber + " floor: " + ex4.Message);
-				}
-				try
-				{
-					takeoffResult.Records.AddRange(horizontalSurfaceCalculator.Overhead(roomEnvelope));
-				}
-				catch (Exception ex5)
-				{
-					takeoffResult.Warnings.Add("Room " + roomEnvelope.RoomNumber + " overhead: " + ex5.Message);
 				}
 			}
 			foreach (PaintRecord item2 in takeoffResult.Records.Where((PaintRecord r) => r.Kind == SurfaceKind.Wall && r.ElementId != ElementId.InvalidElementId))
