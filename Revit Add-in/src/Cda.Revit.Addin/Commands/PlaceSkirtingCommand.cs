@@ -41,7 +41,10 @@ public sealed class PlaceSkirtingCommand : CommandBase
                     ? string.Empty
                     : "Where the wall's paint at board height has a code ending in " +
                       $"'{settings.NoSkirtingFinishSuffix}' - tile, such as VBF or GBF, read from the " +
-                      "material's code or the end of its name ('Bad-VBF') - that stretch gets no board.\n\n") +
+                      "material's code or the end of its name ('Bad-VBF') - that stretch gets no board. " +
+                      "Once boards exist, repainting a wall in such a finish removes the boards on " +
+                      "that stretch automatically; repainting it back does not re-add them - run " +
+                      "this again for that.\n\n") +
                 "Doors, windows, wall openings and casework break the run: each wall is placed as " +
                 "several shorter pieces rather than one board with holes voided out of it, so the " +
                 "lengths in a schedule are the lengths you actually buy.\n\n" +
