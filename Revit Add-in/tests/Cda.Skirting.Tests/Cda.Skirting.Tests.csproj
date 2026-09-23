@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NO REVIT REFERENCE, DELIBERATELY - same reason as the other test projects. This compiles
+    the shipping FinishCodeRule.cs, which decides which painted finishes take no skirting and
+    mentions no Revit type.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cda.Skirting.Tests</RootNamespace>
+    <AssemblyName>Cda.Skirting.Tests</AssemblyName>
+
+    <UseWPF>false</UseWPF>
+    <DeployToRevit>false</DeployToRevit>
+    <RequiresRevitApi>false</RequiresRevitApi>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Cda.Revit.Addin\Sweeps\FinishCodeRule.cs" Link="FinishCodeRule.cs" />
+  </ItemGroup>
+
+</Project>

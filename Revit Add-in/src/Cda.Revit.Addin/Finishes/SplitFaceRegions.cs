@@ -182,6 +182,44 @@ internal static class SplitFaceRegions
     }
 
     /// <summary>
+    /// Every surface on <paramref name="element"/> the Paint tool has been used on, with its
+    /// paint material: each painted region of a split face, and each painted face that is not
+    /// split. Unlike <see cref="Of"/>, an unsplit face counts - a wall painted edge to edge is
+    /// the commonest case of all.
+    /// </summary>
+    public static IReadOnlyList<(Face Surface, ElementId Material)> PaintedSurfaces(Document doc, Element element)
+    {
+        var found = new List<(Face, ElementId)>();
+
+        foreach (var solid in Solids(element))
+        {
+            foreach (Face face in solid.Faces)
+            {
+                IList<Face>? regions = null;
+
+                try
+                {
+                    if (face.HasRegions) regions = face.GetRegions();
+                }
+                catch
+                {
+                    // Treated as unsplit.
+                }
+
+                var surfaces = regions is { Count: > 1 } ? regions : [face];
+
+                foreach (var surface in surfaces)
+                {
+                    var (material, asPaint) = MaterialOf(doc, element.Id, surface);
+                    if (asPaint && material != ElementId.InvalidElementId) found.Add((surface, material));
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
     /// The region's own geometry: its boundary extruded into a thin slab, ready to be used as
     /// carrier geometry, as a clash body, or as the operand of a boolean.
     ///
