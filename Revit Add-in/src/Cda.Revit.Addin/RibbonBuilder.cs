@@ -515,10 +515,14 @@ internal static class RibbonBuilder
             text: "Show / Hide\nPaint Areas",
             assemblyPath: PaintTakeoffPath,
             className: "PaintedMaterialTakeoff.ToggleCarriersCommand",
-            tooltip: "Shows or hides the calculation geometry the takeoff leaves in the view.",
+            tooltip: "Shows or hides the takeoff's paint carriers in the active view. Shift+click: every view.",
             longDescription: "The takeoff places carrier geometry to hold its results. This toggles " +
-                             "that geometry's visibility in the active view - useful for checking " +
-                             "what was measured, and for getting it out of the way afterwards.",
+                             "that geometry's visibility with a view filter - useful for checking " +
+                             "what was measured, and for getting it out of the way afterwards.\n\n" +
+                             "Shift+click applies it to every view at once. Where a view template " +
+                             "controls a view's filters, you are asked first: change only that view " +
+                             "(hidden element by element, template untouched) or change the template " +
+                             "and every view that uses it. Templates are never changed without asking.",
             icon: "highlight",
             availabilityClassName: availability);
     }

@@ -931,10 +931,17 @@ namespace PaintedMaterialTakeoff
 			}
 		}
 	}
+	/// <summary>
+	/// Show / Hide Paint Areas. Click: the active view. Shift+click: every view.
+	///
+	/// The whole click is ONE undo step, including creating the filter the first time.
+	/// </summary>
 	[Transaction(TransactionMode.Manual)]
 	[Regeneration(RegenerationOption.Manual)]
 	public class ToggleCarriersCommand : IExternalCommand
 	{
+		private const string Title = "Paint Takeoff";
+
 		public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
 		{
 			UIDocument activeUIDocument = commandData.Application.ActiveUIDocument;
@@ -950,47 +957,251 @@ namespace PaintedMaterialTakeoff
 				message = "No active view.";
 				return Result.Failed;
 			}
-			bool flag = ShiftHeld();
-			if (!flag && !CanHostFilters(activeView))
+			bool allViews = ShiftHeld();
+			if (!allViews && !CarrierVisibility.CanHostFilters(activeView))
 			{
-				TaskDialog.Show("Paint Takeoff", $"'{activeView.Name}' is a {activeView.ViewType} and cannot host view filters, so there is nothing to " + "hide here.\n\nOpen a 3D view or a plan and click again, or Shift+click to apply to every graphical view at once.");
+				TaskDialog.Show(Title, $"'{activeView.Name}' is a {activeView.ViewType} and cannot host view filters, so there is nothing to " + "hide here.\n\nOpen a 3D view or a plan and click again, or Shift+click to apply to every graphical view at once.");
 				return Result.Cancelled;
 			}
-			CarrierVisibility.Result result = CarrierVisibility.Toggle(document, activeView, flag);
-			if (result.Failed)
+
+			string? report;
+			using (TransactionGroup group = new TransactionGroup(document, "Show / hide paint takeoff carriers"))
 			{
-				TaskDialog.Show("Paint Takeoff", result.Error);
-				return Result.Cancelled;
+				group.Start();
+
+				ElementId filterId = CarrierVisibility.EnsureFilter(document);
+				if (filterId == ElementId.InvalidElementId)
+				{
+					group.RollBack();
+					TaskDialog.Show(Title, "The \"Paint Surface Type\" parameter is not in this project yet, so the carriers cannot be identified. Run the paint takeoff once first.");
+					return Result.Cancelled;
+				}
+
+				bool show = !CarrierVisibility.IsEffectivelyVisible(document, activeView, filterId);
+
+				bool proceed = allViews
+					? ToggleAllViews(document, filterId, show, out report)
+					: ToggleOneView(document, activeView, filterId, show, out report);
+
+				if (!proceed)
+				{
+					group.RollBack();
+					return Result.Cancelled;
+				}
+
+				group.Assimilate();
 			}
-			Report(result, activeView, flag);
+
+			if (report != null)
+			{
+				TaskDialog.Show(Title, report);
+			}
 			return Result.Succeeded;
 		}
 
-		private static void Report(CarrierVisibility.Result r, View view, bool allViews)
+		/// <summary>
+		/// One view. Silent in the ordinary case - the carriers appearing or vanishing is the answer.
+		/// When the view's template controls its filters, the choice is put to the user.
+		/// </summary>
+		private static bool ToggleOneView(Document doc, View view, ElementId filterId, bool show, out string? report)
 		{
-			string value = (r.NowVisible ? "shown" : "hidden");
-			if (allViews || r.ViewsSkipped != 0)
-			{
-				string value2 = (allViews ? $"{r.ViewsChanged} view(s) and view template(s)" : ("'" + view.Name + "'"));
-				string text = $"Paint takeoff carriers {value} in {value2}.";
-				if (r.ViewsSkipped > 0)
-				{
-					text = text + $"\n\n{r.ViewsSkipped} view(s) were skipped because a view template controls their " + "filter visibility. The templates themselves were included, so those views follow their template.";
-				}
-				TaskDialog.Show("Paint Takeoff", text);
-			}
-		}
+			report = null;
+			string verb = show ? "Show" : "Hide";
+			View? template = CarrierVisibility.ControllingTemplate(doc, view);
 
-		private static bool CanHostFilters(View view)
-		{
+			if (template == null)
+			{
+				using Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
+				transaction.Start();
+				List<string> refused = CarrierVisibility.SetOnViews(new[] { view }, filterId, show);
+
+				// Carriers hidden element by element here earlier would stay hidden behind a
+				// visible filter, and the click would look like it did nothing.
+				if (show && refused.Count == 0)
+				{
+					CarrierVisibility.SetElementsInView(doc, view, filterId, visible: true);
+				}
+				transaction.Commit();
+
+				if (refused.Count > 0)
+				{
+					report = $"Revit would not change the filters of '{view.Name}', so the carriers were left as they were.";
+				}
+				return true;
+			}
+
+			// THE TEMPLATE DECIDES THIS VIEW'S FILTERS. Setting the filter on the view itself
+			// does nothing, which is what the tool used to do while reporting that it had worked.
+			int users = CarrierVisibility.ViewsUsing(doc, template).Count;
+
+			bool templateHides;
 			try
 			{
-				return view.AreGraphicsOverridesAllowed();
+				templateHides = !CarrierVisibility.IsVisibleIn(template, filterId);
 			}
 			catch
 			{
-				return false;
+				templateHides = false;
 			}
+
+			// An element can be un-hidden, but not out from under a filter that hides it.
+			bool thisViewOnlyPossible = !(show && templateHides);
+
+			TaskDialog dialog = new TaskDialog(Title)
+			{
+				MainInstruction = $"'{view.Name}' takes its filters from view template '{template.Name}'",
+				MainContent = $"So the carriers cannot be {(show ? "shown" : "hidden")} with a filter on this view alone. " +
+							  $"The template is used by {users} view(s)." +
+							  (thisViewOnlyPossible
+								  ? string.Empty
+								  : "\n\nThe template's own filter is hiding the carriers, so they can only be shown by changing the template."),
+				CommonButtons = TaskDialogCommonButtons.Cancel,
+				DefaultButton = TaskDialogResult.Cancel,
+			};
+
+			if (thisViewOnlyPossible)
+			{
+				dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, $"{verb} in this view only",
+					show
+						? "Un-hides the carriers hidden here with Hide in View. The template is not touched."
+						: "Hides the carriers here with Hide in View. The template is not touched. The next takeoff run " +
+						  "replaces the carriers, and the new ones will show here again.");
+			}
+
+			dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, $"{verb} in the template '{template.Name}'",
+				$"Changes the office view template, and with it all {users} view(s) that use it.");
+
+			TaskDialogResult choice = dialog.Show();
+
+			if (choice == TaskDialogResult.CommandLink1 && thisViewOnlyPossible)
+			{
+				using Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
+				transaction.Start();
+				int changed = CarrierVisibility.SetElementsInView(doc, view, filterId, show);
+				transaction.Commit();
+
+				report = $"{changed} carrier(s) {(show ? "shown" : "hidden")} in '{view.Name}' only. " +
+						 $"The template '{template.Name}' was not changed.";
+				return true;
+			}
+
+			if (choice == TaskDialogResult.CommandLink2)
+			{
+				using Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
+				transaction.Start();
+				List<string> refused = CarrierVisibility.SetOnViews(new[] { template }, filterId, show);
+				if (show && refused.Count == 0)
+				{
+					CarrierVisibility.SetElementsInView(doc, view, filterId, visible: true);
+				}
+				transaction.Commit();
+
+				report = refused.Count > 0
+					? $"Revit would not change the filters of template '{template.Name}'; nothing was changed."
+					: $"Carriers {(show ? "shown" : "hidden")} in template '{template.Name}' - {users} view(s) follow it.";
+				return true;
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		/// Every view. Templates are included only when the user says so, and then only the ones
+		/// that actually control a view's filters.
+		/// </summary>
+		private static bool ToggleAllViews(Document doc, ElementId filterId, bool show, out string? report)
+		{
+			report = null;
+			string verb = show ? "Show" : "Hide";
+			string done = show ? "shown" : "hidden";
+
+			List<View> views = CarrierVisibility.GraphicalViews(doc);
+			List<View> free = new List<View>();
+			List<View> controlled = new List<View>();
+			Dictionary<ElementId, View> templates = new Dictionary<ElementId, View>();
+
+			foreach (View view in views)
+			{
+				View? template = CarrierVisibility.ControllingTemplate(doc, view);
+				if (template == null)
+				{
+					free.Add(view);
+					continue;
+				}
+				controlled.Add(view);
+				templates[template.Id] = template;
+			}
+
+			bool includeTemplates = false;
+
+			if (controlled.Count > 0)
+			{
+				string names = string.Join(", ", templates.Values.Select(t => $"'{t.Name}'").Take(8)) +
+							   (templates.Count > 8 ? ", ..." : string.Empty);
+
+				TaskDialog dialog = new TaskDialog(Title)
+				{
+					MainInstruction = $"{verb} the paint carriers in every view?",
+					MainContent = $"{free.Count} view(s) can be changed directly. {controlled.Count} view(s) take their " +
+								  $"filters from {templates.Count} view template(s): {names}.",
+					CommonButtons = TaskDialogCommonButtons.Cancel,
+					DefaultButton = TaskDialogResult.Cancel,
+				};
+				dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Views only - leave the view templates untouched",
+					$"The {controlled.Count} templated view(s) keep their current state.");
+				dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, $"Views and those {templates.Count} template(s)",
+					"Changes office view templates. Every view that uses them follows.");
+
+				TaskDialogResult choice = dialog.Show();
+				if (choice == TaskDialogResult.CommandLink2)
+				{
+					includeTemplates = true;
+				}
+				else if (choice != TaskDialogResult.CommandLink1)
+				{
+					return false;
+				}
+			}
+
+			List<View> targets = new List<View>(free);
+			if (includeTemplates)
+			{
+				targets.AddRange(templates.Values);
+			}
+
+			List<string> refused;
+			using (Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers"))
+			{
+				transaction.Start();
+				refused = CarrierVisibility.SetOnViews(targets, filterId, show);
+				transaction.Commit();
+			}
+
+			int freeChanged = free.Count(v => !refused.Contains(v.Name));
+			StringBuilder text = new StringBuilder($"Paint takeoff carriers {done} in {freeChanged} view(s)");
+
+			if (includeTemplates)
+			{
+				int templatesChanged = templates.Values.Count(t => !refused.Contains(t.Name));
+				text.Append($" and {templatesChanged} view template(s), which {controlled.Count} view(s) follow.");
+			}
+			else if (controlled.Count > 0)
+			{
+				text.Append($". {controlled.Count} view(s) were left as they were because a view template controls their filters.");
+			}
+			else
+			{
+				text.Append('.');
+			}
+
+			if (refused.Count > 0)
+			{
+				text.Append($"\n\nRevit would not change {refused.Count}: {string.Join(", ", refused.Take(10))}" +
+							(refused.Count > 10 ? ", ..." : "."));
+			}
+
+			report = text.ToString();
+			return true;
 		}
 
 		private static bool ShiftHeld()
@@ -2884,54 +3095,45 @@ namespace PaintedMaterialTakeoff.Export
 }
 namespace PaintedMaterialTakeoff.Core
 {
+	/// <summary>
+	/// Shows and hides the takeoff's carriers with one view filter, "Paint Takeoff Carriers".
+	///
+	/// VIEW TEMPLATES ARE ASKED ABOUT, NEVER CHANGED SILENTLY. A view whose template controls
+	/// "V/G Overrides Filters" ignores its own filter settings, so setting the filter there does
+	/// nothing. The templates are office standards shared by many views, so changing one is the
+	/// user's decision, made knowingly - see ToggleCarriersCommand.
+	/// </summary>
 	internal static class CarrierVisibility
 	{
-		internal sealed record Result(bool NowVisible, int ViewsChanged, int ViewsSkipped, string? Error = null)
-		{
-			public bool Failed => Error != null;
-		}
-
 		public const string FilterName = "Paint Takeoff Carriers";
 
-		public static Result Toggle(Document doc, View activeView, bool allViews)
+		/// <summary>The template that controls this view's filters, or null when the view controls its own.</summary>
+		public static View? ControllingTemplate(Document doc, View view)
 		{
-			ElementId elementId = EnsureFilter(doc);
-			if (elementId == ElementId.InvalidElementId)
-			{
-				return new Result(NowVisible: false, 0, 0, "The \"Paint Surface Type\" parameter is not in this project yet, so the carriers cannot be identified. Run the paint takeoff once first.");
-			}
-			bool flag;
 			try
 			{
-				flag = !IsVisibleIn(activeView, elementId);
+				if (view.IsTemplate || view.ViewTemplateId == ElementId.InvalidElementId) return null;
+				if (doc.GetElement(view.ViewTemplateId) is not View template) return null;
+
+				ElementId filters = new ElementId(BuiltInParameter.VIS_GRAPHICS_FILTERS);
+				return template.GetNonControlledTemplateParameterIds().Contains(filters) ? null : template;
 			}
 			catch
 			{
-				flag = false;
+				return null;
 			}
-			List<View> list = (allViews ? GraphicalViews(doc) : new List<View> { activeView });
-			int num = 0;
-			int num2 = 0;
-			using Transaction transaction = new Transaction(doc, flag ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
-			transaction.Start();
-			foreach (View item in list)
+		}
+
+		public static bool CanHostFilters(View view)
+		{
+			try
 			{
-				try
-				{
-					if (!item.GetFilters().Contains(elementId))
-					{
-						item.AddFilter(elementId);
-					}
-					item.SetFilterVisibility(elementId, flag);
-					num++;
-				}
-				catch
-				{
-					num2++;
-				}
+				return view.AreGraphicsOverridesAllowed();
 			}
-			transaction.Commit();
-			return new Result(flag, num, num2);
+			catch
+			{
+				return false;
+			}
 		}
 
 		public static bool IsVisibleIn(View view, ElementId filterId)
@@ -2943,28 +3145,120 @@ namespace PaintedMaterialTakeoff.Core
 			return true;
 		}
 
-		public static ElementId FindFilter(Document doc)
+		/// <summary>
+		/// Whether the carriers can currently be seen in this view: the filter as the view really
+		/// applies it (its template's, when the template controls filters), and not every carrier
+		/// hidden element by element.
+		/// </summary>
+		public static bool IsEffectivelyVisible(Document doc, View view, ElementId filterId)
 		{
-			return new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault((Element f) => f.Name == "Paint Takeoff Carriers")?.Id ?? ElementId.InvalidElementId;
+			View source = ControllingTemplate(doc, view) ?? view;
+
+			try
+			{
+				if (!IsVisibleIn(source, filterId)) return false;
+			}
+			catch
+			{
+				return false;
+			}
+
+			List<ElementId> carriers = CarrierIds(doc, filterId);
+			return carriers.Count == 0 || carriers.Any(id => doc.GetElement(id) is Element e && !e.IsHidden(view));
 		}
 
-		private static List<View> GraphicalViews(Document doc)
+		/// <summary>Every carrier, found with the filter's own rules so the two can never disagree.</summary>
+		public static List<ElementId> CarrierIds(Document doc, ElementId filterId)
 		{
-			return new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Where(delegate(View v)
-			{
-				try
-				{
-					return v.AreGraphicsOverridesAllowed();
-				}
-				catch
-				{
-					return false;
-				}
-			})
+			if (doc.GetElement(filterId) is not ParameterFilterElement filter) return new List<ElementId>();
+
+			ElementFilter? rules = filter.GetElementFilter();
+			if (rules == null) return new List<ElementId>();
+
+			return new FilteredElementCollector(doc)
+				.OfCategory(BuiltInCategory.OST_GenericModel)
+				.WhereElementIsNotElementType()
+				.WherePasses(rules)
+				.ToElementIds()
 				.ToList();
 		}
 
-		private static ElementId EnsureFilter(Document doc)
+		/// <summary>Views that do not control their own filters because this template does.</summary>
+		public static List<View> ViewsUsing(Document doc, View template)
+		{
+			return new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
+				.Where(v => !v.IsTemplate && v.ViewTemplateId == template.Id)
+				.ToList();
+		}
+
+		/// <summary>Every view that could show a carrier. Templates excluded - they are handled on their own.</summary>
+		public static List<View> GraphicalViews(Document doc)
+		{
+			return new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
+				.Where(v => !v.IsTemplate && CanHostFilters(v))
+				.ToList();
+		}
+
+		/// <summary>Sets the filter on each view. Caller owns the transaction. Returns the names that refused.</summary>
+		public static List<string> SetOnViews(IEnumerable<View> views, ElementId filterId, bool visible)
+		{
+			List<string> refused = new List<string>();
+
+			foreach (View view in views)
+			{
+				try
+				{
+					if (!view.GetFilters().Contains(filterId))
+					{
+						view.AddFilter(filterId);
+					}
+					view.SetFilterVisibility(filterId, visible);
+				}
+				catch
+				{
+					refused.Add(view.Name);
+				}
+			}
+
+			return refused;
+		}
+
+		/// <summary>
+		/// Hides or un-hides the carriers in ONE view, element by element - the only way to change a
+		/// view whose template controls its filters without changing the template. Caller owns the
+		/// transaction. Returns how many carriers changed.
+		/// </summary>
+		public static int SetElementsInView(Document doc, View view, ElementId filterId, bool visible)
+		{
+			List<ElementId> carriers = CarrierIds(doc, filterId);
+
+			if (visible)
+			{
+				List<ElementId> hidden = carriers.Where(id => doc.GetElement(id) is Element e && e.IsHidden(view)).ToList();
+				if (hidden.Count > 0)
+				{
+					view.UnhideElements(hidden);
+				}
+				return hidden.Count;
+			}
+
+			List<ElementId> shown = carriers
+				.Where(id => doc.GetElement(id) is Element e && !e.IsHidden(view) && e.CanBeHidden(view))
+				.ToList();
+			if (shown.Count > 0)
+			{
+				view.HideElements(shown);
+			}
+			return shown.Count;
+		}
+
+		public static ElementId FindFilter(Document doc)
+		{
+			return new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault((Element f) => f.Name == FilterName)?.Id ?? ElementId.InvalidElementId;
+		}
+
+		/// <summary>The filter, created on first use. Caller runs this inside its transaction group.</summary>
+		public static ElementId EnsureFilter(Document doc)
 		{
 			ElementId elementId = FindFilter(doc);
 			if (elementId != ElementId.InvalidElementId)
@@ -2981,7 +3275,7 @@ namespace PaintedMaterialTakeoff.Core
 				using Transaction transaction = new Transaction(doc, "Create the paint carrier filter");
 				transaction.Start();
 				FilterRule filterRule = ParameterFilterRuleFactory.CreateNotEqualsRule(elementId2, string.Empty);
-				ParameterFilterElement parameterFilterElement = ParameterFilterElement.Create(doc, "Paint Takeoff Carriers", new List<ElementId>
+				ParameterFilterElement parameterFilterElement = ParameterFilterElement.Create(doc, FilterName, new List<ElementId>
 				{
 					new ElementId(BuiltInCategory.OST_GenericModel)
 				}, new ElementParameterFilter(filterRule));

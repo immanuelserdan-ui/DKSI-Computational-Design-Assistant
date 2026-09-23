@@ -572,7 +572,15 @@ internal static class FinishAutomation
                 return;
             }
 
-            var touched = e.GetModifiedElementIds().Concat(e.GetAddedElementIds()).ToList();
+            // VIEWS AND VIEW FILTERS ARE NOT THE MODEL. Showing or hiding something, changing a
+            // crop or a template, measures nothing - but a view's bounding box is its crop region,
+            // which can take in every room in the building, so left in here a visibility toggle
+            // (Show / Hide Paint Areas, Shift+click touching every view) queued a recalculation of
+            // the whole model.
+            var touched = e.GetModifiedElementIds()
+                .Concat(e.GetAddedElementIds())
+                .Where(id => doc.GetElement(id) is not (View or FilterElement))
+                .ToList();
             var deleted = e.GetDeletedElementIds();
 
             if (touched.Count == 0 && deleted.Count == 0)
