@@ -3,10 +3,15 @@ using System.Windows;
 namespace Cda.Revit.Addin.UI;
 
 /// <summary>One room, as offered in the picker.</summary>
-public sealed record RoomChoice(string Number, string Name, string Level)
+/// <param name="Department">
+/// The room's Department - the apartment it belongs to (e.g. 1125). Shown because room names
+/// repeat across apartments: every unit has a 'Bad' and a 'Køkken', and the Department is what
+/// tells the right one from its neighbour's.
+/// </param>
+public sealed record RoomChoice(string Number, string Name, string Department, string Level)
 {
     /// <summary>What the filter box matches against.</summary>
-    public string Haystack { get; } = $"{Number} {Name} {Level}".ToUpperInvariant();
+    public string Haystack { get; } = $"{Number} {Name} {Department} {Level}".ToUpperInvariant();
 }
 
 /// <summary>

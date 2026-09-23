@@ -41,22 +41,39 @@
                  x:Name="FilterBox"
                  Padding="5"
                  Margin="0,0,0,8"
-                 ToolTip="Filter by room number, name or level" />
+                 ToolTip="Filter by room number, name, department or level" />
 
-        <ListBox Grid.Row="3"
-                 x:Name="RoomList"
-                 SelectionMode="Single"
-                 HorizontalContentAlignment="Stretch">
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Margin="2">
-                        <TextBlock Text="{Binding Number}" FontWeight="SemiBold" Width="60" />
-                        <TextBlock Text="{Binding Name}" Width="240" />
-                        <TextBlock Text="{Binding Level}" Foreground="#666" />
-                    </StackPanel>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+        <Grid Grid.Row="3">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Headings, on the same widths as the item template below. The extra left inset
+                 matches the ListBox's own border and item padding, so the columns line up. -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="6,0,0,4">
+                <TextBlock Text="Number" Width="60" Foreground="#666" />
+                <TextBlock Text="Name" Width="170" Foreground="#666" />
+                <TextBlock Text="Department" Width="100" Foreground="#666" />
+                <TextBlock Text="Level" Foreground="#666" />
+            </StackPanel>
+
+            <ListBox Grid.Row="1"
+                     x:Name="RoomList"
+                     SelectionMode="Single"
+                     HorizontalContentAlignment="Stretch">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Margin="2">
+                            <TextBlock Text="{Binding Number}" FontWeight="SemiBold" Width="60" />
+                            <TextBlock Text="{Binding Name}" Width="170" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Department}" Width="100" />
+                            <TextBlock Text="{Binding Level}" Foreground="#666" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
 
         <TextBlock Grid.Row="4" Text="Why (recorded with the override)" FontWeight="SemiBold" Margin="0,12,0,4" />
         <TextBox Grid.Row="5" x:Name="ReasonBox" Padding="5" />

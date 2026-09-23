@@ -341,6 +341,7 @@ public sealed class ReassignPaintRoomCommand : CommandBase
                 rooms.Add(new RoomChoice(
                     room.Number ?? string.Empty,
                     string.IsNullOrWhiteSpace(name) ? room.Name ?? string.Empty : name,
+                    room.get_Parameter(BuiltInParameter.ROOM_DEPARTMENT)?.AsString() ?? string.Empty,
                     (doc.GetElement(room.LevelId) as Level)?.Name ?? string.Empty));
             }
             catch
