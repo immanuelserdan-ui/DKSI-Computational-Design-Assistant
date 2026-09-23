@@ -328,6 +328,18 @@ public sealed class FinishSettings
     /// <summary>Margin added above the highest ceiling point when raising a limit.</summary>
     public const double LimitMargin = 0.5;
 
+    // NO CeilingStepTolerance, and the absence is deliberate. A constant by that name existed
+    // for one day: it excluded overhead faces sitting more than a foot above a room's dominant
+    // ceiling plane, on the reasoning that such a face belongs to a storey above rather than to
+    // this room. It was removed once the office confirmed the opposite - a cap over a ceiling
+    // gap, with a roof on top of it, IS that room's ceiling there, which is the case
+    // PaintedMaterialTakeoff's own gap-cap path exists to measure.
+    //
+    // Height cannot separate the two: an unrelated slab a storey up and the roof capping this
+    // room's own shaft sit at the same kind of elevation. Anything attempting this again needs
+    // a FOOTPRINT test - does the face cap the room, or cap a shaft passing through it - not a
+    // taller number. See the note at the Top-subface path in RoomFinishCalculator.
+
     /// <summary>
     /// Reveal-coverage slab thickness, deliberately thin (~6 mm) so a lining sitting
     /// against the reveal fully spans it, while a leaf offset into the opening does not

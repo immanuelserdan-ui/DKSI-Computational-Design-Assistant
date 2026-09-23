@@ -139,41 +139,24 @@ internal static class RibbonBuilder
             icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 
-        AddButton(model,
-            name: "CdaPlaceRadiators",
-            text: "Place\nRadiators",
-            command: typeof(Commands.PlaceRadiatorsCommand),
-            tooltip: "Places a radiator under every window, sized and cleared to Danish practice.",
-            longDescription: "Whole model, every level. Each panel is centred on its window, held " +
-                             "clear of the floor and of the sill so the convection loop works, and " +
-                             "sized to the tallest type that fits under the sill and the longest of " +
-                             "that height the free wall allows. Doors, columns, casework and " +
-                             "radiators already standing are subtracted in three dimensions first, " +
-                             "so only what reaches the panel's own height band counts. A window that " +
-                             "cannot take a panel - full-height glazing, too low a sill, too full a " +
-                             "wall - sends its radiator to the nearest exterior wall in the same room " +
-                             "and says why. Safe to re-run: it removes its own previous work and " +
-                             "rebuilds, and the whole run is one Ctrl+Z.",
-            icon: "material",
-            availability: typeof(ProjectDocumentAvailability));
-
         // Same shape as the two resolvers above: the automation runs this engine off
         // DocumentChanged, and the button is the manual entry point - the only way to get a
         // dry run, and the only way to sweep a model that was drawn before the tool existed.
         AddButton(model,
             name: "CdaCutCaseworkVoids",
-            text: "Cut Walls & Floors\nwith Casework Voids",
+            text: "Cut Walls, Floors & Ceilings\nwith Casework Voids",
             command: typeof(Commands.CutCaseworkVoidsCommand),
-            tooltip: "Cuts every wall a casework fitting's side voids reach into, and every floor " +
-                     "its bottom voids reach down into, replacing the manual Cut Geometry step.",
+            tooltip: "Cuts every wall a casework fitting's side voids reach into, every floor its " +
+                     "bottom voids reach down into, and every ceiling its top voids reach up into, " +
+                     "replacing the manual Cut Geometry step.",
             longDescription: "Revit cuts a fitting's HOST wall by itself; the side voids that reach " +
-                             "into adjacent and intersecting walls, and the bottom voids that reach " +
-                             "down into the floor finish and the slab beneath it, are the ones " +
-                             "nobody gets for free. Each nearby wall or floor is offered to Revit " +
-                             "and only the ones the voids genuinely reach are cut, so a dry run and " +
-                             "the real run can never disagree. Never removes a cut. Safe to re-run: " +
-                             "elements already cut by that fitting are left alone, and the whole run " +
-                             "is one Ctrl+Z.",
+                             "into adjacent and intersecting walls, the bottom voids that reach down " +
+                             "into the floor finish and the slab beneath it, and the top voids that " +
+                             "reach up into a ceiling above, are the ones nobody gets for free. Each " +
+                             "nearby wall, floor or ceiling is offered to Revit and only the ones the " +
+                             "voids genuinely reach are cut, so a dry run and the real run can never " +
+                             "disagree. Never removes a cut. Safe to re-run: elements already cut by " +
+                             "that fitting are left alone, and the whole run is one Ctrl+Z.",
             icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 

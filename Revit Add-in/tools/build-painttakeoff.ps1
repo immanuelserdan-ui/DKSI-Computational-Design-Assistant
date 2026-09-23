@@ -102,7 +102,15 @@ if ($msiexec.ExitCode -ne 0) {
 # The manifest is referenced from the payload folder as ..\PaintedMaterialTakeoff.addin, so
 # what matters here is that the extracted layout keeps the manifest one level above the
 # binaries. It does, because that is how it is installed.
-$payload = Join-Path $stage 'CommApp\Autodesk\Revit\Addins\2027\PaintedMaterialTakeoff'
+#
+# "PFiles64", NOT "CommApp". PaintTakeoff.wxs roots the payload at the standard
+# ProgramFiles64Folder (see that file's header for why - the 2027 all-users add-in folder
+# moved out of ProgramData). An administrative install (msiexec /a) extracts each standard
+# folder under Windows Installer's own fixed short name for it, and ProgramFiles64Folder's
+# is PFiles64 - not the folder's real name, and not related to CommonAppDataFolder's
+# "CommApp", which is what this pointed at before and is only correct for a package rooted
+# there. Confirmed by extracting and listing the actual staged tree, not by assumption.
+$payload = Join-Path $stage 'PFiles64\Autodesk\Revit\Addins\2027\PaintedMaterialTakeoff'
 
 $expected = @(
     'PaintedMaterialTakeoff.dll'

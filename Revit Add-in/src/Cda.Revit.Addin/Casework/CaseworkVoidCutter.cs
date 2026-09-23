@@ -118,8 +118,9 @@ public sealed class CaseworkVoidCutter
     }
 
     /// <summary>
-    /// Cuts every wall or floor the given fittings' voids reach — side voids into walls,
-    /// bottom voids down into the floor finish and the slab beneath it.
+    /// Cuts every wall, floor or ceiling the given fittings' voids reach — side voids into
+    /// walls, bottom voids down into the floor finish and the slab beneath it, top voids up
+    /// into a ceiling above.
     ///
     /// MUST be called inside an open transaction — it writes on the successful path. Wrap it
     /// in <see cref="Transactions.Run"/> to apply, or <see cref="Transactions.Probe"/> to get
@@ -154,7 +155,7 @@ public sealed class CaseworkVoidCutter
             [
                 $"{fittings.Count} fitting(s) examined" +
                 (scope is { Count: > 0 } ? " (scoped)" : " (whole model)") + ".",
-                $"{_cuts} cut(s) created (walls and floors); {_alreadyCut} already cut and left alone.",
+                $"{_cuts} cut(s) created (walls, floors and ceilings); {_alreadyCut} already cut and left alone.",
                 $"{_noIntersection} candidate(s) refused by Revit - the voids do not reach them.",
                 $"{_notCuttable} candidate(s) skipped as not cuttable with a void.",
                 $"{_warnings.Count} warning(s).",

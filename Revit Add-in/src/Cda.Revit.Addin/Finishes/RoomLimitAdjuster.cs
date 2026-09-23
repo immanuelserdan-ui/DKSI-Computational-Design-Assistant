@@ -69,7 +69,7 @@ internal static class RoomLimitAdjuster
         var roomBox = room.get_BoundingBox(null);
         if (roomBox is null) return false;
 
-        var neededTop = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, roomBox), roomBox);
+        var neededTop = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, roomBox), room, roomBox);
 
         // Mirrors the guard in RoomBoundaryAdjuster's full pass: a room carrying the FFL
         // marker must reach RaiseUpperOffset even when there is no cap to raise for, because
@@ -166,7 +166,7 @@ internal static class RoomLimitAdjuster
         lines.Add($"  Envelope top: {box.Max.Z * FeetToMm:0} mm");
         lines.Add(string.Empty);
 
-        var needed = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, box), box);
+        var needed = RoomBoundaryAdjuster.HighestCapTop(CapBoxesAbove(doc, box), room, box);
 
         if (needed is null)
         {

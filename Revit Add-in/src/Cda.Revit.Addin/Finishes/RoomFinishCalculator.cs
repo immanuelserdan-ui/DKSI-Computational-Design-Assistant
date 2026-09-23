@@ -349,6 +349,20 @@ public sealed class RoomFinishCalculator
 
         boundary.EnsureVolumes(_report);
         CollectDeductibles();
+
+        // NO AUTOMATIC LOWERING HERE, and this is a REVERSAL of a change that reached a live
+        // model and damaged it (2026-09-22). LowerOverRaisedLimits was called from this pass so
+        // the correction would not need a ribbon click. It ran on Køkken 1 and wrote a limit
+        // BELOW that room's own ceiling: the envelope dropped from +1.718 to -7.702 against a
+        // ceiling at -4.101, so the room could no longer reach the thing that bounds it. Volume
+        // fell 752 -> 456, ceiling area 82.1 -> 16.5, and the ceiling source degraded from
+        // "ceiling" to "slab above".
+        //
+        // The cause was HighestCapTop's cap selection, not this call site - but the blast radius
+        // was this call site: an automatic pass re-fires on every save, across every room in the
+        // model, with no one reading a dialog. A correction that writes a WRONG value silently,
+        // model-wide, on a trigger nobody initiates, is strictly worse than one nobody presses.
+        // It goes back behind the ribbon until its selection rule is proven against a model.
         boundary.AdjustUpperLimits(_report);
 
         var options = new SpatialElementBoundaryOptions
@@ -424,6 +438,23 @@ public sealed class RoomFinishCalculator
 
         var elementsWritten = WriteElementTotals();
         var elementsTagged = WriteRoomIdentity();
+
+        // AFTER both writes, so "did any room claim this element?" is answerable from the
+        // dictionaries this pass actually filled - and before the exterior sweep below, which
+        // is the narrower special case of the same idea.
+        var elementsUnclaimed = ClearUnclaimedElements(wholeModel: scopeRoomIds is null);
+
+        if (elementsUnclaimed > 0)
+        {
+            _report.Add(
+                $"STALE ELEMENT VALUES CLEARED: {elementsUnclaimed} wall/floor/ceiling/roof " +
+                "element(s) carried a finish or paint area from an earlier run that no room " +
+                "claims any more - typically a face now excluded for sitting above its room's " +
+                "ceiling - and have been reset to 0 with their room identity blanked. " +
+                "WriteElementTotals only visits elements that contributed, so without this the " +
+                "room totals drop correctly while the elements keep the old numbers, and a wall " +
+                "schedule and a room schedule disagree with nothing to say which is right.");
+        }
 
         // AFTER both writes, so "did any interior room claim this element?" is answerable.
         var elementsCleared = ClearExteriorOnlyElements();
@@ -946,16 +977,24 @@ public sealed class RoomFinishCalculator
         var roomFootprint = 0.0;
         var openBelow = 0.0;
 
+
         // Kept for the fallback chain: these span the whole footprint with holes already
         // correctly wound, which is exactly the prism the overhead search needs.
         var roomBottomFaces = new List<Face>();
 
         var ceilingSource = FinishSettings.CeilingSourceOrder.ToDictionary(k => k, _ => 0.0);
 
+        // Kept past the try block so MeasureInteriorSlabs/MeasureInteriorWalls can clip
+        // against the room's own real, already-bounded volume instead of a raw face.Area -
+        // see FinishGeometry.ClipFaceToRoomSolid. Guaranteed non-null once the try below
+        // completes without throwing, since a throw returns false before either is called.
+        Solid? roomSolid = null;
+
         try
         {
             var results = calculator.CalculateSpatialElementGeometry(room);
             var solid = results.GetGeometry();
+            roomSolid = solid;
 
             foreach (Face face in solid.Faces)
             {
@@ -1072,6 +1111,24 @@ public sealed class RoomFinishCalculator
                                 continue;
                             }
 
+                            // NO HEIGHT TEST ON OVERHEAD FACES, and that is a decision, not an
+                            // omission. A cap over a ceiling gap IS this room's ceiling there:
+                            // the shaft is open to the room, and a roof sits on top of it, so
+                            // looking up through the gap you see that soffit enclosing this
+                            // room's air. On FM_Template that is roof 29336815 over Køkken's
+                            // 0.72 m² shaft - the case PaintedMaterialTakeoff's own gap-cap
+                            // path exists to capture, and confirmed as wanted by the office.
+                            //
+                            // A height rule was tried here and removed the same day. It read
+                            // "more than a foot above the dominant ceiling plane is a storey
+                            // up, not this room's ceiling", which is true of an unrelated slab
+                            // and false of exactly the cap this room needs - and the two are
+                            // indistinguishable by height alone.
+                            //
+                            // The WALL rule below still applies, and the asymmetry is the
+                            // point: the shaft's own side walls are not this room's walls,
+                            // while the thing capping the shaft is this room's ceiling.
+
                             var measured = _settings.UseGeometric
                                 ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element,
                                     OccludingElements(element, room))
@@ -1131,6 +1188,11 @@ public sealed class RoomFinishCalculator
                     var categoryId = element.Category?.Id;
                     if (categoryId == _ceilingCategory || categoryId == _roofCategory)
                     {
+                        // No height test here either - see the Top path. A sloped roof reached
+                        // through a ceiling gap is this room's ceiling over that gap, and
+                        // arriving as a Side subface rather than a Top one does not change
+                        // what it caps.
+
                         var measured = _settings.UseGeometric
                             ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.BottomFaces(element), element,
                                 OccludingElements(element, room))
@@ -1159,6 +1221,26 @@ public sealed class RoomFinishCalculator
                         Claim(element.Id, room, amount);
                         continue;
                     }
+
+                    // NO "ABOVE THE CEILING" TEST HERE, and this is a REVERSAL - the same one
+                    // the overhead-ceiling path already went through. A rule excluding wall
+                    // faces starting at or above the dominant ceiling plane shipped, then broke
+                    // exactly the case it was meant to fix.
+                    //
+                    // Køkken 1's shaft walls (29336568-71) start at the ceiling and rise into a
+                    // gap that a roof caps. This engine's OWN comment on this block, before the
+                    // rule existed, already said why that is not a bug: "SpatialElementGeometryCalculator
+                    // reports the four shaft walls as perfectly legitimate Side boundary faces
+                    // of the kitchen - they ARE faces of its volume." ExactSubfaceArea clips
+                    // every wall face against the room's REAL subface via boolean intersection -
+                    // it was already measuring exactly the portion of these walls that
+                    // genuinely belongs to the room, correctly, before this rule started
+                    // discarding that measurement wholesale.
+                    //
+                    // The office rule, confirmed directly: a cap over a gap, with a roof on top
+                    // of it, IS that room's ceiling there - and the walls enclosing that same
+                    // air are that room's walls. A height test cannot express that; only the
+                    // room's own computed geometry can, and ExactSubfaceArea already asks it.
 
                     var wallResult = _settings.UseGeometric && element is Wall
                         ? _geometry.ExactSubfaceArea(subfaceFace, _geometry.CachedFaces(element), element,
@@ -1272,12 +1354,15 @@ public sealed class RoomFinishCalculator
         // TIMED (2026-09-08), three discrete per-room phases, so a slow room's cost can be
         // attributed to a specific phase rather than to "MeasureRoom" as a whole. Log.Debug
         // is a no-op unless Log.Verbose is on - see Log.cs - so this costs nothing normally.
+        var roomBox = SafeBoundingBox(room);
+
         var phaseTimer = System.Diagnostics.Stopwatch.StartNew();
-        var (mezzFloor, mezzCeiling, mezzCount) = MeasureInteriorSlabs(room, AddMaterials, ceilingClaimed);
+        var (mezzFloor, mezzCeiling, mezzCount) =
+            MeasureInteriorSlabs(room, AddMaterials, ceilingClaimed, roomSolid, roomBox);
         Log.Debug($"MeasureInteriorSlabs room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {mezzCount} slab(s).");
 
         phaseTimer.Restart();
-        var (hangingArea, hangingCount) = MeasureInteriorWalls(room, AddMaterials);
+        var (hangingArea, hangingCount) = MeasureInteriorWalls(room, AddMaterials, roomSolid, roomBox);
         Log.Debug($"MeasureInteriorWalls room={room.Id.Value}: {phaseTimer.ElapsedMilliseconds} ms, {hangingCount} wall(s).");
 
         phaseTimer.Restart();
@@ -1527,7 +1612,11 @@ public sealed class RoomFinishCalculator
     /// <summary>
     /// Mezzanine slabs inside this room's volume. Probe a point just above the slab's top
     /// (or below its bottom): if that air belongs to this room, the slab lives inside it.
-    /// Real faces are summed, so voids and stair openings are already excluded.
+    /// Real faces are clipped to the room's own solid before being summed (see
+    /// <see cref="FinishGeometry.ClipFaceToRoomSolid"/>), so a slab that only partly
+    /// overlaps this room - continuing past its boundary into a stairwell, a neighbouring
+    /// room, or a non-bounding dormer floor whose footprint only grazes it - is no longer
+    /// billed for the whole face; voids and stair openings are already excluded either way.
     /// </summary>
     /// <param name="ceilingClaimed">
     /// Slabs whose underside the ceiling fallback already measured for this room.
@@ -1545,7 +1634,8 @@ public sealed class RoomFinishCalculator
     /// independently of the fallback.
     /// </param>
     private (double Floor, double Ceiling, int Count) MeasureInteriorSlabs(
-        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, HashSet<long> ceilingClaimed)
+        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, HashSet<long> ceilingClaimed,
+        Solid? roomSolid, BoundingBoxXYZ? roomBox)
     {
         double floor = 0.0, ceiling = 0.0;
         var count = 0;
@@ -1577,20 +1667,35 @@ public sealed class RoomFinishCalculator
 
                 if (!above && !below) continue;
 
+                // CLIPPED TO THE ROOM'S REAL VOLUME, not taken whole. The point probes above
+                // only prove the slab is SOMEWHERE near this room - a mezzanine deck or a
+                // non-bounding dormer floor can still continue past the room's actual
+                // boundary into a stairwell, a neighbouring room, or open air the room does
+                // not occupy. Without the clip, that whole face was billed to this one room
+                // regardless of how much of it actually sat outside. See
+                // FinishGeometry.ClipFaceToRoomSolid; falls back to the raw face.Area when
+                // the room's solid is unavailable for some reason (the pre-fix behaviour).
+                double FaceArea(Face f) =>
+                    roomSolid is not null ? _geometry.ClipFaceToRoomSolid(f, roomSolid, roomBox) : f.Area;
+
                 var topLedger = new MaterialLedger();
                 var topArea = 0.0;
                 foreach (var face in _geometry.TopFaces(slab))
                 {
-                    topArea += face.Area;
-                    topLedger.Add(_geometry.FaceMaterialKey(slab, face), face.Area);
+                    var a = FaceArea(face);
+                    if (a <= 0) continue;
+                    topArea += a;
+                    topLedger.Add(_geometry.FaceMaterialKey(slab, face), a);
                 }
 
                 var bottomLedger = new MaterialLedger();
                 var bottomArea = 0.0;
                 foreach (var face in _geometry.BottomFaces(slab))
                 {
-                    bottomArea += face.Area;
-                    bottomLedger.Add(_geometry.FaceMaterialKey(slab, face), face.Area);
+                    var a = FaceArea(face);
+                    if (a <= 0) continue;
+                    bottomArea += a;
+                    bottomLedger.Add(_geometry.FaceMaterialKey(slab, face), a);
                 }
 
                 if (topArea <= 0 && bottomArea <= 0) continue;
@@ -1638,23 +1743,23 @@ public sealed class RoomFinishCalculator
     /// face is painted, count ONLY painted faces; otherwise count the single face whose
     /// normal points most toward the room centre. Never both - that doubles the quantity.
     ///
-    /// CLIPPED TO THE ROOM'S OWN VERTICAL EXTENT, not the wall's. A hanging wall's face
-    /// area used to be taken whole - <c>face.Area</c>, the wall's real height end to end -
-    /// on the reasoning that this method exists specifically for partitions that stand
-    /// inside a room, so the whole visible face belongs to it. That reasoning holds only
-    /// while the wall's own height matches the room's: a wall drawn taller than the room it
-    /// stands in - reaching up through where a ceiling would normally stop it, exactly the
-    /// case a mis-joined or over-height hanging wall produces - was counting the slice above
-    /// the room as this room's paint too. Nothing bounds a freestanding wall the way a
-    /// ceiling bounds a room-bounding one, so nothing was catching it.
+    /// CLIPPED TO THE ROOM'S OWN REAL VOLUME - plan and height both - not the wall's own
+    /// extent. A hanging wall's face area used to be taken whole - <c>face.Area</c>, the
+    /// wall's real footprint end to end - on the reasoning that this method exists
+    /// specifically for partitions that stand inside a room, so the whole visible face
+    /// belongs to it. That reasoning holds only while the wall's own footprint matches the
+    /// room's: a wall drawn taller than the room - reaching up through where a ceiling would
+    /// normally stop it - or running past the room in plan - past a corner, into a
+    /// neighbouring room, outside the building envelope entirely - was counting the part
+    /// outside the room as this room's paint too. Nothing bounds a freestanding wall the way
+    /// a ceiling or a wall corner bounds a room-bounding one, so nothing was catching it.
+    /// See <see cref="FinishGeometry.ClipFaceToRoomSolid"/>.
     /// </summary>
     private (double Area, int Count) MeasureInteriorWalls(
-        Room room, Action<string, MaterialLedger, ElementId?> addMaterials)
+        Room room, Action<string, MaterialLedger, ElementId?> addMaterials, Solid? roomSolid, BoundingBoxXYZ? roomBox)
     {
         var total = 0.0;
         var count = 0;
-
-        var roomBox = SafeBoundingBox(room);
 
         foreach (var wall in _interiorWalls)
         {
@@ -1770,7 +1875,19 @@ public sealed class RoomFinishCalculator
 
                 foreach (var face in use)
                 {
-                    var faceArea = ClippedToRoomHeight(face, box, roomBox);
+                    // CLIPPED TO THE ROOM'S REAL VOLUME - plan AND height, not height alone.
+                    // ClippedToRoomHeight used to be the only clip here, and it deliberately
+                    // preserves the wall's own full horizontal footprint as its clip box (see
+                    // its remarks) - so a hanging/freestanding wall running PAST the room in
+                    // plan, past a corner, into a neighbouring room, or outside the building
+                    // envelope entirely, still counted in full once the single bbox-centre
+                    // point-in-room gate above passed. The room's own solid already knows its
+                    // real plan shape as well as its height, so clipping against it catches
+                    // both at once. Falls back to the height-only clip if the room's solid is
+                    // unavailable for some reason - the same conservative default as before.
+                    var faceArea = roomSolid is not null
+                        ? _geometry.ClipFaceToRoomSolid(face, roomSolid, roomBox)
+                        : ClippedToRoomHeight(face, box, roomBox);
 
                     area += faceArea;
                     var key = _geometry.FaceMaterialKey(wall, face);
@@ -2271,6 +2388,157 @@ public sealed class RoomFinishCalculator
     /// Writes wherever the parameter exists and is writable; elements without it are
     /// skipped silently.
     /// </summary>
+    /// <summary>
+    /// Zeroes this engine's area parameters on elements NO room claimed this run.
+    ///
+    /// THE BUG THIS FIXES, measured on FM_Template rather than reasoned.
+    /// <see cref="WriteElementTotals"/> iterates the per-element dictionaries, so it only ever
+    /// visits an element that CONTRIBUTED this run. An element that stops contributing is never
+    /// visited, and whatever an earlier run wrote stays on it for good.
+    ///
+    /// That turned the above-the-ceiling rule into a half-fix. Køkken 1's room totals fell by
+    /// exactly the four shaft walls' 59.406 sq ft, correctly - and every one of those walls went
+    /// on reading 'Wall Paint Area' 21.604 against Rum = Køkken, because nothing cleared them.
+    /// The room was right and the elements were wrong, which is the worst combination: a wall
+    /// schedule and a room schedule that disagree, with no indication which to believe.
+    ///
+    /// SAME SHAPE AS <see cref="ClearExteriorOnlyElements"/>, which already does this for
+    /// elements bounding skipped exterior rooms. This is the general case that one is a special
+    /// instance of: an element carrying an interior finish area that this run did not produce.
+    ///
+    /// ONLY CLEARS, never writes a quantity, so it cannot invent or move area. An element any
+    /// room claimed is skipped before anything is read.
+    ///
+    /// WHOLE-MODEL PASSES ONLY, and this gate is the difference between a fix and a disaster.
+    /// Run() accepts a room SCOPE, and FinishAutomation uses it on every automatic save and
+    /// idle pass - so on a scoped run the claimed set holds only the handful of rooms visited,
+    /// and every element belonging to a room this pass never looked at would read as unclaimed.
+    /// The sweep would zero the finish areas of the entire rest of the model, on every save.
+    /// <see cref="WriteElementTotals"/> already carries a warning about this same trap; this is
+    /// the same hazard with a bigger blast radius, because clearing needs no matching room to
+    /// do damage.
+    /// </summary>
+    private int ClearUnclaimedElements(bool wholeModel)
+    {
+        // A SCOPED PASS CLEARS ONLY WHAT IT CAN ACCOUNT FOR, rather than nothing at all.
+        //
+        // Refusing outright was the first version, and it made this dead code: RunFullPass is
+        // called with force:false by every automatic trigger, so every save and idle pass is
+        // scoped, and the one unscoped caller (RunNow) is not wired to a ribbon button. A fix
+        // that only runs on a pass nobody can trigger is not a fix.
+        //
+        // The element's OWN recorded room is the missing link. A wall stamped 'Rum nr' = 1 is
+        // telling us which room last claimed it; if room 1 was measured on THIS pass and did
+        // not claim it again, that value is stale by this pass's own evidence. A wall stamped
+        // with a room this pass never looked at is left strictly alone - that is the case the
+        // refusal above existed to protect, and it still is.
+        //
+        // In a whole-model pass every room is visited, so this reduces to "clear anything
+        // unclaimed", including elements whose stamp is blank or names a room that no longer
+        // exists - which only a whole-model pass has the standing to judge.
+        var visitedRooms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var roomId in _processedRoomIds)
+        {
+            if (_doc.GetElement(new ElementId(roomId)) is not Room processed) continue;
+
+            var number = processed.Number;
+            if (!string.IsNullOrWhiteSpace(number)) visitedRooms.Add(number);
+        }
+
+        var claimed = new HashSet<long>();
+
+        foreach (var set in new[]
+                 {
+                     _elemWallArea, _elemWallPaint, _elemFloorArea,
+                     _elemFloorPaint, _elemCeilingArea, _elemCeilingPaint,
+                 })
+        {
+            foreach (var id in set.Keys) claimed.Add(id);
+        }
+
+        var parameters = new[]
+        {
+            _settings.WallParameter, _settings.PaintParameter,
+            _settings.FloorParameter, _settings.FloorPaintParameter,
+            _settings.CeilingParameter, _settings.CeilingPaintParameter,
+        };
+
+        var categories = new[]
+        {
+            BuiltInCategory.OST_Walls, BuiltInCategory.OST_Floors,
+            BuiltInCategory.OST_Ceilings, BuiltInCategory.OST_Roofs,
+        };
+
+        var cleared = 0;
+
+        foreach (var category in categories)
+        {
+            foreach (var element in new FilteredElementCollector(_doc)
+                         .OfCategory(category)
+                         .WhereElementIsNotElementType())
+            {
+                if (claimed.Contains(element.Id.Value)) continue;
+                if (!Worksharing.CanWrite(_doc, element.Id)) continue;
+
+                // Whose was it? On a scoped pass only an element stamped with a room THIS pass
+                // actually measured can be judged stale - see the note at the top.
+                if (!wholeModel)
+                {
+                    var stamp = element.LookupParameter(_settings.RoomNumberParameter)?.AsString();
+                    if (string.IsNullOrWhiteSpace(stamp) || !visitedRooms.Contains(stamp)) continue;
+                }
+
+                var touched = false;
+
+                foreach (var name in parameters)
+                {
+                    var parameter = element.LookupParameter(name);
+                    if (parameter is null || parameter.IsReadOnly ||
+                        parameter.StorageType != StorageType.Double)
+                    {
+                        continue;
+                    }
+
+                    if (parameter.AsDouble() <= 1e-9) continue;
+
+                    try
+                    {
+                        parameter.Set(0.0);
+                        touched = true;
+                    }
+                    catch
+                    {
+                        // An element that will not take the write keeps its stale value.
+                    }
+                }
+
+                if (!touched) continue;
+
+                // The identity goes with the area. A wall reading Rum = Køkken with no area is
+                // just as misleading as one reading an area it no longer has.
+                foreach (var name in new[]
+                         {
+                             _settings.ApartmentParameter,
+                             _settings.RoomNumberParameter,
+                             _settings.RoomNameParameter,
+                         })
+                {
+                    var parameter = element.LookupParameter(name);
+                    if (parameter is { IsReadOnly: false, StorageType: StorageType.String })
+                    {
+                        try { parameter.Set(string.Empty); }
+                        catch { /* same tolerance as above */ }
+                    }
+                }
+
+                cleared++;
+            }
+        }
+
+        return cleared;
+    }
+
     private int WriteElementTotals()
     {
         var written = 0;
