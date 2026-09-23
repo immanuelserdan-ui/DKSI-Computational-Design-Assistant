@@ -21,16 +21,16 @@ namespace Cda.Revit.Addin.Automation;
 /// Both apply. The lining rules are the ones documented in the office's own
 /// Resolve-Lining-Clashes README: symmetric uncheck (both sides of a shared reveal drop
 /// that face, each banking its own remnant in "Lining Change"), purely geometric blocking
-/// (a neighbour blocks whether or not it carries lining itself), and door-to-window
-/// propagation of the master "Lining YN" and material code.
+/// (a neighbour blocks whether or not it carries lining itself), and two-way door/window
+/// sync of the master "Lining YN" and material code.
 ///
-/// One asymmetry worth knowing, because it is what makes this safe to leave running: a
-/// DOOR's own "Lining YN" is never written. It is the modelling decision the whole rule
-/// keys off, so editing it is how you drive the automation rather than something the
-/// automation fights you over. Everything else — the three side flags, Lining Change, and
-/// touching windows' Lining YN and Window Material — is recomputed from geometry on every
-/// pass and will overwrite a manual edit. Put <c>#nolining-auto</c> in an element's
-/// Comments to have it skipped entirely.
+/// What a manual edit survives, because it decides whether this is safe to leave running.
+/// The three side flags and Lining Change are recomputed from geometry on every pass and
+/// will overwrite an edit. "Lining YN" and the material code are the modelling decisions,
+/// so editing either on a door OR a window is how you drive the automation: the pass that
+/// follows this edit carries it to the touching opening (see LiningSync). The first pass on
+/// a model only records the starting values, which is why this runs on document open.
+/// Put <c>#nolining-auto</c> in an element's Comments to have it skipped entirely.
 /// </summary>
 internal static class OpeningAutomation
 {
@@ -51,7 +51,8 @@ internal static class OpeningAutomation
         /// <summary>
         /// Resolve lining clashes automatically — uncheck the Top/Left/Right face wherever
         /// two openings share a reveal, bank the uncovered remnant in "Lining Change", and
-        /// carry a door's master "Lining YN" and material across to the windows it touches.
+        /// keep master "Lining YN" and material in step between a door and the windows it
+        /// touches, whichever side was edited.
         ///
         /// This APPLIES. It was briefly held in report-only mode behind a handedness check,
         /// and that gate was a mistake: <see cref="LeftIsFamilyPlusX"/> only decides which of

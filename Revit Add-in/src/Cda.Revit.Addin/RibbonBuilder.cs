@@ -131,11 +131,18 @@ internal static class RibbonBuilder
             name: "CdaPlaceSkirting",
             text: "Place Skirting\n(Wall Sweep)",
             command: typeof(Commands.PlaceSkirtingCommand),
-            tooltip: "Places skirting boards in every room except those excluded by name or Department.",
-            longDescription: "Rooms whose Name or Department contains 'Bad' or 'Toilet' are skipped. " +
-                             "Boards break at doors, windows and openings through Revit's own wall " +
-                             "sweep behaviour, and are cut where casework stands against them. Safe " +
-                             "to re-run: faces that already have a board are left alone.",
+            tooltip: "Places skirting boards in every designed room, broken at openings and casework.",
+            // KEEP IN STEP WITH SkirtingSettings. This once promised 'Bad'/'Toilet' rooms were
+            // skipped and that re-runs left existing boards alone - both long after the
+            // exclusion list was emptied and top-up was replaced by Regenerate.
+            longDescription: "Every room gets skirting, wet rooms included, except 'Udvendig' " +
+                             "exterior placeholders and rooms with no Department. Boards are cut " +
+                             "back at doors, windows and openings that reach the floor, around " +
+                             "door frames, and where casework stands against the wall; radiators " +
+                             "and sockets never break a board. Floor-reaching openings also get " +
+                             "jamb boards on whatever depth the door family leaves bare. Re-running " +
+                             "regenerates: every board this tool placed is removed and rebuilt, and " +
+                             "boards placed by hand are never touched.",
             icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 
