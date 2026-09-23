@@ -531,6 +531,7 @@ public sealed class LiningClashResolver
 
     private int _recorded;
     private int _recordFailures;
+    private readonly List<string> _lockedByOthers = [];
 
     /// <summary>
     /// Door and window keep "Lining YN" and the material code in step, whichever of the two
@@ -678,6 +679,10 @@ public sealed class LiningClashResolver
                 if (!node.Tracked || !node.Writable || hold.Contains(node.Id)) continue;
                 if (!byId.TryGetValue(node.Id, out var opening)) continue;
 
+                // The record is a write like any other, and the first pass on a model makes it
+                // on every touching door and window - so it needs the same ownership guard.
+                if (!Worksharing.CanWrite(_doc, opening.Instance.Id)) continue;
+
                 try
                 {
                     var instance = opening.Instance;
@@ -729,6 +734,17 @@ public sealed class LiningClashResolver
 
         foreach (var plan in toWrite)
         {
+            // On a central model, one opening checked out by a colleague throws at commit and
+            // rolls back the WHOLE pass - every other opening's correct values with it. Skip
+            // it instead, and count it as a failed write so no sync record claims it settled.
+            if (!Worksharing.CanWrite(_doc, plan.Opening.Instance.Id))
+            {
+                _lockedByOthers.Add(plan.Opening.Label());
+                failedWrites.Master.Add(plan.Opening.Id);
+                failedWrites.Material.Add(plan.Opening.Id);
+                continue;
+            }
+
             try
             {
                 if (plan.Opening.HasLiningParameters)
@@ -760,7 +776,13 @@ public sealed class LiningClashResolver
         // Force the reporting parameters to recompute so the read-back is truthful.
         _doc.Regenerate();
 
-        foreach (var plan in toWrite)
+        // Skipped openings still hold their old values, so reading them back would raise a
+        // false "family formula disagrees" warning for each one.
+        HashSet<long> skipped = _lockedByOthers.Count == 0
+            ? []
+            : [.. toWrite.Where(p => !Worksharing.CanWrite(_doc, p.Opening.Instance.Id)).Select(p => p.Opening.Id)];
+
+        foreach (var plan in toWrite.Where(p => !skipped.Contains(p.Opening.Id)))
         {
             var (actual, _) = Opening.NumberOfAny(plan.Opening.Instance, _settings.Total);
             plan.ActualTotal = actual;
@@ -968,6 +990,14 @@ public sealed class LiningClashResolver
 
         if (failed.Count > 0)
             summary.Add($"Write failures {failed.Count}: {string.Join("; ", failed)}");
+
+        if (_lockedByOthers.Count > 0)
+        {
+            summary.Add(
+                $"{_lockedByOthers.Count} opening(s) are checked out by another user and were left " +
+                $"alone; they are picked up once released: {string.Join("; ", _lockedByOthers.Take(10))}" +
+                (_lockedByOthers.Count > 10 ? " ..." : string.Empty));
+        }
 
         if (_warnings.Count > 0)
             summary.Add($"{_warnings.Count} warning(s) -- see the log.");

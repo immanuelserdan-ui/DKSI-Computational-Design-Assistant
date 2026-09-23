@@ -35,8 +35,9 @@ public sealed class ResolveLiningClashesCommand : CommandBase
                 "banks its own uncovered remnant in 'Lining Change'.\n\n" +
                 (settings.ReverseFromWindows
                     ? "A door and the windows it touches keep Lining YN and material in step: whichever " +
-                      "was edited since the last Apply drives the other. If both were edited and " +
-                      "disagree, neither is written and the run warns.\n\n"
+                      "was edited since the tool last applied drives the other - and it also applies " +
+                      "by itself after every door or window edit. If both were edited and disagree, " +
+                      "neither is written and the run warns.\n\n"
                     : "A touching door drives each window's Lining YN and Window Material.\n\n") +
                 $"Max clear gap {settings.GapToleranceMm:0} mm, minimum remnant kept {settings.MinRemnantMm:0} mm. " +
                 "A full recompute every run, so it is safe to re-run after the model changes.",
