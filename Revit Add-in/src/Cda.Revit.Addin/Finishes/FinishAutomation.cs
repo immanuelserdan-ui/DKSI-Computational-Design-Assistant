@@ -611,6 +611,9 @@ internal static class FinishAutomation
             // beside it cut, and RoomsFor would have discarded that change entirely.
             CaseworkCutAutomation.MarkDirty(doc, touched, deleted.Count);
 
+            // A repainted wall may now be tile under a board. Also room-independent.
+            SkirtingFinishAutomation.MarkDirty(doc, touched);
+
             var rooms = RoomsFor(doc, touched);
 
             // A deleted door still changes the wall's painted area, but a deleted id can no
@@ -632,7 +635,8 @@ internal static class FinishAutomation
                 // No room work, but there may still be opening or casework work — and those
                 // paths have their own flags. Returning without raising here is what would
                 // strand them.
-                if (OpeningAutomation.IsDirty(doc) || CaseworkCutAutomation.IsDirty(doc))
+                if (OpeningAutomation.IsDirty(doc) || CaseworkCutAutomation.IsDirty(doc) ||
+                    SkirtingFinishAutomation.IsDirty(doc))
                     _syncEvent?.Raise();
 
                 return;
@@ -758,6 +762,10 @@ internal static class FinishAutomation
         // what looked, from the ribbon, like an ordinary single-fitting edit.
         RunCaseworkPass(doc, "the model changed", allowSweep: runNow);
 
+        // NOT DEBOUNCED. Scoped to the walls just edited, like the casework reaction above, and
+        // the point is that the board disappears while the user is still looking at the paint.
+        RunSkirtingTrimPass(doc, "a wall was repainted or edited");
+
         // BEFORE the finish pass, not after. Lining resolution changes "Lining YN" and the
         // window material, both of which feed what the finish engine counts as painted. Run
         // it second and every pass would publish areas computed from the previous state.
@@ -850,7 +858,8 @@ internal static class FinishAutomation
             var flags = Flags.For(doc);
 
             var owed = flags.FinishDirty || flags.OpenedPending ||
-                       OpeningAutomation.IsDirty(doc) || CaseworkCutAutomation.SweepOwed(doc);
+                       OpeningAutomation.IsDirty(doc) || CaseworkCutAutomation.SweepOwed(doc) ||
+                       SkirtingFinishAutomation.IsDirty(doc);
 
             if (!owed) return;
 
@@ -939,6 +948,17 @@ internal static class FinishAutomation
     /// finish pass is driven. Its writes land on doors and windows, which are in the
     /// updater's trigger filter, so without this the pass re-queues itself indefinitely.
     /// </summary>
+    /// <summary>
+    /// Drives <see cref="SkirtingFinishAutomation"/> with the change updater muted: removing a
+    /// board is a model change, and unsuppressed it would queue a pass of its own.
+    /// </summary>
+    private static void RunSkirtingTrimPass(Document doc, string reason)
+    {
+        if (!SkirtingFinishAutomation.IsDirty(doc)) return;
+
+        WithoutSelfTriggering(() => SkirtingFinishAutomation.Run(doc, TransactionPrefix, reason));
+    }
+
     private static void RunOpeningPass(Document doc, string reason, bool force = false)
     {
         if (!force && !OpeningAutomation.IsDirty(doc)) return;
@@ -1100,6 +1120,7 @@ internal static class FinishAutomation
             // that owns their lifecycle releases them here too.
             OpeningAutomation.Forget(doc);
             CaseworkCutAutomation.Forget(doc);
+            SkirtingFinishAutomation.Forget(doc);
         }
         catch (Exception ex)
         {

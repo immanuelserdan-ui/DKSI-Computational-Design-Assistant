@@ -219,6 +219,29 @@ internal static class ElementStamp
     }
 
     /// <summary>
+    /// The UniqueId of the element this one was derived from, as recorded by <see cref="Write"/>,
+    /// or null. Storage only: a Comments stamp never carried a source.
+    /// </summary>
+    public static string? ReadSource(Element element, string tool)
+    {
+        var schema = Resolve();
+        if (schema is null) return null;
+
+        try
+        {
+            using var entity = element.GetEntity(schema);
+            if (!entity.IsValid() || entity.Get<string>(ToolField) != tool) return null;
+
+            var source = entity.Get<string>(SourceField);
+            return string.IsNullOrEmpty(source) ? null : source;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// A quick filter matching only elements carrying this schema.
     ///
     /// This is the point of the whole exercise for performance: finding previously
