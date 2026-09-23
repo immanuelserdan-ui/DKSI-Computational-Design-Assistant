@@ -43,6 +43,10 @@ public sealed class LiningResult
 ///     Lining Length (Door) = Top + Right + Left + Lining Change
 ///
 /// Always a full recompute, never an increment, so it is idempotent and safe to re-run.
+///
+/// The one thing it remembers between runs is what each touching door and window held for
+/// "Lining YN" and material at the last apply - the only way to tell which of the two a user
+/// edited. See <see cref="LiningSync"/>. The lining faces and "Lining Change" never use it.
 /// </summary>
 public sealed class LiningClashResolver
 {
@@ -111,21 +115,25 @@ public sealed class LiningClashResolver
         }
 
         var groups = GroupByWallRun(axes);
-        var pulledIn = ExpandScopeToTouchedWindows(groups);
+        var contacts = DoorWindowContacts(groups);
+        var pulledIn = ExpandScopeAlongContacts(contacts);
         var plans = Solve(groups);
 
-        if (_settings.PropagateMasterFromDoors || _settings.MaterialFromDoors)
-            PropagateFromDoors(groups, plans);
+        var syncs = Synchronise(contacts, plans);
 
         var applied = 0;
         var failed = new List<string>();
-        if (apply) applied = Apply(plans, failed);
+        if (apply)
+        {
+            applied = Apply(plans, failed, out var failedWrites);
+            Record(syncs, plans, failedWrites);
+        }
 
         return new LiningResult
         {
             Rows = BuildRows(plans),
             Warnings = BuildWarnings(plans),
-            Summary = BuildSummary(plans, groups, apply, applied, failed, pulledIn),
+            Summary = BuildSummary(plans, groups, apply, applied, failed, pulledIn, syncs),
             Geometry = BuildGeometry(groups, plans),
         };
     }
@@ -259,42 +267,71 @@ public sealed class LiningClashResolver
         return [.. groups.Values];
     }
 
+    /// <summary>Every door/window pair in one wall run whose lining rectangles touch.</summary>
+    private List<(Opening Door, Opening Window)> DoorWindowContacts(List<List<Opening>> groups)
+    {
+        var contacts = new List<(Opening, Opening)>();
+
+        foreach (var members in groups)
+        {
+            var doors = members.Where(IsDoor).ToList();
+            if (doors.Count == 0) continue;
+
+            foreach (var window in members.Where(IsWindow))
+            {
+                foreach (var door in doors.Where(d => Opening.Touches(window, d, _gapTol)))
+                    contacts.Add((door, window));
+            }
+        }
+
+        return contacts;
+    }
+
     /// <summary>
-    /// A door decides the master "Lining YN" and the Window Material for the windows it
-    /// touches. Selecting only the door therefore has to pull those windows into scope,
-    /// or the propagation has nothing to write to and the door's material change appears
-    /// to do nothing.
+    /// Door and window drive each other's "Lining YN" and material, so a selection has to
+    /// bring in what it is linked to, or the sync has nothing to write to and the edit
+    /// appears to do nothing.
     ///
-    /// Only windows in direct contact with a SELECTED door are added, never the reverse,
-    /// and the count is reported so the extra writes are never silent.
+    /// Two-way: the whole chain of door/window contact reachable from the selection, since a
+    /// door that follows a selected window then drives its OTHER windows. One-way (reverse
+    /// off): only windows touching a selected door, as before. The count is reported either
+    /// way so the extra writes are never silent.
     /// </summary>
-    private int ExpandScopeToTouchedWindows(List<List<Opening>> groups)
+    private int ExpandScopeAlongContacts(List<(Opening Door, Opening Window)> contacts)
     {
         if (_scopeIds is null) return 0;
         if (!_settings.PropagateMasterFromDoors && !_settings.MaterialFromDoors) return 0;
 
-        var added = 0;
+        var before = _scopeIds.Count;
 
-        foreach (var members in groups)
+        if (!_settings.ReverseFromWindows)
         {
-            var selectedDoors = members
-                .Where(o => o.CategoryId == (long)BuiltInCategory.OST_Doors && _scopeIds.Contains(o.Id))
-                .ToList();
-
-            if (selectedDoors.Count == 0) continue;
-
-            foreach (var window in members.Where(o => o.CategoryId == (long)BuiltInCategory.OST_Windows))
-            {
-                if (_scopeIds.Contains(window.Id)) continue;
-                if (!selectedDoors.Any(d => Opening.Touches(window, d, _gapTol))) continue;
-
+            foreach (var (door, window) in contacts.Where(c => _scopeIds.Contains(c.Door.Id)).ToList())
                 _scopeIds.Add(window.Id);
-                added++;
-            }
+
+            return _scopeIds.Count - before;
         }
 
-        return added;
+        bool grew;
+        do
+        {
+            grew = false;
+            foreach (var (door, window) in contacts)
+            {
+                if (_scopeIds.Contains(door.Id) == _scopeIds.Contains(window.Id)) continue;
+
+                _scopeIds.Add(door.Id);
+                _scopeIds.Add(window.Id);
+                grew = true;
+            }
+        } while (grew);
+
+        return _scopeIds.Count - before;
     }
+
+    private static bool IsDoor(Opening o) => o.CategoryId == (long)BuiltInCategory.OST_Doors;
+
+    private static bool IsWindow(Opening o) => o.CategoryId == (long)BuiltInCategory.OST_Windows;
 
     // ------------------------------------------------------------------- solve
 
@@ -486,112 +523,205 @@ public sealed class LiningClashResolver
         };
     }
 
-    // --------------------------------------------------- door -> window propagation
+    // ------------------------------------------------ door <-> window synchronisation
+
+    private sealed record FieldSync(bool IsMaster, IReadOnlyList<SyncNode> Nodes, SyncResult Result);
+
+    private bool TwoWay => _settings.ReverseFromWindows && LiningSyncStore.Available;
+
+    private int _recorded;
+    private int _recordFailures;
 
     /// <summary>
-    /// A door decides the lining and material for the windows it physically touches. Only
-    /// windows in direct contact with a door are affected; a window touching no door keeps
-    /// whatever the modeller set.
+    /// Door and window keep "Lining YN" and the material code in step, whichever of the two
+    /// was edited. The decision is <see cref="LiningSync"/>'s; this gathers its inputs from
+    /// the model and turns its answer into plan writes and notes.
+    ///
+    /// Only pairs in physical contact take part. A window touching no door keeps whatever the
+    /// modeller set, and a door touching no window is never written by this.
     /// </summary>
-    private void PropagateFromDoors(List<List<Opening>> groups, List<LiningPlan> plans)
+    private List<FieldSync> Synchronise(List<(Opening Door, Opening Window)> contacts, List<LiningPlan> plans)
     {
+        var syncs = new List<FieldSync>();
+        if (!_settings.PropagateMasterFromDoors && !_settings.MaterialFromDoors) return syncs;
+
         var planById = plans.ToDictionary(p => p.Opening.Id);
 
-        foreach (var members in groups)
+        // Pairs with neither side in scope are someone else's run; their warnings are noise.
+        var relevant = contacts
+            .Where(c => planById.ContainsKey(c.Door.Id) || planById.ContainsKey(c.Window.Id))
+            .ToList();
+        if (relevant.Count == 0) return syncs;
+
+        var openings = relevant
+            .SelectMany(c => new[] { c.Door, c.Window })
+            .DistinctBy(o => o.Id)
+            .ToDictionary(o => o.Id);
+
+        var pairs = relevant.Select(c => (c.Door.Id, c.Window.Id)).ToList();
+
+        var stored = TwoWay
+            ? openings.Values.ToDictionary(o => o.Id, o => LiningSyncStore.Read(o.Instance))
+            : null;
+
+        string Label(long id) => openings.TryGetValue(id, out var o) ? Short(o) : id.ToString();
+
+        if (_settings.PropagateMasterFromDoors)
         {
-            var doors = members.Where(o => o.CategoryId == (long)BuiltInCategory.OST_Doors).ToList();
-            if (doors.Count == 0) continue;
-
-            foreach (var opening in members.Where(o => o.CategoryId == (long)BuiltInCategory.OST_Windows))
+            var nodes = openings.Values.Select(o => new SyncNode
             {
-                if (!planById.TryGetValue(opening.Id, out var plan)) continue;
+                Id = o.Id,
+                IsDoor = IsDoor(o),
+                Current = MasterValue(o.HasLining),
+                Stored = stored?[o.Id].Lining,
+                Tracked = !o.Skip && o.MasterOn is not null,
+                Writable = planById.ContainsKey(o.Id),
+            }).ToList();
 
-                var touching = doors.Where(d => Opening.Touches(opening, d, _gapTol)).ToList();
-                if (touching.Count == 0) continue;
+            var result = LiningSync.Solve(nodes, pairs, new MasterLiningRule(_settings.MirrorMasterBothWays), Label);
+            syncs.Add(new FieldSync(true, nodes, result));
+        }
 
-                if (_settings.PropagateMasterFromDoors) PropagateMaster(opening, plan, touching);
-                if (_settings.MaterialFromDoors) PropagateMaterial(opening, plan, touching);
+        if (_settings.MaterialFromDoors)
+        {
+            var nodes = openings.Values.Select(o => new SyncNode
+            {
+                Id = o.Id,
+                IsDoor = IsDoor(o),
+                Current = MaterialOf(o).Trim(),
+                Stored = stored?[o.Id].Material,
+                Tracked = !o.Skip && ParameterHelper.Find(o.Instance, MaterialParameter(o)) is not null,
+                Writable = planById.ContainsKey(o.Id),
+            }).ToList();
+
+            var rule = new MaterialRule(_settings.DoorPrefix, _settings.WindowPrefix, _settings.MaterialOverrides);
+            var result = LiningSync.Solve(nodes, pairs, rule, Label);
+            syncs.Add(new FieldSync(false, nodes, result));
+        }
+
+        foreach (var sync in syncs)
+        {
+            _warnings.AddRange(sync.Result.Issues);
+
+            // A door's value as the windows saw it this run: what it is being set to, if anything.
+            var effective = sync.Nodes.ToDictionary(n => n.Id, n => n.Current);
+            foreach (var write in sync.Result.Writes) effective[write.Id] = write.Value;
+
+            foreach (var write in sync.Result.Writes)
+            {
+                if (!planById.TryGetValue(write.Id, out var plan)) continue;
+
+                var target = openings[write.Id];
+                var driver = openings[write.DriverId];
+
+                plan.Changed = true;
+
+                if (sync.IsMaster)
+                {
+                    plan.MasterDesired = write.Value == "1" ? 1 : 0;
+                    plan.Notes.Add(write.Direction == SyncDirection.DoorToWindow
+                        ? $"Lining YN -> {OnOff(write.Value)} (touches {Short(driver)}, whose Lining YN is " +
+                          $"{OnOff(effective[driver.Id])})"
+                        : $"Lining YN -> {OnOff(write.Value)} ({Short(driver)} touching it was changed to " +
+                          $"{OnOff(driver.HasLining)} since the last run)");
+                }
+                else
+                {
+                    var before = MaterialOf(target);
+                    plan.MaterialDesired = write.Value;
+                    plan.Notes.Add(write.Direction == SyncDirection.DoorToWindow
+                        ? $"{MaterialParameter(target)} '{Blank(before)}' -> '{write.Value}' " +
+                          $"({Short(driver)} is '{effective[driver.Id]}')"
+                        : $"{MaterialParameter(target)} '{Blank(before)}' -> '{write.Value}' " +
+                          $"({Short(driver)} touching it was changed to '{MaterialOf(driver).Trim()}' since the last run)");
+                }
+            }
+        }
+
+        return syncs;
+
+        static string OnOff(object value) => value is "1" or true ? "on" : "off";
+        static string Blank(string value) => value.Length > 0 ? value : "(blank)";
+    }
+
+    /// <summary>
+    /// After an apply, records what each synchronised opening now holds, so the next run can
+    /// tell which side a user edits. Read back from the model rather than taken from the plan,
+    /// so a write Revit refused is never recorded as done.
+    ///
+    /// NOT RECORDED: an edit still held back by a conflict, and both ends of a write that
+    /// failed. Recording either would make the next run see "nothing changed" and quietly
+    /// hand the pair to the door.
+    /// </summary>
+    private void Record(
+        List<FieldSync> syncs,
+        List<LiningPlan> plans,
+        (HashSet<long> Master, HashSet<long> Material) failedWrites)
+    {
+        if (!TwoWay) return;
+
+        var byId = plans.ToDictionary(p => p.Opening.Id, p => p.Opening);
+
+        foreach (var sync in syncs)
+        {
+            var failed = sync.IsMaster ? failedWrites.Master : failedWrites.Material;
+
+            var hold = new HashSet<long>(sync.Result.Unsettled);
+            foreach (var write in sync.Result.Writes.Where(w => failed.Contains(w.Id)))
+            {
+                hold.Add(write.Id);
+                hold.Add(write.DriverId);
+            }
+
+            foreach (var node in sync.Nodes)
+            {
+                if (!node.Tracked || !node.Writable || hold.Contains(node.Id)) continue;
+                if (!byId.TryGetValue(node.Id, out var opening)) continue;
+
+                try
+                {
+                    var instance = opening.Instance;
+
+                    if (sync.IsMaster)
+                    {
+                        if (Opening.Integer(instance, _settings.Master) is not { } now) continue;
+                        if (node.Stored != MasterValue(now != 0)) _recorded++;
+                        LiningSyncStore.Write(instance, MasterValue(now != 0), null);
+                    }
+                    else
+                    {
+                        var now = Opening.Text(instance, MaterialParameter(opening)).Trim();
+                        if (node.Stored != now) _recorded++;
+                        LiningSyncStore.Write(instance, null, now);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _recordFailures++;
+                    Log.Warn($"Lining sync record not written on {node.Id}: {ex.Message}");
+                }
             }
         }
     }
 
-    private void PropagateMaster(Opening opening, LiningPlan plan, List<Opening> touching)
-    {
-        int? want = null;
+    private static string MasterValue(bool on) => on ? "1" : "0";
 
-        // Any touching door without lining wins: the window follows it out of the schedule.
-        if (touching.Any(d => !d.HasLining)) want = 0;
-        else if (_settings.MirrorMasterBothWays) want = 1;
+    private string MaterialParameter(Opening o) => IsDoor(o) ? _settings.DoorMaterial : _settings.WindowMaterial;
 
-        if (want is null || (opening.HasLining ? 1 : 0) == want) return;
+    private static string MaterialOf(Opening o) => IsDoor(o) ? o.DoorMaterial : o.WindowMaterial;
 
-        var driver = touching.FirstOrDefault(d => !d.HasLining) ?? touching[0];
-
-        plan.MasterDesired = want;
-        plan.Changed = true;
-        plan.Notes.Add($"Lining YN -> {(want == 1 ? "on" : "off")} (touches door {driver.Id} " +
-                       $"[{(driver.Mark.Length > 0 ? driver.Mark : "-")}], whose Lining YN is " +
-                       $"{(driver.HasLining ? "on" : "off")})");
-    }
-
-    private void PropagateMaterial(Opening opening, LiningPlan plan, List<Opening> touching)
-    {
-        var codes = touching
-            .Select(d => d.DoorMaterial.Trim())
-            .Where(c => c.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToList();
-
-        if (codes.Count > 1)
-        {
-            // Two doors disagreeing is a modelling question, not something to resolve by
-            // picking one.
-            _warnings.Add($"{opening.Label()}: touches doors with different Door Material " +
-                          $"({string.Join(", ", codes)}); Window Material left alone");
-            return;
-        }
-
-        if (codes.Count == 0) return;
-
-        var source = codes[0];
-        var target = WindowMaterialFor(source);
-
-        if (target is null)
-        {
-            _warnings.Add($"{opening.Label()}: door material '{source}' does not start with " +
-                          $"'{_settings.DoorPrefix}', so no window code could be derived. Add it to " +
-                          "MaterialOverrides if it is a special case.");
-            return;
-        }
-
-        if (opening.WindowMaterial == target) return;
-
-        var driver = touching.FirstOrDefault(d => d.DoorMaterial.Trim() == source) ?? touching[0];
-
-        plan.MaterialDesired = target;
-        plan.Changed = true;
-        plan.Notes.Add($"Window Material '{(opening.WindowMaterial.Length > 0 ? opening.WindowMaterial : "(blank)")}' " +
-                       $"-> '{target}' (door {driver.Id} [{(driver.Mark.Length > 0 ? driver.Mark : "-")}] is '{source}')");
-    }
-
-    /// <summary>'DDL' -> 'WDL'. Null when no code can be derived.</summary>
-    private string? WindowMaterialFor(string doorCode)
-    {
-        var code = doorCode.Trim();
-        if (code.Length == 0) return null;
-
-        if (_settings.MaterialOverrides.TryGetValue(code, out var over)) return over;
-
-        return code.StartsWith(_settings.DoorPrefix, StringComparison.OrdinalIgnoreCase)
-            ? _settings.WindowPrefix + code[_settings.DoorPrefix.Length..]
-            : null;
-    }
+    private static string Short(Opening o) =>
+        $"{(IsDoor(o) ? "door" : "window")} {o.Id} [{(o.Mark.Length > 0 ? o.Mark : "-")}]";
 
     // ------------------------------------------------------------------- apply
 
-    private int Apply(List<LiningPlan> plans, List<string> failed)
+    private int Apply(
+        List<LiningPlan> plans,
+        List<string> failed,
+        out (HashSet<long> Master, HashSet<long> Material) failedWrites)
     {
+        failedWrites = ([], []);
+
         var toWrite = plans.Where(p => p.Changed).ToList();
         if (toWrite.Count == 0) return 0;
 
@@ -609,17 +739,21 @@ public sealed class LiningClashResolver
                     Write(plan.Opening, _settings.Change, p => p.Set(plan.ChangeAfter));
                 }
 
-                if (plan.MasterDesired is { } master)
-                    Write(plan.Opening, _settings.Master, p => p.Set(master));
+                if (plan.MasterDesired is { } master &&
+                    !Write(plan.Opening, _settings.Master, p => p.Set(master)))
+                    failedWrites.Master.Add(plan.Opening.Id);
 
-                if (plan.MaterialDesired is { } material)
-                    Write(plan.Opening, _settings.WindowMaterial, p => p.Set(material));
+                if (plan.MaterialDesired is { } material &&
+                    !Write(plan.Opening, MaterialParameter(plan.Opening), p => p.Set(material)))
+                    failedWrites.Material.Add(plan.Opening.Id);
 
                 applied++;
             }
             catch (Exception ex)
             {
                 failed.Add($"{plan.Opening.Label()} -- {ex.Message}");
+                failedWrites.Master.Add(plan.Opening.Id);
+                failedWrites.Material.Add(plan.Opening.Id);
             }
         }
 
@@ -639,24 +773,25 @@ public sealed class LiningClashResolver
     /// A parameter that is absent or read-only used to be skipped in silence, so the run
     /// reported "written" while the model did not move. Now it is a warning.
     /// </summary>
-    private void Write(Opening opening, string name, Action<Parameter> set)
+    private bool Write(Opening opening, string name, Action<Parameter> set)
     {
         var parameter = ParameterHelper.Find(opening.Instance, name);
 
         if (parameter is null)
         {
             _warnings.Add($"{opening.Label()}: parameter '{name}' not found - not written");
-            return;
+            return false;
         }
 
         if (parameter.IsReadOnly)
         {
             _warnings.Add($"{opening.Label()}: parameter '{name}' is read-only " +
                           "(driven by a formula or a type parameter?) - not written");
-            return;
+            return false;
         }
 
         set(parameter);
+        return true;
     }
 
     // ------------------------------------------------------------------ report
@@ -768,8 +903,28 @@ public sealed class LiningClashResolver
 
     private List<string> BuildSummary(
         List<LiningPlan> plans, List<List<Opening>> groups, bool apply, int applied,
-        IReadOnlyList<string> failed, int pulledIn)
+        IReadOnlyList<string> failed, int pulledIn, List<FieldSync> syncs)
     {
+        var fromWindows = syncs.Sum(s => s.Result.Writes.Count(w => w.Direction == SyncDirection.WindowToDoor));
+        var heldBack = syncs.SelectMany(s => s.Result.Unsettled).Distinct().Count();
+
+        var syncLine = (_settings.PropagateMasterFromDoors || _settings.MaterialFromDoors) switch
+        {
+            false => string.Empty,
+            true when !_settings.ReverseFromWindows =>
+                "Lining YN / material sync: one-way, doors drive the windows they touch.",
+            true when !LiningSyncStore.Available =>
+                "Lining YN / material sync: the sync record is unavailable, so window edits cannot be " +
+                "detected - doors drive the windows they touch, one-way, this run.",
+            _ =>
+                $"Lining YN / material sync (two-way): {fromWindows} door value(s) follow an edited " +
+                $"window; {heldBack} edit(s) held back by a conflict - see warnings." +
+                (apply
+                    ? $" {_recorded} sync record(s) updated" +
+                      (_recordFailures > 0 ? $", {_recordFailures} could not be written." : ".")
+                    : " A dry run records nothing; edits are measured against the last APPLY."),
+        };
+
         var changed = plans.Count(p => p.Changed);
 
         var neighbourhood = groups
@@ -787,11 +942,13 @@ public sealed class LiningClashResolver
                   $"{_openings.Count} loaded from the model as potential neighbours.",
 
             pulledIn > 0
-                ? $"{pulledIn} window(s) touching a selected door were added to the scope, so the " +
-                  "door can drive their Lining YN and Window Material."
+                ? $"{pulledIn} opening(s) in door/window contact with the selection were added to " +
+                  "the scope, so Lining YN and material stay in step across the pair."
                 : string.Empty,
 
             $"{changed} need changes; {applied} written.",
+
+            syncLine,
 
             _openings.Count(o => !o.HasLiningParameters) is var noLining && noLining > 0
                 ? $"{noLining} opening(s) carry no lining parameters. They still block their " +
