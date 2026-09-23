@@ -108,6 +108,14 @@ public sealed class LiningSettings
     /// </summary>
     public bool MirrorMasterBothWays { get; init; } = true;
 
+    /// <summary>
+    /// True = two-way: a window edited since the last applied run drives the doors it touches,
+    /// for "Lining YN" and for the material code alike. A door edited since then still drives
+    /// its windows, and both edited to disagreeing values is a warning with nothing written.
+    /// See <see cref="LiningSync"/>. False = doors only, as before.
+    /// </summary>
+    public bool ReverseFromWindows { get; init; } = true;
+
     // ---- material propagation, door -> touching windows ----------------------
 
     /// <summary>
