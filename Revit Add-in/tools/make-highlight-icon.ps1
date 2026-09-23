@@ -1,7 +1,7 @@
 # Generates the "Paint Highlight" ribbon icon: highlight16.png and highlight32.png.
 #
-# House style, same as make-timer-icon.ps1 and make-stamp-icon.ps1: flat, outlined, no
-# gradients, white body with a blue rim and an orange accent for the action.
+# House style, same as make-timer-icon.ps1: flat, outlined, no gradients, white body with
+# a blue rim and an orange accent for the action.
 #
 # WHAT IT HAS TO SAY, IN 16 PIXELS. The button's whole point is "only PART of this surface,
 # not the whole element" - so the drawing is a wall panel in outline with one region filled

@@ -18,7 +18,14 @@ param(
     # Same date-derived scheme as build-installer.ps1: MSI version fields are numeric and
     # capped, so 1.0.<yy><day of year>. Increasing across days is what makes Windows treat a
     # later build as an upgrade rather than a second copy.
-    [string]$Version = ('1.0.{0}{1}' -f (Get-Date).ToString('yy'), (Get-Date).DayOfYear),
+    #
+    # DEFAULTED BELOW, NOT HERE, because the date alone is not enough. Same-day rebuilds are
+    # normal during evaluation and the date does not move between them, so this number was
+    # bumped by hand eleven times on 2026-09-08 and reached 1.0.26261 - eight days AHEAD of
+    # the calendar it is derived from. The date-derived default was then a downgrade against
+    # the office's own last release, and a downgrade installs nothing under /quiet.
+    # Get-NextPackageVersion keeps the date meaning and adds a floor. See tools\Version.ps1.
+    [string]$Version,
 
     # The takeoff MSI to chain. Built separately by tools\build-painttakeoff.ps1, because it
     # repackages a third-party payload rather than compiling anything.
@@ -33,6 +40,14 @@ $Output       = Join-Path $Root 'src\Cda.Revit.Addin\bin\Release'
 $InstallerDir = Join-Path $Root 'installer'
 $Dist         = Join-Path $Root 'dist'
 $Wix          = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
+
+# Monotonic even when the calendar is not - see the note on -Version above.
+. (Join-Path $PSScriptRoot 'Version.ps1')
+
+if (-not $Version) {
+    $Version = Get-NextPackageVersion -Dist $Dist -Prefix 'DKSI-Revit-Suite-' `
+        -Candidate ('1.0.{0}{1}' -f (Get-Date).ToString('yy'), (Get-Date).DayOfYear)
+}
 
 # NEWEST BY VERSION, NEVER A HARDCODED ONE - same reason as build-inno.ps1. The default here
 # was 'PaintTakeoff-1.0.3.msi', which predates the DLL override in installer\PaintTakeoff, so
@@ -62,11 +77,16 @@ if (-not (Test-Path $Wix)) {
     exit 1
 }
 
-if (-not (Test-Path $PaintTakeoffMsi)) {
+## EMPTY/NULL CHECKED FIRST, SEPARATELY FROM Test-Path. When dist\ has no PaintTakeoff-*.msi at
+## all, the auto-detect block above leaves $PaintTakeoffMsi empty rather than a real path - and
+## Test-Path REJECTS an empty string at parameter binding ("Cannot bind argument to parameter
+## 'Path' because it is an empty string"), before its own body ever runs. That crash pre-empted
+## this exact message for anyone hitting the case it exists to explain.
+if ([string]::IsNullOrWhiteSpace($PaintTakeoffMsi) -or -not (Test-Path $PaintTakeoffMsi)) {
     Say ""
-    Say "Painted Material Takeoff MSI not found: $PaintTakeoffMsi" 'Red'
+    Say "Painted Material Takeoff MSI not found in dist\." 'Red'
     Say "Build it first:  .\tools\build-painttakeoff.ps1" 'Red'
-    Say "Or pass one with -PaintTakeoffMsi." 'Red'
+    Say "Or pass one with -PaintTakeoffMsi <path to a PaintTakeoff .msi>." 'Red'
     exit 1
 }
 

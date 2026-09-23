@@ -37,7 +37,13 @@ param(
     #   1.0.1  original; installs to the pre-2027 folder, so Revit never loads it
     #   1.0.2  same payload, correct folder
     #   1.0.3  no ribbon of its own - DKSI Revit Tools carries the three tools instead
-    [string]$Version = '1.0.3',
+    #   1.0.4+ payload rebuilds; 1.0.18 was the last one shipped
+    #
+    # THIS USED TO DEFAULT TO A LITERAL '1.0.3' and stayed there through fifteen further
+    # builds, so running this script the way its own header documents produced a package
+    # older than the one already installed - the exact "old install survives alongside"
+    # outcome the paragraph above warns about. Defaulted below instead; see tools\Version.ps1.
+    [string]$Version,
 
     # The 1.0.1 MSI to lift the payload out of.
     [string]$SourceMsi
@@ -52,6 +58,13 @@ $Wxs          = Join-Path $InstallerDir 'PaintTakeoff.wxs'
 $Wix          = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
 
 if (-not $SourceMsi) { $SourceMsi = Join-Path $Dist 'PaintTakeoff-1.0.1.msi' }
+
+# Above whatever is already in dist - see the note on -Version above.
+. (Join-Path $PSScriptRoot 'Version.ps1')
+
+if (-not $Version) {
+    $Version = Get-NextPackageVersion -Dist $Dist -Prefix 'PaintTakeoff-' -Candidate '1.0.3'
+}
 
 function Say([string]$text, [string]$colour = 'Gray') { Write-Host $text -ForegroundColor $colour }
 

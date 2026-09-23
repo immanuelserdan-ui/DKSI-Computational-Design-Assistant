@@ -1,7 +1,7 @@
 # Generates the "Time Tracking" ribbon icon: timer16.png and timer32.png.
 #
-# House style, same as make-stamp-icon.ps1: flat, outlined, no gradients, white body with a
-# blue rim and an orange accent for the action. A clock face reads at 16 px because it is
+# House style, same as make-highlight-icon.ps1: flat, outlined, no gradients, white body with
+# a blue rim and an orange accent for the action. A clock face reads at 16 px because it is
 # three blocks of tone - dark ring, white face, orange hand - rather than fine detail.
 #
 # Re-run after editing; the output is committed, so nobody needs PowerShell to build.

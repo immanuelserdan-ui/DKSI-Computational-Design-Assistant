@@ -252,6 +252,7 @@ internal static class SurfaceScheduleBuilder
         ApplyColumnFormatting(doc, schedule, columns, problems);
 
         EnforceColumnOrder(doc, schedule, problems);
+        EnsureSortGrouping(doc, schedule, problems);
         EnsureSurfaceFilter(doc, schedule, surface, problems);
 
         return schedule;
@@ -1003,6 +1004,99 @@ internal static class SurfaceScheduleBuilder
         {
             problems.Add($"Could not filter '{SafeName(schedule)}' to {surface}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Sorts and groups all three surface schedules by Lejlighed (the "Room Department" shared
+    /// parameter) then Rum nr ("Room Number"), both ascending - the office reference layout
+    /// shown under Schedule Properties > Sorting/Grouping. No header, footer or blank line at
+    /// either level, and every instance itemized rather than collapsed to one row per group.
+    ///
+    /// Idempotent: a schedule already set this way is left alone, the same policy every other
+    /// step in <see cref="Build"/> follows - a no-op change is still a document change and an
+    /// undo entry.
+    /// </summary>
+    private static void EnsureSortGrouping(Document doc, ViewSchedule schedule, List<string> problems)
+    {
+        var departmentId = ParameterId(doc, RoomDepartmentGuid);
+        var numberId = ParameterId(doc, RoomNumberGuid);
+
+        if (departmentId == ElementId.InvalidElementId || numberId == ElementId.InvalidElementId)
+        {
+            problems.Add($"'Room Department' or 'Room Number' is not bound in this model, so " +
+                         $"'{SafeName(schedule)}' was left sorted as-is.");
+            return;
+        }
+
+        ScheduleDefinition definition;
+        try
+        {
+            definition = schedule.Definition;
+        }
+        catch
+        {
+            return;   // AddMissingColumns already reported this; nothing new to say
+        }
+
+        var fields = Enumerable.Range(0, definition.GetFieldCount()).Select(definition.GetField).ToList();
+        var departmentField = fields.FirstOrDefault(f => f.ParameterId == departmentId);
+        var numberField = fields.FirstOrDefault(f => f.ParameterId == numberId);
+
+        if (departmentField is null || numberField is null)
+        {
+            problems.Add($"'{SafeName(schedule)}' is missing its Room Department or Room Number " +
+                         "column, so it was left sorted as-is.");
+            return;
+        }
+
+        static ScheduleSortGroupField SortAscending(ScheduleFieldId id) => new(id, ScheduleSortOrder.Ascending)
+        {
+            ShowHeader = false,
+            ShowFooter = false,
+            ShowBlankLine = false,
+        };
+
+        var wanted = new List<ScheduleSortGroupField>
+        {
+            SortAscending(departmentField.FieldId),
+            SortAscending(numberField.FieldId),
+        };
+
+        var alreadySet = SortGroupingMatches(definition.GetSortGroupFields(), wanted) &&
+                          definition.IsItemized && !definition.ShowGrandTotal;
+
+        if (alreadySet) return;
+
+        try
+        {
+            definition.SetSortGroupFields(wanted);
+            definition.IsItemized = true;
+            definition.ShowGrandTotal = false;
+        }
+        catch (Exception ex)
+        {
+            problems.Add($"Could not set the sort/grouping on '{SafeName(schedule)}': {ex.Message}");
+        }
+    }
+
+    private static bool SortGroupingMatches(
+        IList<ScheduleSortGroupField> current, IList<ScheduleSortGroupField> wanted)
+    {
+        if (current.Count != wanted.Count) return false;
+
+        for (var i = 0; i < current.Count; i++)
+        {
+            var a = current[i];
+            var b = wanted[i];
+
+            if (a.FieldId != b.FieldId) return false;
+            if (a.SortOrder != b.SortOrder) return false;
+            if (a.ShowHeader != b.ShowHeader) return false;
+            if (a.ShowFooter != b.ShowFooter) return false;
+            if (a.ShowBlankLine != b.ShowBlankLine) return false;
+        }
+
+        return true;
     }
 
     private static bool AlreadyPresent(ScheduleDefinition definition, ElementId parameterId)

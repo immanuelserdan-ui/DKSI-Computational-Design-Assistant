@@ -86,6 +86,7 @@ public partial class ExportSchedulesWindow : Window
 
         BuildCategoryBox();
         BuildKindBox();
+        BuildPhaseBox();
 
         _ready = true;
         ApplyFilter();
@@ -140,6 +141,29 @@ public partial class ExportSchedulesWindow : Window
         KindBox.SelectedIndex = 0;
     }
 
+    /// <summary>
+    /// Only phases that actually occur on a schedule here, same reasoning as
+    /// <see cref="BuildCategoryBox"/>. A model with one phase, or schedule types that carry
+    /// no phase at all, should not offer a control that can only ever do nothing.
+    /// </summary>
+    private void BuildPhaseBox()
+    {
+        var options = new List<FilterOption<string?>>
+        {
+            new() { Label = "All phases", Value = null },
+        };
+
+        options.AddRange(_items
+            .Select(i => i.Candidate.Phase)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(p => p, StringComparer.CurrentCultureIgnoreCase)
+            .Select(p => new FilterOption<string?> { Label = p, Value = p }));
+
+        PhaseBox.ItemsSource = options;
+        PhaseBox.SelectedIndex = 0;
+    }
+
     // -------------------------------------------------------------------- filtering
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
@@ -155,6 +179,7 @@ public partial class ExportSchedulesWindow : Window
         _filter.Kind = (KindBox.SelectedItem as FilterOption<ScheduleKind?>)?.Value;
         _filter.Placement = ReadTag(PlacementBox, SheetPlacement.Any);
         _filter.Content = ReadTag(ContentBox, ScheduleContent.Any);
+        _filter.Phase = (PhaseBox.SelectedItem as FilterOption<string?>)?.Value;
 
         // Re-pointing ItemsSource at the same item objects keeps every tick intact; the
         // ListView is a view of the list, never the record of what was chosen.
@@ -181,6 +206,7 @@ public partial class ExportSchedulesWindow : Window
         KindBox.SelectedIndex = 0;
         PlacementBox.SelectedIndex = 0;
         ContentBox.SelectedIndex = 0;
+        PhaseBox.SelectedIndex = 0;
 
         _ready = true;
         ApplyFilter();

@@ -43,14 +43,22 @@ artifacts/
 *.dmp
 
 # ---- installer output -------------------------------------------------------
-# Regenerable from build-installer.ps1 in seconds, and 2 MB per version.
+# Regenerable from the build scripts in tools\ in seconds, and 2 MB per version.
 # VERSION.txt inside the package records what a given ZIP contained.
 #
-# Covers BOTH installers this repo turns out to contain: the WiX/MSI one under
-# Revit Add-in/, and the newer script-based one under Installer/. That overlap is
-# a real duplication to resolve, not a naming accident - see the README note.
+# THE DUPLICATION THIS USED TO WARN ABOUT IS RESOLVED (2026-09-10). There were
+# once two installers: the WiX/MSI one under Revit Add-in\, and a script-based
+# one under a root Installer\ folder. The note here pointed at a README section
+# explaining the overlap; that section was never written, and by the end the root
+# folder held nothing but two built ZIPs and no source at all. It was deleted in
+# the dead-code audit, so Revit Add-in\installer\ is now the only one - hence no
+# Installer\staging\ rule below any more.
+#
+# What remains under Revit Add-in\installer\ is four DELIBERATE packaging
+# channels, not a second duplication: build-installer.ps1 (per-user MSI),
+# build-suite.ps1 (per-machine MSI + Burn bundle for an IT push), build-inno.ps1
+# (per-user Inno Setup exe) and package-for-colleague.ps1 (no-admin ZIP).
 dist/
-Installer/staging/
 *.msi
 *.wixpdb
 
