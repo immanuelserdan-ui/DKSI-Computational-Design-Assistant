@@ -9,8 +9,14 @@ public sealed class CaseworkCutResult
     public required IReadOnlyList<IReadOnlyList<string>> Rows { get; init; }
     public required IReadOnlyList<string> Warnings { get; init; }
 
-    /// <summary>Cuts actually created this pass.</summary>
+    /// <summary>Cuts actually created this pass - void cuts plus ceiling openings round casework.</summary>
     public required int CutsAdded { get; init; }
+
+    /// <summary>
+    /// Ceiling openings taken away this pass because their unit moved, was deleted or no longer
+    /// reaches the ceiling. A change to the model like a new cut, so the caller must treat it as one.
+    /// </summary>
+    public int CeilingOpeningsRemoved { get; init; }
 
     /// <summary>
     /// The walls and floors that were actually cut this pass, de-duplicated.
@@ -149,6 +155,25 @@ public sealed class CaseworkVoidCutter
             }
         }
 
+        // Same tool, second mechanism: casework whose BODY passes through a ceiling. Runs over
+        // the same scope, so a unit placed or moved gets both answers in one pass.
+        var ceilings = _settings.OpenCeilingsAroundCasework
+            ? new CaseworkCeilingCutter(_doc, _settings, _rows, _warnings)
+            : null;
+
+        if (ceilings is not null)
+        {
+            try
+            {
+                ceilings.Run(scope);
+                _cutElements.UnionWith(ceilings.ChangedCeilings);
+            }
+            catch (Exception ex)
+            {
+                _warnings.Add($"Ceiling openings round casework could not be updated: {ex.Message}");
+            }
+        }
+
         return new CaseworkCutResult
         {
             Summary =
@@ -158,11 +183,16 @@ public sealed class CaseworkVoidCutter
                 $"{_cuts} cut(s) created (walls, floors and ceilings); {_alreadyCut} already cut and left alone.",
                 $"{_noIntersection} candidate(s) refused by Revit - the voids do not reach them.",
                 $"{_notCuttable} candidate(s) skipped as not cuttable with a void.",
+                ceilings is null
+                    ? "Ceiling openings round casework: off."
+                    : $"Ceiling openings round casework: {ceilings.Created} created, {ceilings.Removed} removed, " +
+                      $"{ceilings.Kept} already correct, {ceilings.Refused} refused.",
                 $"{_warnings.Count} warning(s).",
             ],
             Rows = _rows,
             Warnings = _warnings,
-            CutsAdded = _cuts,
+            CutsAdded = _cuts + (ceilings?.Created ?? 0),
+            CeilingOpeningsRemoved = ceilings?.Removed ?? 0,
             CutElementIds = [.. _cutElements],
             NoIntersection = _noIntersection,
             AlreadyCut = _alreadyCut,

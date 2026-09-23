@@ -68,6 +68,9 @@ internal static class CaseworkCutAutomation
 
         /// <summary>Mirror of <see cref="CaseworkSettings.ReachMm"/>.</summary>
         public double ReachMm { get; set; } = 300;
+
+        /// <summary>Mirror of <see cref="CaseworkSettings.OpenCeilingsAroundCasework"/>.</summary>
+        public bool OpenCeilingsAroundCasework { get; set; } = true;
     }
 
     private static readonly string SettingsPath = Path.Combine(
@@ -99,6 +102,7 @@ internal static class CaseworkCutAutomation
     {
         AllCasework = _options.AllCasework,
         ReachMm = _options.ReachMm,
+        OpenCeilingsAroundCasework = _options.OpenCeilingsAroundCasework,
     };
 
     // ---------------------------------------------------------------- dirty tracking
@@ -270,13 +274,15 @@ internal static class CaseworkCutAutomation
                 swallowWarnings: true);
 
             var cuts = result!.CutsAdded;
+            var removed = result.CeilingOpeningsRemoved;
 
             // Logged at Info only when it did something. A scoped pass runs on every fitting
             // the user nudges, and a line per nudge saying "0 cuts" is how a log stops being
             // read at all.
-            if (cuts > 0)
+            if (cuts > 0 || removed > 0)
             {
-                Log.Info($"Casework automation: {cuts} cut(s) created (walls/floors/ceilings) because {reason}. " +
+                Log.Info($"Casework automation: {cuts} cut(s) created (walls/floors/ceilings, incl. ceiling " +
+                         $"openings round casework), {removed} ceiling opening(s) removed, because {reason}. " +
                          $"{result.FittingsExamined} fitting(s) examined in {watch.ElapsedMilliseconds} ms " +
                          $"({result.AlreadyCut} already cut, {result.NoIntersection} out of reach).");
             }
