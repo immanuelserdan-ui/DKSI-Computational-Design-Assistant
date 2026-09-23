@@ -39,8 +39,14 @@ public sealed class CutCaseworkVoidsCommand : CommandBase
                 "accepts the ones the family's voids genuinely reach and refuses the rest. Host walls " +
                 "are already cut when the fitting is placed and are left alone, and an element already " +
                 "cut by that fitting is skipped - so this is safe to re-run as often as you like.\n\n" +
-                "Nothing is ever un-cut. Put '" + settings.SkipComment + "' in an instance's Comments " +
-                "to have it ignored.",
+                "Void cuts are never removed." +
+                (settings.OpenCeilingsAroundCasework
+                    ? "\n\nAlso: any casework unit whose body passes through a ceiling gets an opening " +
+                      "in that ceiling, shaped to the unit. Those openings are this tool's own - they " +
+                      "move with the unit and are removed when it is deleted or no longer reaches the " +
+                      "ceiling."
+                    : string.Empty) +
+                "\n\nPut '" + settings.SkipComment + "' in an instance's Comments to have it ignored.",
             CommonButtons = TaskDialogCommonButtons.Cancel,
             DefaultButton = TaskDialogResult.Cancel,
         };

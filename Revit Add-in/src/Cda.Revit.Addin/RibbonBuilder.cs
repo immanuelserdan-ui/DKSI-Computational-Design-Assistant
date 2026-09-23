@@ -165,8 +165,12 @@ internal static class RibbonBuilder
                              "reach up into a ceiling above, are the ones nobody gets for free. Each " +
                              "nearby wall, floor or ceiling is offered to Revit and only the ones the " +
                              "voids genuinely reach are cut, so a dry run and the real run can never " +
-                             "disagree. Never removes a cut. Safe to re-run: elements already cut by " +
-                             "that fitting are left alone, and the whole run is one Ctrl+Z.",
+                             "disagree. Never removes a void cut. Safe to re-run: elements already cut " +
+                             "by that fitting are left alone, and the whole run is one Ctrl+Z. " +
+                             "Separately, any casework unit whose body passes through a ceiling - a " +
+                             "tall unit under a low ceiling - gets an opening in that ceiling shaped " +
+                             "to the unit, which follows the unit when it moves and is removed when " +
+                             "it is deleted. That needs no void in the family.",
             icon: "material",
             availability: typeof(ProjectDocumentAvailability));
 

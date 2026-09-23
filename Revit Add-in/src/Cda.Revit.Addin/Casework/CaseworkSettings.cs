@@ -96,6 +96,26 @@ public sealed class CaseworkSettings
     public bool CutHost { get; init; }
 
     /// <summary>
+    /// Cut an opening in any ceiling a casework unit's own BODY passes through - a tall unit
+    /// standing higher than a low ceiling, for instance. Separate from the void cutting above:
+    /// that needs a void authored in the family, this needs nothing but the overlap, and it
+    /// applies to every casework family, not only the ones named <see cref="NameTerms"/>.
+    ///
+    /// AN OPENING, BECAUSE NOTHING ELSE IS ALLOWED. Revit's solid-solid cut works only between
+    /// family instances ("a beam cannot cut a wall, as the wall is not a family instance"), and
+    /// a ceiling is not one. So the cut is a ceiling Opening shaped to the unit, stamped as this
+    /// tool's own, and kept in step with the unit: moved when it moves, removed when it is
+    /// deleted or no longer reaches the ceiling. See <see cref="CaseworkCeilingCutter"/>.
+    /// </summary>
+    public bool OpenCeilingsAroundCasework { get; init; } = true;
+
+    /// <summary>
+    /// Overlap smaller than this, in any direction, is modelling noise and cuts nothing - a unit
+    /// whose top merely touches the ceiling's underside, or grazes its edge.
+    /// </summary>
+    public double CeilingOverlapMinimumMm { get; init; } = 5;
+
+    /// <summary>
     /// Put this in an instance's Comments to have the automation leave it alone entirely.
     /// The same escape hatch the opening automation uses, spelled for this tool.
     /// </summary>
