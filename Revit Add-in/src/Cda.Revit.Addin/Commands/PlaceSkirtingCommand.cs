@@ -37,6 +37,11 @@ public sealed class PlaceSkirtingCommand : CommandBase
                       "'this room has been designed', and it usually excludes more rooms than the " +
                       "name rule does."
                     : string.Empty) + "\n\n" +
+                (settings.NoSkirtingFinishSuffix.Length == 0
+                    ? string.Empty
+                    : "Where the wall's paint at board height has a code ending in " +
+                      $"'{settings.NoSkirtingFinishSuffix}' - tile, such as VBF or GBF, read from the " +
+                      "material's code or the end of its name ('Bad-VBF') - that stretch gets no board.\n\n") +
                 "Doors, windows, wall openings and casework break the run: each wall is placed as " +
                 "several shorter pieces rather than one board with holes voided out of it, so the " +
                 "lengths in a schedule are the lengths you actually buy.\n\n" +

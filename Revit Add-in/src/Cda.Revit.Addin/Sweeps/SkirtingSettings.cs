@@ -38,6 +38,18 @@ public sealed class SkirtingSettings
     public string[] ExcludedRoomKeywords { get; init; } = [];
 
     /// <summary>
+    /// A wall stretch whose PAINT at board height has a code ending in this gets no board -
+    /// 'F' is tile (VBF, GBF), and a tiled wall runs to the floor with no skirting. Read from
+    /// the material's Code/Mark/Keynote or from its name ('Bad-VBF'); see FinishCodeRule.
+    ///
+    /// Tested along the run, not per wall, so a wall tiled on one stretch and painted on the
+    /// next keeps its board on the painted part, and a splashback above a worktop - tiled, but
+    /// nowhere near the floor - changes nothing. Only the Paint tool is read: tile modelled as
+    /// a wall-type layer or as a separate lining wall is not seen. Empty switches it off.
+    /// </summary>
+    public string NoSkirtingFinishSuffix { get; init; } = "F";
+
+    /// <summary>
     /// Rooms whose name STARTS with this are outdoors, and get no skirting on any wall.
     ///
     /// These are the placeholder rooms drawn with room separation lines to enclose a

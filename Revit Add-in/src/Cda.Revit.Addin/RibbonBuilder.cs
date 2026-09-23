@@ -136,7 +136,9 @@ internal static class RibbonBuilder
             // skipped and that re-runs left existing boards alone - both long after the
             // exclusion list was emptied and top-up was replaced by Regenerate.
             longDescription: "Every room gets skirting, wet rooms included, except 'Udvendig' " +
-                             "exterior placeholders and rooms with no Department. Boards are cut " +
+                             "exterior placeholders and rooms with no Department, and wall " +
+                             "stretches whose paint at floor level is a tile code ending in 'F' " +
+                             "(VBF, GBF). Boards are cut " +
                              "back at doors, windows and openings that reach the floor, around " +
                              "door frames, and where casework stands against the wall; radiators " +
                              "and sockets never break a board. Floor-reaching openings also get " +

@@ -979,6 +979,18 @@ public sealed class SkirtingGenerator
             $"{_mePassedThrough} M&E element(s) passed through rather than cut around.");
 
         _report.Add(
+            !FinishRuleOn
+                ? "NO-SKIRTING FINISHES: rule off (NoSkirtingFinishSuffix is empty)."
+                : $"NO-SKIRTING FINISHES: {_finishStretches} wall stretch(es), " +
+                  $"{Measure.ToMetres(_finishLength):0.00} m, and {_revealsFinishSkipped} jamb(s) got no " +
+                  $"board because the paint at board height is coded ...{_settings.NoSkirtingFinishSuffix} " +
+                  "(tile runs to the floor). Read from the Paint tool only, by the material's " +
+                  "Code/Mark/Keynote or the code at the end of its name" +
+                  (_finishMaterials.Count == 0
+                      ? " - none found at board height."
+                      : $": {string.Join(", ", _finishMaterials.Select(m => $"'{m}'"))}."));
+
+        _report.Add(
             $"ON THIS RUN: {_openingsElsewhere} insert(s) hosted in a wall were NOT measured " +
             "against a run because they sit on a different room's stretch of the same wall - " +
             "walls shared by several rooms host every one of those rooms' doors, and Curve.Project " +
@@ -1543,6 +1555,23 @@ public sealed class SkirtingGenerator
         if (_settings.BreakAtCasework) bulky.AddRange(CaseworkSpans(lifted, baseZ));
 
         var whole = new Span(lifted.GetEndParameter(0), lifted.GetEndParameter(1));
+
+        // TILE RUNS TO THE FLOOR. Where the paint at board height is a no-skirting finish, the
+        // stretch is subtracted like any precise blocker: exactly, with no joinery bridge.
+        var finishes = new SortedSet<string>(StringComparer.Ordinal);
+        var tiled = FinishSkipSpans(run.Host, lifted, baseZ, finishes);
+
+        if (tiled.Count > 0)
+        {
+            precise.AddRange(tiled);
+            _finishStretches += tiled.Count;
+            _finishLength += tiled.Sum(s => Math.Min(s.End, whole.End) - Math.Max(s.Start, whole.Start));
+            _finishMaterials.UnionWith(finishes);
+
+            var label = $"finish {string.Join(", ", finishes.Select(f => $"'{f}'"))} on host {run.Host.Id.Value}";
+            _runBlockers.Add(label);
+            if (_blockedBy.Count <= 200) _blockedBy.Add($"no-skirting finish: {label}");
+        }
 
         var merged = SkirtingRun.Coalesce(precise, _settings.MinimumRun);
         merged.AddRange(SkirtingRun.Coalesce(bulky, _settings.BlockerBridge));
@@ -2124,6 +2153,31 @@ public sealed class SkirtingGenerator
                 }
 
                 if (bare.Count > 1 || bare[0].Length < run.Length - 1e-9) _revealsPartlyLined++;
+
+                // A tiled jamb takes no board, exactly like the tiled wall it returns from.
+                if (FinishRuleOn)
+                {
+                    var finishes = new SortedSet<string>(StringComparer.Ordinal);
+                    var kept = bare.SelectMany(part => WithoutSkippedFinish(part, wall, baseZ, finishes)).ToList();
+
+                    _finishMaterials.UnionWith(finishes);
+
+                    if (kept.Count == 0)
+                    {
+                        // Same claim as a fully lined jamb: the room on the other side would
+                        // read the same paint and reach the same answer.
+                        _revealsFinishSkipped++;
+                        done.Add(key);
+
+                        RecordJamb(insert, jamb, run.Length,
+                            $"no board - the jamb is finished in {string.Join(", ", finishes.Select(f => $"'{f}'"))}, " +
+                            $"coded ...{_settings.NoSkirtingFinishSuffix}, which takes no skirting");
+
+                        continue;
+                    }
+
+                    bare = kept;
+                }
 
                 var placedAny = false;
 
@@ -4233,6 +4287,198 @@ public sealed class SkirtingGenerator
             Record(unit, "casework");
             yield return blocked;
         }
+    }
+
+    // ------------------------------------------------------ finishes that take no board
+
+    /// <summary>Painted surfaces whose finish code says "no skirting", per host. See SkipSurfaces.</summary>
+    private readonly Dictionary<long, List<(Face Surface, string Material)>> _skipSurfaces = [];
+
+    private int _finishStretches;
+    private double _finishLength;
+    private int _revealsFinishSkipped;
+    private readonly SortedSet<string> _finishMaterials = new(StringComparer.Ordinal);
+
+    /// <summary>~25 mm between samples; boundaries are then refined to well under a millimetre.</summary>
+    private const double FinishSampleStep = 0.082;
+
+    /// <summary>How far off a painted surface a sample may sit, ~25 mm - clear of the far face of any partition.</summary>
+    private const double FinishFaceReach = 0.082;
+
+    private bool FinishRuleOn => !string.IsNullOrEmpty(_settings.NoSkirtingFinishSuffix);
+
+    /// <summary>
+    /// The painted surfaces on <paramref name="host"/> whose finish takes no skirting, read once
+    /// per host. Almost every host has none, so the per-sample work below usually never runs.
+    /// </summary>
+    private List<(Face Surface, string Material)> SkipSurfaces(Element host)
+    {
+        if (_skipSurfaces.TryGetValue(host.Id.Value, out var cached)) return cached;
+
+        var found = new List<(Face, string)>();
+
+        try
+        {
+            foreach (var (surface, materialId) in SplitFaceRegions.PaintedSurfaces(_doc, host))
+            {
+                var (name, code, _) = MaterialKey.Of(materialId, painted: true).Describe(_doc);
+
+                if (FinishCodeRule.TakesNoSkirting(code, name, _settings.NoSkirtingFinishSuffix))
+                    found.Add((surface, name));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unreadable paint skips nothing - a board where tile might be beats a missing one
+            // on a wall that was simply hard to read.
+            Log.Debug($"Paint unreadable on host {host.Id.Value}: {ex.Message}");
+        }
+
+        _skipSurfaces[host.Id.Value] = found;
+        return found;
+    }
+
+    /// <summary>
+    /// The stretches of <paramref name="axis"/> where the paint at board height takes no board,
+    /// in the axis's own parameters. <paramref name="materials"/> collects what was found.
+    ///
+    /// SAMPLED ALONG THE RUN, NOT DECIDED PER WALL. Tile is often only part of a face - a split
+    /// region behind a bath, a tiled stretch round a shower - so the answer changes along the
+    /// wall. Each change is then bisected down to a fraction of a millimetre, so the board stops
+    /// where the tile does rather than somewhere within the sample spacing.
+    /// </summary>
+    private List<Span> FinishSkipSpans(Element host, Curve axis, double baseZ, ISet<string> materials)
+    {
+        var spans = new List<Span>();
+        if (!FinishRuleOn) return spans;
+
+        var surfaces = SkipSurfaces(host);
+        if (surfaces.Count == 0) return spans;
+
+        var start = axis.GetEndParameter(0);
+        var end = axis.GetEndParameter(1);
+        if (axis.Length < 1e-6) return spans;
+
+        var z = baseZ + (BoardBand / 2.0);
+
+        string? At(double t)
+        {
+            try
+            {
+                var point = axis.Evaluate(t, false);
+                return SkipSurfaceAt(surfaces, new XYZ(point.X, point.Y, z));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        double Edge(double from, double to, bool skipAtFrom)
+        {
+            for (var i = 0; i < 12; i++)
+            {
+                var mid = (from + to) / 2.0;
+                if ((At(mid) is not null) == skipAtFrom) from = mid;
+                else to = mid;
+            }
+
+            return (from + to) / 2.0;
+        }
+
+        var steps = Math.Max(2, (int)Math.Ceiling(axis.Length / FinishSampleStep));
+        var previousT = start;
+        var previous = At(start);
+        double? openedAt = previous is not null ? start : null;
+
+        if (previous is not null) materials.Add(previous);
+
+        for (var i = 1; i <= steps; i++)
+        {
+            var t = start + ((end - start) * i / steps);
+            var current = At(t);
+
+            if (current is not null) materials.Add(current);
+
+            if ((current is null) != (previous is null))
+            {
+                var edge = Edge(previousT, t, previous is not null);
+
+                if (current is not null)
+                {
+                    openedAt = edge;
+                }
+                else if (openedAt is { } opened)
+                {
+                    spans.Add(new Span(opened, edge));
+                    openedAt = null;
+                }
+            }
+
+            previous = current;
+            previousT = t;
+        }
+
+        if (openedAt is { } stillOpen) spans.Add(new Span(stillOpen, end));
+
+        return spans;
+    }
+
+    /// <summary>The nearest skip surface a point lies on, or null. Region boundaries decide, not the parent plane.</summary>
+    private static string? SkipSurfaceAt(List<(Face Surface, string Material)> surfaces, XYZ point)
+    {
+        string? best = null;
+        var nearest = double.MaxValue;
+
+        foreach (var (surface, material) in surfaces)
+        {
+            try
+            {
+                var hit = surface.Project(point);
+                if (hit is null || hit.Distance > FinishFaceReach || hit.Distance >= nearest) continue;
+                if (!surface.IsInside(hit.UVPoint)) continue;
+
+                nearest = hit.Distance;
+                best = material;
+            }
+            catch
+            {
+                // Degenerate surface; the next may answer.
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// What is left of <paramref name="piece"/> once the stretches finished in a no-skirting
+    /// material are taken out. Used for jamb boards, whose curves are not planned as spans.
+    /// </summary>
+    private List<Curve> WithoutSkippedFinish(Curve piece, Element host, double baseZ, ISet<string> materials)
+    {
+        var skip = FinishSkipSpans(host, piece, baseZ, materials);
+        if (skip.Count == 0) return [piece];
+
+        var kept = new List<Curve>();
+        var whole = new Span(piece.GetEndParameter(0), piece.GetEndParameter(1));
+
+        foreach (var span in SkirtingRun.Subtract(whole, skip))
+        {
+            if (span.End - span.Start < _settings.MinimumRun) continue;
+
+            try
+            {
+                var part = piece.Clone();
+                part.MakeBound(span.Start, span.End);
+                kept.Add(part);
+            }
+            catch
+            {
+                // A stretch that cannot be bounded is dropped rather than placed whole.
+            }
+        }
+
+        return kept;
     }
 
     // --------------------------------------------------------------- resolution
