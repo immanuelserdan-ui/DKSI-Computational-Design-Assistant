@@ -84,6 +84,20 @@ internal static class FinishAutomation
         public bool RecalculateOnSave { get; set; } = true;
 
         /// <summary>
+        /// Run the DKSI finish-area calculation (RoomFinishCalculator): Wall/Floor/Ceiling
+        /// Finish and Paint Area, Ceiling Area Source, Net Floor Area, the Rum/Rum nr stamps on
+        /// hosts, the 'Finish Area Stale' watcher, and auto-binding of those parameters.
+        ///
+        /// OFF BY DEFAULT since 2026-09-24: the office retired those figures in favour of the
+        /// Painted Surface Area takeoff, which reads none of them. With it off, every trigger
+        /// that used to run the calculation runs ROOM PREPARATION instead - volumes on and
+        /// upper limits raised model-wide, exactly as the calculation did first - because the
+        /// takeoff DOES depend on that: it falls back to the room upper limit and places
+        /// carriers with IsPointInRoom. Set true to bring the calculation back unchanged.
+        /// </summary>
+        public bool CalculateFinishAreas { get; set; }
+
+        /// <summary>
         /// Fix room upper limits while the user works, without waiting for a save.
         /// Safe to leave on: the adjustment is a bounding-box query over a handful of
         /// rooms, not the finish measurement.
@@ -337,7 +351,11 @@ internal static class FinishAutomation
 
     private static void AddTriggers()
     {
-        if (_updater is null) return;
+        // The updater exists to set 'Finish Area Stale' for the calculation. With the
+        // calculation off it has no job, and firing inside every user transaction on walls,
+        // floors, ceilings, openings, casework and generic models would be pure cost. Rooms
+        // still get queued for room preparation - OnDocumentChanged queues the same rooms.
+        if (_updater is null || !_options.CalculateFinishAreas) return;
 
         var id = _updater.GetUpdaterId();
         UpdaterRegistry.RemoveAllTriggers(id);
@@ -434,7 +452,9 @@ internal static class FinishAutomation
     public static bool IsDirty(Document doc) =>
         Flags.For(doc).FinishDirty ||
         (DirtyFinishRooms.Has(doc) && DirtyFinishRooms.For(doc).Count > 0) ||
-        StaleRooms(doc).Count > 0;
+        // Only the calculation clears 'Finish Area Stale'. Counted with it off, a room left
+        // flagged would read as owed forever and re-run room preparation on every flush.
+        (_options.CalculateFinishAreas && StaleRooms(doc).Count > 0);
 
     /// <summary>
     /// Rooms flagged for recalculation.
@@ -1270,6 +1290,12 @@ internal static class FinishAutomation
             var watch = Stopwatch.StartNew();
             var settings = new FinishSettings();
 
+            if (!_options.CalculateFinishAreas)
+            {
+                PrepareRooms(doc, settings, reason, watch);
+                return;
+            }
+
             // Bind anything missing first, in its own transaction. This is what makes a brand
             // new project work without anyone knowing a setup step exists: the first
             // automatic pass creates the parameters it needs and then fills them in.
@@ -1367,5 +1393,46 @@ internal static class FinishAutomation
             // trade. The flag stays set so the next trigger tries again.
             Log.Error($"Finish automation: full pass failed ({reason}); the model was left alone.", ex);
         }
+    }
+
+    /// <summary>
+    /// What remains of the full pass with the finish calculation retired: the two room
+    /// corrections the calculation made FIRST, identical calls in identical order - volume
+    /// computation on, then every room's upper limit raised above what bounds it, model-wide.
+    ///
+    /// KEPT BECAUSE THE PAINTED SURFACE AREA TAKEOFF DEPENDS ON IT, not the calculation. It
+    /// takes a room's upper limit as the top where no ceiling, slab or roof is found, and it
+    /// assigns carriers with IsPointInRoom, which reads the room's volume. Dropping this with
+    /// the calculation would let those drift and move the takeoff's numbers.
+    ///
+    /// NOT RoomBoundaryAdjuster.Run: that also LOWERS limits, which the calculation
+    /// deliberately never did automatically after it damaged a live model (see the note at
+    /// its AdjustUpperLimits call). Raise-only, exactly as before.
+    ///
+    /// Whole model, like the calculation's own call, so every room it may have missed is
+    /// covered and the banked dirty set can be cleared outright.
+    /// </summary>
+    private static void PrepareRooms(Document doc, FinishSettings settings, string reason, Stopwatch watch)
+    {
+        var notes = new List<string>();
+        var volumes = false;
+        var raised = 0;
+
+        WithoutSelfTriggering(() =>
+            Transactions.Run(doc, TransactionPrefix + "prepare rooms", () =>
+            {
+                var adjuster = new RoomBoundaryAdjuster(doc, settings);
+                volumes = adjuster.EnsureVolumes(notes);
+                raised = adjuster.AdjustUpperLimits(notes);
+            }, swallowWarnings: true));
+
+        if (DirtyFinishRooms.Has(doc)) DirtyFinishRooms.For(doc).Clear();
+        Flags.For(doc).FinishDirty = false;
+
+        Log.Info($"Finish automation: rooms prepared because {reason} (finish calculation off): " +
+                 $"{raised} upper limit(s) raised{(volumes ? ", volume computation switched on" : string.Empty)}. " +
+                 $"Took {watch.ElapsedMilliseconds} ms.");
+
+        foreach (var note in notes.Take(10)) Log.Debug("Room preparation: " + note);
     }
 }

@@ -27,8 +27,8 @@ namespace Cda.Revit.Addin;
 /// would have been stranded. Now that each command is its own top-level button, each simply
 /// carries its own availability and Time Tracking carries none. Nothing to get wrong.
 ///
-/// THREE BUTTONS COME FROM ANOTHER PRODUCT. Painted Surface Area, Painted Area (project wide)
-/// and Show / Hide Paint Areas are commands in the standalone Painted Material Takeoff
+/// TWO BUTTONS COME FROM ANOTHER PRODUCT. Painted Surface Area and Show / Hide Paint Areas are
+/// commands in the standalone Painted Material Takeoff
 /// assembly, not in this one. They appear here so there is one tab to learn instead of two,
 /// and they are omitted silently on a machine where that product is not installed. See
 /// PaintTakeoffPath below for how they are addressed and what happens when it is absent.
@@ -46,13 +46,13 @@ internal static class RibbonBuilder
     /// The standalone Painted Material Takeoff assembly, or null when it is not installed.
     ///
     /// That "assembly path, class name" pair is why this works at all: a PushButton can name
-    /// ANY assembly on disk, not only the one building the ribbon. So the three paint tools
+    /// ANY assembly on disk, not only the one building the ribbon. So the two paint tools
     /// can sit on this tab without their code being copied into this project - which matters,
     /// because there is no PaintTakeoff source tree to copy from.
     ///
     /// NULL IS AN ORDINARY OUTCOME, not an error. Painted Material Takeoff is a separate
     /// product with its own installer; plenty of machines will have DKSI Revit Tools and not
-    /// it. The three buttons are then simply absent, and the rest of the tab behaves exactly
+    /// it. The two buttons are then simply absent, and the rest of the tab behaves exactly
     /// as before. Adding buttons that throw "file not found" on click would be worse than a
     /// shorter panel.
     /// </summary>
@@ -409,7 +409,7 @@ internal static class RibbonBuilder
         // no note at all. If you want them back they have to be written again, not re-wired.
         //
         // THIS ADD-IN'S OWN FINISH AND PAINT COMMANDS STAY OFF, and that is still deliberate.
-        // The tab carries the STANDALONE product's three paint tools instead - see
+        // The tab carries the STANDALONE product's two paint tools instead - see
         // AddPaintTakeoffButtons. The two sets are not the same code and not interchangeable,
         // so it is worth being exact about what is and is not reachable:
         //
@@ -479,36 +479,16 @@ internal static class RibbonBuilder
                              "rebuilds the three '@V03' surface schedules straight afterwards, in " +
                              "the same undo step - so 'Repair Surface Schedules' is a fallback for " +
                              "a damaged view, not a second step you have to remember. \n\nNeeds " +
-                             "rooms placed; if the model has none yet, use 'Paint Area (no rooms)'. " +
-                             "From the standalone Painted Material Takeoff product, not from DKSI " +
-                             "Revit Tools.",
+                             "rooms placed. From the standalone Painted Material Takeoff product, " +
+                             "not from DKSI Revit Tools.",
             icon: "takeoff",
             availabilityClassName: availability);
 
-        // NO DKSI EQUIVALENT, and that is the main reason these buttons point at the other
-        // product's assembly rather than being replaced by this one's own paint commands.
-        // DKSI's takeoff is room-centric throughout; nothing in it writes a per-element figure
-        // that stands on its own when a model has no rooms placed.
-        AddButton(panel,
-            name: "CdaPaintedAreaProjectWide",
-            // TEXT NAMES THE CONDITION, NOT THE SCOPE. "(project wide)" described how it
-            // measures and told nobody when to press it, so it read as a bigger version of
-            // 'Painted Surface Area' and invited the question of why both exist. The thing that
-            // actually separates them is the prerequisite: this one is the ONLY paint tool that
-            // works before a room plan exists.
-            text: "Paint Area\n(no rooms)",
-            assemblyPath: PaintTakeoffPath,
-            className: "PaintedMaterialTakeoff.ElementPaintAreaCommand",
-            tooltip: "For a model with NO rooms placed. Writes the \"Painted Area\" parameter on " +
-                     "each wall, floor, ceiling and roof - per element, not per room.",
-            longDescription: "NOT a project-wide version of 'Painted Surface Area' - a different " +
-                             "measurement with a different prerequisite. This one is element-centric " +
-                             "and needs no rooms, so it is what you reach for on a model with no " +
-                             "room plan yet. \n\nIt produces NO room breakdown and places no " +
-                             "carriers, so it feeds none of the surface schedules. Once rooms exist, " +
-                             "'Painted Surface Area' is the one you want.",
-            icon: "finish",
-            availabilityClassName: availability);
+        // NO 'PAINT AREA (NO ROOMS)' BUTTON, since 2026-09-24. It pointed at the takeoff's
+        // ElementPaintAreaCommand, which is not part of the office workflow and whose figure
+        // ('Painted Area') nothing reads. Its value-only write also touched every wall, floor,
+        // ceiling and roof, setting off whole-model DKSI passes for nothing. The command still
+        // exists in PaintedMaterialTakeoff.dll; one AddButton here brings it back.
 
         AddButton(panel,
             name: "CdaShowHidePaintAreas",
@@ -537,7 +517,7 @@ internal static class RibbonBuilder
     ///      anything a single user has lying around.
     ///
     ///   2. The user's own add-ins folder, BESIDE THIS ASSEMBLY. The per-user installer ships
-    ///      PaintedMaterialTakeoff.dll here so the three paint buttons work on a workstation
+    ///      PaintedMaterialTakeoff.dll here so the two paint buttons work on a workstation
     ///      where nobody had administrator rights to install the separate product. Nothing
     ///      about that copy needs a manifest: these buttons name the assembly by path, and
     ///      Revit only needs a manifest to build a product's OWN ribbon.
@@ -547,7 +527,7 @@ internal static class RibbonBuilder
     ///      and why its ribbon never appeared. The path stays in the list anyway because THESE
     ///      buttons are not affected by that rule: Revit rejects the stale MANIFEST, while the
     ///      DLL beside it is still perfectly loadable by path. So on a machine still running
-    ///      1.0.1 these three buttons work here even though the product's own tab is missing.
+    ///      1.0.1 these two buttons work here even though the product's own tab is missing.
     ///
     /// See "installer/PaintTakeoff/README.md" for the whole account of the folder move.
     /// </summary>
@@ -603,13 +583,13 @@ internal static class RibbonBuilder
             }
             else
             {
-                Log.Info($"Painted Material Takeoff found at '{path}'; adding its three tools to the ribbon.");
+                Log.Info($"Painted Material Takeoff found at '{path}'; adding its two tools to the ribbon.");
             }
 
             return path;
         }
 
-        Log.Info("Painted Material Takeoff is not installed; its three buttons are omitted from the ribbon.");
+        Log.Info("Painted Material Takeoff is not installed; its two buttons are omitted from the ribbon.");
         return null;
     }
 
