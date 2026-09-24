@@ -495,13 +495,17 @@ internal static class RibbonBuilder
             text: "Show / Hide\nPaint Areas",
             assemblyPath: PaintTakeoffPath,
             className: "PaintedMaterialTakeoff.ToggleCarriersCommand",
-            tooltip: "Shows or hides the takeoff's paint carriers in the active view. Shift+click: every view.",
-            longDescription: "The takeoff places carrier geometry to hold its results. This toggles " +
-                             "that geometry's visibility with a view filter - useful for checking " +
-                             "what was measured, and for getting it out of the way afterwards.\n\n" +
+            tooltip: "Cycles the active view: only the paint carriers -> carriers hidden -> everything. " +
+                     "Shift+click: every view.",
+            longDescription: "The takeoff places carrier geometry to hold its results, each shaded in " +
+                             "its paint material's colour. Each click moves the view one step: " +
+                             "1) only the carriers, the rest of the model hidden; 2) the carriers " +
+                             "hidden, the rest shown; 3) back to normal. Annotation stays throughout.\n\n" +
+                             "Works through view filters, so 'normal' is the view exactly as it was - " +
+                             "categories you had switched off stay off.\n\n" +
                              "Shift+click applies it to every view at once. Where a view template " +
                              "controls a view's filters, you are asked first: change only that view " +
-                             "(hidden element by element, template untouched) or change the template " +
+                             "(Temporary Hide/Isolate, template untouched) or change the template " +
                              "and every view that uses it. Templates are never changed without asking.",
             icon: "highlight",
             availabilityClassName: availability);
