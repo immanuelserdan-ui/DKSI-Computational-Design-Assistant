@@ -2760,11 +2760,21 @@ namespace PaintedMaterialTakeoff.Export
 		/// <summary>Carrier shapes that kept the category's grey because their rebuild with the paint material did not hold - see CarrierShading.</summary>
 		public int Uncoloured { get; private set; }
 
-		/// <summary>Carrier shapes coloured on every side because neither side, or both, looked into the room - see CarrierShading.RoomFacing.</summary>
+		/// <summary>Carrier shapes coloured on every side because no test could tell their painted side - see CarrierShading.PaintedSide.</summary>
 		public int Undecided { get; private set; }
 
 		/// <summary>How far in front of a carrier face the room is looked for. Beyond the plate's own thickness, so a probe from the back face lands in the wall behind it, not in the room.</summary>
 		private const double RoomProbeFt = 0.03;
+
+		/// <summary>
+		/// How far in front of a carrier face the painted element is looked for. Short on purpose:
+		/// the back face can sit a plate's thickness (5 mm) inside the element already, and the probe
+		/// must still land inside a thin one - a 12.5 mm ceiling board - rather than pass through it.
+		/// </summary>
+		private const double HostProbeFt = 0.01;
+
+		/// <summary>Each host element's solids, read once per run however many carriers it has.</summary>
+		private readonly Dictionary<long, List<Solid>> _hostSolids = new Dictionary<long, List<Solid>>();
 
 		public ElementId? TypeId { get; private set; }
 
@@ -2816,7 +2826,7 @@ namespace PaintedMaterialTakeoff.Export
 					ElementId elementId = (record.MaterialId != ElementId.InvalidElementId)
 						? record.MaterialId
 						: (_s.DebugRedHatch ? DebugMaterialId() : ElementId.InvalidElementId);
-					directShape.SetShape(CarrierShading.WithMaterial(record.Shape, elementId, FacesRoom(record), out int uncoloured, out int undecided));
+					directShape.SetShape(CarrierShading.WithMaterial(record.Shape, elementId, SideTests(record), out int uncoloured, out int undecided));
 					Uncoloured += uncoloured;
 					Undecided += undecided;
 					if (elementId != ElementId.InvalidElementId)
@@ -2881,8 +2891,101 @@ namespace PaintedMaterialTakeoff.Export
 			}
 			if (Undecided > 0)
 			{
-				Log.Add($"{Undecided} carrier shape(s) are coloured on every side: neither side, or both, looked into their room (openings' jambs, unplaced rooms), so the painted side could not be told apart.");
+				Log.Add($"{Undecided} carrier shape(s) are coloured on every side: neither the painted element nor the room could tell their painted side apart.");
 			}
+		}
+
+		/// <summary>
+		/// How to tell a carrier's painted side, in the order to try: the painted element first,
+		/// then the room.
+		///
+		/// THE ELEMENT FIRST, BECAUSE IT DOES NOT CARE ABOUT ROOM BOUNDING. The back of a carrier
+		/// always faces into the element whose face was painted - that is where the plate came
+		/// from - and the painted side never does. The room cannot always say the same: a hanging
+		/// wall is Room Bounding by office convention, so the room's boundary runs around its
+		/// footprint and the space under it is not in the room. The underside's probe then misses
+		/// the room on both sides, and the carrier used to be coloured all over. A jamb facing into
+		/// an opening misses the room the same way. The element answers both.
+		///
+		/// The room is kept behind it for carriers whose element cannot answer - a host in a link,
+		/// or one that no longer exists.
+		/// </summary>
+		private List<Func<XYZ, XYZ, bool>> SideTests(PaintRecord record)
+		{
+			List<Func<XYZ, XYZ, bool>> tests = new List<Func<XYZ, XYZ, bool>>();
+
+			List<Solid> host = HostSolids(record.ElementId);
+			if (host.Count > 0)
+			{
+				tests.Add((point, normal) => !InsideAny(host, point + normal * HostProbeFt));
+			}
+
+			Func<XYZ, XYZ, bool>? room = FacesRoom(record);
+			if (room != null)
+			{
+				tests.Add(room);
+			}
+
+			return tests;
+		}
+
+		private List<Solid> HostSolids(ElementId id)
+		{
+			if (id == ElementId.InvalidElementId) return new List<Solid>();
+			if (_hostSolids.TryGetValue(id.Value, out List<Solid>? cached)) return cached;
+
+			List<Solid> solids = new List<Solid>();
+			try
+			{
+				GeometryElement? geometry = _doc.GetElement(id)?.get_Geometry(new Options { DetailLevel = ViewDetailLevel.Fine });
+				if (geometry != null) CollectSolids(geometry, solids);
+			}
+			catch
+			{
+				// An element whose geometry cannot be read leaves the decision to the room.
+			}
+
+			_hostSolids[id.Value] = solids;
+			return solids;
+		}
+
+		private static void CollectSolids(GeometryElement geometry, List<Solid> into)
+		{
+			foreach (GeometryObject item in geometry)
+			{
+				if (item is Solid solid && solid.Volume > 0.0)
+				{
+					into.Add(solid);
+				}
+				else if (item is GeometryInstance instance)
+				{
+					CollectSolids(instance.GetInstanceGeometry(), into);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Whether a point lies inside any of the solids. Revit has no point-in-solid call, so a
+		/// very short line starting at the point is intersected instead: some of it inside means
+		/// the point is inside.
+		/// </summary>
+		private static bool InsideAny(List<Solid> solids, XYZ point)
+		{
+			Line line = Line.CreateBound(point, point + new XYZ(0.577, 0.577, 0.577) * 0.003);
+			SolidCurveIntersectionOptions options = new SolidCurveIntersectionOptions { ResultType = SolidCurveIntersectionMode.CurveSegmentsInside };
+
+			foreach (Solid solid in solids)
+			{
+				try
+				{
+					if (solid.IntersectWithCurve(line, options).SegmentCount > 0) return true;
+				}
+				catch
+				{
+					// A solid that cannot be intersected says nothing either way.
+				}
+			}
+			return false;
 		}
 
 		/// <summary>
@@ -3721,15 +3824,16 @@ namespace PaintedMaterialTakeoff.Core
 		/// <summary>Relative volume difference a rebuilt solid may have and still count as the same solid.</summary>
 		private const double VolumeTolerance = 0.01;
 
-		/// <param name="facesRoom">
-		/// Given a point on a face and that face's outward normal, whether the face looks into
-		/// the carrier's room. Null when there is no room to ask - every face is then coloured.
+		/// <param name="sideTests">
+		/// Ways of telling the painted side, tried in order until one separates the two sides.
+		/// Each takes a point on a face and that face's outward normal and says whether that face
+		/// is the painted one. Empty when there is nothing to ask - every face is then coloured.
 		/// </param>
 		/// <param name="undecided">
-		/// Solids whose room-facing side could not be told apart - neither side, or both, looked
-		/// into the room. Those are coloured all over, as before this rule existed.
+		/// Solids whose painted side no test could tell apart. Those are coloured all over, as
+		/// before this rule existed.
 		/// </param>
-		public static IList<GeometryObject> WithMaterial(IList<GeometryObject> shape, ElementId materialId, Func<XYZ, XYZ, bool>? facesRoom, out int uncoloured, out int undecided)
+		public static IList<GeometryObject> WithMaterial(IList<GeometryObject> shape, ElementId materialId, IReadOnlyList<Func<XYZ, XYZ, bool>> sideTests, out int uncoloured, out int undecided)
 		{
 			uncoloured = 0;
 			undecided = 0;
@@ -3743,7 +3847,7 @@ namespace PaintedMaterialTakeoff.Core
 			{
 				IList<GeometryObject>? rebuilt = item switch
 				{
-					Solid solid => Rebuild(solid, materialId, facesRoom, ref undecided),
+					Solid solid => Rebuild(solid, materialId, sideTests, ref undecided),
 					Mesh mesh => Rebuild(mesh, materialId),
 					_ => null,
 				};
@@ -3760,14 +3864,14 @@ namespace PaintedMaterialTakeoff.Core
 			return result;
 		}
 
-		private static IList<GeometryObject>? Rebuild(Solid solid, ElementId materialId, Func<XYZ, XYZ, bool>? facesRoom, ref int undecided)
+		private static IList<GeometryObject>? Rebuild(Solid solid, ElementId materialId, IReadOnlyList<Func<XYZ, XYZ, bool>> sideTests, ref int undecided)
 		{
 			try
 			{
 				if (solid.Volume <= 0.0 || solid.Faces.Size == 0) return null;
 
 				List<Face> faces = solid.Faces.Cast<Face>().ToList();
-				HashSet<Face> painted = RoomFacing(faces, facesRoom, out bool decided);
+				HashSet<Face> painted = PaintedSide(faces, sideTests, out bool decided);
 				if (!decided)
 				{
 					undecided++;
@@ -3812,23 +3916,22 @@ namespace PaintedMaterialTakeoff.Core
 		}
 
 		/// <summary>
-		/// The faces of a carrier plate that look into its room - the painted surface itself.
+		/// The faces of a carrier plate on its painted side - the painted surface itself.
 		///
 		/// A carrier is a thin plate: two large faces, one on each side, and narrow edges. The
 		/// edges are never the painted surface, so only faces parallel to the plate's largest face
-		/// are asked about. Of those, the ones <paramref name="facesRoom"/> says look into the room
-		/// are painted.
+		/// are asked about. The first test in <paramref name="sideTests"/> that marks some of those
+		/// faces and not all of them decides.
 		///
-		/// WHEN THAT DOES NOT SEPARATE THE TWO SIDES - neither side looks into the room, or both
-		/// do - every face is returned and <paramref name="decided"/> is false. A jamb facing into
-		/// an opening, or a carrier whose room is not placed, lands here, and the carrier is then
-		/// coloured all over exactly as before rather than left with no colour at all.
+		/// WHEN NO TEST SEPARATES THE TWO SIDES every face is returned and
+		/// <paramref name="decided"/> is false, and the carrier is coloured all over exactly as
+		/// before rather than left with no colour at all.
 		/// </summary>
-		private static HashSet<Face> RoomFacing(List<Face> faces, Func<XYZ, XYZ, bool>? facesRoom, out bool decided)
+		private static HashSet<Face> PaintedSide(List<Face> faces, IReadOnlyList<Func<XYZ, XYZ, bool>> sideTests, out bool decided)
 		{
 			decided = true;
 			HashSet<Face> all = new HashSet<Face>(faces);
-			if (facesRoom == null)
+			if (sideTests.Count == 0)
 			{
 				return all;
 			}
@@ -3851,13 +3954,17 @@ namespace PaintedMaterialTakeoff.Core
 			XYZ plate = sampled.OrderByDescending(f => f.Face.Area).First().Normal;
 			List<(Face Face, XYZ Point, XYZ Normal)> sides = sampled.Where(f => Math.Abs(f.Normal.DotProduct(plate)) > 0.9).ToList();
 
-			HashSet<Face> painted = new HashSet<Face>(sides.Where(f => facesRoom(f.Point, f.Normal)).Select(f => f.Face));
-			if (painted.Count == 0 || painted.Count == sides.Count)
+			foreach (Func<XYZ, XYZ, bool> test in sideTests)
 			{
-				decided = false;
-				return all;
+				HashSet<Face> painted = new HashSet<Face>(sides.Where(f => test(f.Point, f.Normal)).Select(f => f.Face));
+				if (painted.Count > 0 && painted.Count < sides.Count)
+				{
+					return painted;
+				}
 			}
-			return painted;
+
+			decided = false;
+			return all;
 		}
 
 		/// <summary>A point that is really on the face - not in a hole - and the outward normal there.</summary>
