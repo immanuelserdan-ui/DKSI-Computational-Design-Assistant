@@ -74,8 +74,8 @@ namespace PaintedMaterialTakeoff
 				}
 				PushButtonData itemData3 = new PushButtonData("PaintedMaterialTakeoff_ToggleCarriers", "Show / Hide\nPaint Areas", location, typeof(ToggleCarriersCommand).FullName)
 				{
-					ToolTip = "Hides or shows the takeoff's painted-area geometry in this view. Shift+click to apply to every view in the project.",
-					LongDescription = "The takeoff writes one small element per painted surface so the schedule has something to report; this button gets them out of the way for coordination without deleting them, which would empty the schedule.\n\nWorks through a \"Paint Takeoff Carriers\" view filter rather than by hiding elements, so it survives re-running the takeoff — hidden elements would come back every run, because each run replaces them with new ones. The filter is also editable by hand in Visibility/Graphics, and can be added to your view templates."
+					ToolTip = "Cycles this view: only the painted-area geometry, then that geometry hidden, then everything. Shift+click to apply to every view in the project.",
+					LongDescription = "The takeoff writes one small element per painted surface so the schedule has something to report; this button isolates them for checking, or gets them out of the way for coordination without deleting them, which would empty the schedule.\n\nWorks through view filters (\"Paint Takeoff Carriers\", \"Paint Takeoff - Other Model\", \"Paint Takeoff - Other Generic Models\") rather than by hiding elements, so it survives re-running the takeoff and puts the view back exactly as it was. The filters are also editable by hand in Visibility/Graphics, and can be added to your view templates."
 				};
 				if (obj.AddItem(itemData3) is PushButton pushButton3)
 				{
@@ -932,9 +932,17 @@ namespace PaintedMaterialTakeoff
 		}
 	}
 	/// <summary>
-	/// Show / Hide Paint Areas. Click: the active view. Shift+click: every view.
+	/// Show / Hide Paint Areas - a three-state cycle. Click: the active view. Shift+click: every view.
 	///
-	/// The whole click is ONE undo step, including creating the filter the first time.
+	///   everything shown  ->  only the paint carriers  ->  carriers hidden, rest shown  ->  everything shown
+	///
+	/// WORKS THROUGH VIEW FILTERS, NOT BY SWITCHING CATEGORIES OFF. "Back to normal" has to mean the
+	/// view exactly as it was, and a view that already had furniture or a link switched off must
+	/// keep it off. Switching categories back ON cannot know which ones were off on purpose;
+	/// switching this tool's own filters back on can - nothing else ever touches them. It also means
+	/// the current state is read off the view itself, so nothing has to be remembered between clicks.
+	///
+	/// The whole click is ONE undo step, including creating the filters the first time.
 	/// </summary>
 	[Transaction(TransactionMode.Manual)]
 	[Regeneration(RegenerationOption.Manual)]
@@ -958,10 +966,24 @@ namespace PaintedMaterialTakeoff
 				return Result.Failed;
 			}
 			bool allViews = ShiftHeld();
-			if (!allViews && !CarrierVisibility.CanHostFilters(activeView))
+			bool activeCanHost = CarrierVisibility.CanHostFilters(activeView);
+			if (!allViews && !activeCanHost)
 			{
-				TaskDialog.Show(Title, $"'{activeView.Name}' is a {activeView.ViewType} and cannot host view filters, so there is nothing to " + "hide here.\n\nOpen a 3D view or a plan and click again, or Shift+click to apply to every graphical view at once.");
+				TaskDialog.Show(Title, $"'{activeView.Name}' is a {activeView.ViewType} and cannot host view filters, so there is nothing to " + "show or hide here.\n\nOpen a 3D view or a plan and click again, or Shift+click to apply to every graphical view at once.");
 				return Result.Cancelled;
+			}
+
+			// THE NEXT STATE IS READ FROM THE ACTIVE VIEW - WHEN IT HAS ONE TO READ. A schedule, sheet
+			// or legend carries no filters, so there is no honest answer to derive there and the user
+			// is asked instead.
+			CarrierDisplay? asked = null;
+			if (!activeCanHost)
+			{
+				asked = AskState(activeView);
+				if (asked == null)
+				{
+					return Result.Cancelled;
+				}
 			}
 
 			string? report;
@@ -969,19 +991,19 @@ namespace PaintedMaterialTakeoff
 			{
 				group.Start();
 
-				ElementId filterId = CarrierVisibility.EnsureFilter(document);
-				if (filterId == ElementId.InvalidElementId)
+				CarrierFilters? filters = CarrierVisibility.EnsureFilters(document);
+				if (filters == null)
 				{
 					group.RollBack();
 					TaskDialog.Show(Title, "The \"Paint Surface Type\" parameter is not in this project yet, so the carriers cannot be identified. Run the paint takeoff once first.");
 					return Result.Cancelled;
 				}
 
-				bool show = !CarrierVisibility.IsEffectivelyVisible(document, activeView, filterId);
+				CarrierDisplay next = asked ?? CarrierVisibility.Next(CarrierVisibility.EffectiveState(document, activeView, filters));
 
 				bool proceed = allViews
-					? ToggleAllViews(document, filterId, show, out report)
-					: ToggleOneView(document, activeView, filterId, show, out report);
+					? ApplyAllViews(document, filters, next, out report)
+					: ApplyOneView(document, activeView, filters, next, out report);
 
 				if (!proceed)
 				{
@@ -1000,105 +1022,105 @@ namespace PaintedMaterialTakeoff
 		}
 
 		/// <summary>
-		/// One view. Silent in the ordinary case - the carriers appearing or vanishing is the answer.
-		/// When the view's template controls its filters, the choice is put to the user.
+		/// One view. Silent in the ordinary case - what the view now shows is the answer. When the
+		/// view's template controls its filters, the choice is put to the user.
 		/// </summary>
-		private static bool ToggleOneView(Document doc, View view, ElementId filterId, bool show, out string? report)
+		private static bool ApplyOneView(Document doc, View view, CarrierFilters filters, CarrierDisplay next, out string? report)
 		{
 			report = null;
-			string verb = show ? "Show" : "Hide";
+			string transactionName = CarrierVisibility.Describe(next);
 			View? template = CarrierVisibility.ControllingTemplate(doc, view);
 
 			if (template == null)
 			{
-				using Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
+				using Transaction transaction = new Transaction(doc, transactionName);
 				transaction.Start();
-				List<string> refused = CarrierVisibility.SetOnViews(new[] { view }, filterId, show);
+				List<string> refused = CarrierVisibility.SetStateOnViews(new[] { view }, filters, next);
 
-				// Carriers hidden element by element here earlier would stay hidden behind a
-				// visible filter, and the click would look like it did nothing.
-				if (show && refused.Count == 0)
+				// Carriers hidden element by element here earlier would stay hidden behind a visible
+				// filter, and the click would look like it did nothing.
+				if (next != CarrierDisplay.CarriersHidden && refused.Count == 0)
 				{
-					CarrierVisibility.SetElementsInView(doc, view, filterId, visible: true);
+					CarrierVisibility.SetElementsInView(doc, view, filters.Carriers, visible: true);
 				}
 				transaction.Commit();
 
 				if (refused.Count > 0)
 				{
-					report = $"Revit would not change the filters of '{view.Name}', so the carriers were left as they were.";
+					report = $"Revit would not change the filters of '{view.Name}', so the view was left as it was.";
 				}
 				return true;
 			}
 
-			// THE TEMPLATE DECIDES THIS VIEW'S FILTERS. Setting the filter on the view itself
-			// does nothing, which is what the tool used to do while reporting that it had worked.
+			// THE TEMPLATE DECIDES THIS VIEW'S FILTERS. Setting the filters on the view itself does
+			// nothing, so the choice is between a temporary change here and changing the template.
 			int users = CarrierVisibility.ViewsUsing(doc, template).Count;
 
-			bool templateHides;
-			try
-			{
-				templateHides = !CarrierVisibility.IsVisibleIn(template, filterId);
-			}
-			catch
-			{
-				templateHides = false;
-			}
-
-			// An element can be un-hidden, but not out from under a filter that hides it.
-			bool thisViewOnlyPossible = !(show && templateHides);
+			// Temporary Hide/Isolate can only take things AWAY from what the template shows. That is
+			// enough for every state as long as the template itself shows everything; once the
+			// template hides something, only the template can bring it back.
+			bool templateNormal = CarrierVisibility.FilterState(template, filters) == CarrierDisplay.Normal;
+			bool thisViewOnlyPossible = templateNormal && CarrierVisibility.CanUseTemporary(view);
 
 			TaskDialog dialog = new TaskDialog(Title)
 			{
 				MainInstruction = $"'{view.Name}' takes its filters from view template '{template.Name}'",
-				MainContent = $"So the carriers cannot be {(show ? "shown" : "hidden")} with a filter on this view alone. " +
-							  $"The template is used by {users} view(s)." +
+				MainContent = $"Next: {CarrierVisibility.Describe(next).ToLowerInvariant()}. The template is used by {users} view(s)." +
 							  (thisViewOnlyPossible
 								  ? string.Empty
-								  : "\n\nThe template's own filter is hiding the carriers, so they can only be shown by changing the template."),
+								  : templateNormal
+									  ? "\n\nThis view cannot use Temporary Hide/Isolate, so only the template can change it."
+									  : "\n\nThe template's own filters are hiding part of the model, so this can only be done by changing the template."),
 				CommonButtons = TaskDialogCommonButtons.Cancel,
 				DefaultButton = TaskDialogResult.Cancel,
 			};
 
 			if (thisViewOnlyPossible)
 			{
-				dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, $"{verb} in this view only",
-					show
-						? "Un-hides the carriers hidden here with Hide in View. The template is not touched."
-						: "Hides the carriers here with Hide in View. The template is not touched. The next takeoff run " +
-						  "replaces the carriers, and the new ones will show here again.");
+				dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, $"{CarrierVisibility.Describe(next)} - in this view only",
+					"Uses Temporary Hide/Isolate. The template is not touched. Revit does not save temporary visibility, " +
+					"so the view is back to normal when the model is next opened. Resetting Temporary Hide/Isolate also ends it.");
 			}
 
-			dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, $"{verb} in the template '{template.Name}'",
+			dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, $"{CarrierVisibility.Describe(next)} - in the template '{template.Name}'",
 				$"Changes the office view template, and with it all {users} view(s) that use it.");
 
 			TaskDialogResult choice = dialog.Show();
 
 			if (choice == TaskDialogResult.CommandLink1 && thisViewOnlyPossible)
 			{
-				using Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
+				using Transaction transaction = new Transaction(doc, transactionName);
 				transaction.Start();
-				int changed = CarrierVisibility.SetElementsInView(doc, view, filterId, show);
+				int carriers = CarrierVisibility.SetTemporaryState(doc, view, filters, next);
 				transaction.Commit();
 
-				report = $"{changed} carrier(s) {(show ? "shown" : "hidden")} in '{view.Name}' only. " +
-						 $"The template '{template.Name}' was not changed.";
+				report = next == CarrierDisplay.Normal
+					? $"'{view.Name}' is back to normal. The template '{template.Name}' was not changed."
+					: $"{CarrierVisibility.Past(next)} in '{view.Name}' only ({carriers} carrier(s)), with Temporary Hide/Isolate. " +
+					  $"The template '{template.Name}' was not changed.";
 				return true;
 			}
 
 			if (choice == TaskDialogResult.CommandLink2)
 			{
-				using Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers");
+				using Transaction transaction = new Transaction(doc, transactionName);
 				transaction.Start();
-				List<string> refused = CarrierVisibility.SetOnViews(new[] { template }, filterId, show);
-				if (show && refused.Count == 0)
+				List<string> refused = CarrierVisibility.SetStateOnViews(new[] { template }, filters, next);
+				if (refused.Count == 0)
 				{
-					CarrierVisibility.SetElementsInView(doc, view, filterId, visible: true);
+					// A temporary state left from "this view only" would sit on top of the template
+					// and make the template change look like it did nothing here.
+					CarrierVisibility.ClearTemporary(view);
+					if (next != CarrierDisplay.CarriersHidden)
+					{
+						CarrierVisibility.SetElementsInView(doc, view, filters.Carriers, visible: true);
+					}
 				}
 				transaction.Commit();
 
 				report = refused.Count > 0
 					? $"Revit would not change the filters of template '{template.Name}'; nothing was changed."
-					: $"Carriers {(show ? "shown" : "hidden")} in template '{template.Name}' - {users} view(s) follow it.";
+					: $"{CarrierVisibility.Past(next)} in template '{template.Name}' - {users} view(s) follow it.";
 				return true;
 			}
 
@@ -1109,11 +1131,9 @@ namespace PaintedMaterialTakeoff
 		/// Every view. Templates are included only when the user says so, and then only the ones
 		/// that actually control a view's filters.
 		/// </summary>
-		private static bool ToggleAllViews(Document doc, ElementId filterId, bool show, out string? report)
+		private static bool ApplyAllViews(Document doc, CarrierFilters filters, CarrierDisplay next, out string? report)
 		{
 			report = null;
-			string verb = show ? "Show" : "Hide";
-			string done = show ? "shown" : "hidden";
 
 			List<View> views = CarrierVisibility.GraphicalViews(doc);
 			List<View> free = new List<View>();
@@ -1141,7 +1161,7 @@ namespace PaintedMaterialTakeoff
 
 				TaskDialog dialog = new TaskDialog(Title)
 				{
-					MainInstruction = $"{verb} the paint carriers in every view?",
+					MainInstruction = $"{CarrierVisibility.Describe(next)} in every view?",
 					MainContent = $"{free.Count} view(s) can be changed directly. {controlled.Count} view(s) take their " +
 								  $"filters from {templates.Count} view template(s): {names}.",
 					CommonButtons = TaskDialogCommonButtons.Cancel,
@@ -1170,15 +1190,44 @@ namespace PaintedMaterialTakeoff
 			}
 
 			List<string> refused;
-			using (Transaction transaction = new Transaction(doc, show ? "Show paint takeoff carriers" : "Hide paint takeoff carriers"))
+			int unhidden = 0;
+			using (Transaction transaction = new Transaction(doc, CarrierVisibility.Describe(next)))
 			{
 				transaction.Start();
-				refused = CarrierVisibility.SetOnViews(targets, filterId, show);
+				refused = CarrierVisibility.SetStateOnViews(targets, filters, next);
+
+				// SHOWING THE CARRIERS MUST ALSO UNDO "HIDE IN THIS VIEW ONLY", exactly as the
+				// one-view path does. Carriers hidden element by element stay hidden behind a visible
+				// filter, so without this a view hidden that way stayed dark while the report said
+				// otherwise. Only the views whose filters were actually set here: a free view Revit
+				// refused, or a templated view the user chose to leave alone, keeps its state.
+				if (next != CarrierDisplay.CarriersHidden)
+				{
+					IEnumerable<View> changed = free.Where(v => !refused.Contains(v.Name));
+					if (includeTemplates)
+					{
+						changed = changed.Concat(controlled.Where(v =>
+							CarrierVisibility.ControllingTemplate(doc, v) is View t && !refused.Contains(t.Name)));
+					}
+
+					foreach (View view in changed)
+					{
+						try
+						{
+							unhidden += CarrierVisibility.SetElementsInView(doc, view, filters.Carriers, visible: true);
+						}
+						catch
+						{
+							// A view that will not un-hide its elements keeps its filter change;
+							// the carriers there stay as they were.
+						}
+					}
+				}
 				transaction.Commit();
 			}
 
 			int freeChanged = free.Count(v => !refused.Contains(v.Name));
-			StringBuilder text = new StringBuilder($"Paint takeoff carriers {done} in {freeChanged} view(s)");
+			StringBuilder text = new StringBuilder($"{CarrierVisibility.Past(next)} in {freeChanged} view(s)");
 
 			if (includeTemplates)
 			{
@@ -1194,6 +1243,11 @@ namespace PaintedMaterialTakeoff
 				text.Append('.');
 			}
 
+			if (unhidden > 0)
+			{
+				text.Append($"\n\n{unhidden} carrier(s) that had been hidden element by element were un-hidden as well.");
+			}
+
 			if (refused.Count > 0)
 			{
 				text.Append($"\n\nRevit would not change {refused.Count}: {string.Join(", ", refused.Take(10))}" +
@@ -1202,6 +1256,33 @@ namespace PaintedMaterialTakeoff
 
 			report = text.ToString();
 			return true;
+		}
+
+		/// <summary>
+		/// The state to set, asked outright - for a Shift+click made from a view that has no filters
+		/// to read the current state from. Null when cancelled.
+		/// </summary>
+		private static CarrierDisplay? AskState(View activeView)
+		{
+			TaskDialog dialog = new TaskDialog(Title)
+			{
+				MainInstruction = "What should every view show?",
+				MainContent = $"'{activeView.Name}' is a {activeView.ViewType} and has no view filters, so it cannot tell " +
+							  "which state the views are in now. Choose the state for every graphical view.",
+				CommonButtons = TaskDialogCommonButtons.Cancel,
+				DefaultButton = TaskDialogResult.Cancel,
+			};
+			dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, CarrierVisibility.Describe(CarrierDisplay.CarriersOnly));
+			dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, CarrierVisibility.Describe(CarrierDisplay.CarriersHidden));
+			dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, CarrierVisibility.Describe(CarrierDisplay.Normal));
+
+			return dialog.Show() switch
+			{
+				TaskDialogResult.CommandLink1 => CarrierDisplay.CarriersOnly,
+				TaskDialogResult.CommandLink2 => CarrierDisplay.CarriersHidden,
+				TaskDialogResult.CommandLink3 => CarrierDisplay.Normal,
+				_ => null,
+			};
 		}
 
 		private static bool ShiftHeld()
@@ -2676,6 +2757,9 @@ namespace PaintedMaterialTakeoff.Export
 
 		public int Skipped { get; private set; }
 
+		/// <summary>Carrier shapes that kept the category's grey because their rebuild with the paint material did not hold - see CarrierShading.</summary>
+		public int Uncoloured { get; private set; }
+
 		public ElementId? TypeId { get; private set; }
 
 		public List<string> Log { get; } = new List<string>();
@@ -2718,8 +2802,16 @@ namespace PaintedMaterialTakeoff.Export
 					directShape.ApplicationId = "PaintedMaterialTakeoff";
 					directShape.ApplicationDataId = record.SegmentKey;
 					directShape.Name = record.SegmentKey;
-					directShape.SetShape(record.Shape);
-					ElementId elementId = (_s.DebugRedHatch ? DebugMaterialId() : record.MaterialId);
+					// THE PAINT'S OWN MATERIAL, so every carrier shades in its paint's Graphics
+					// colour. The red debug material used to win whenever DebugRedHatch was on -
+					// which is always, nothing exposes it - and it never showed anyway, because the
+					// material only ever went to MATERIAL_ID_PARAM. Red is now what marks a carrier
+					// with no paint material of its own.
+					ElementId elementId = (record.MaterialId != ElementId.InvalidElementId)
+						? record.MaterialId
+						: (_s.DebugRedHatch ? DebugMaterialId() : ElementId.InvalidElementId);
+					directShape.SetShape(CarrierShading.WithMaterial(record.Shape, elementId, out int uncoloured));
+					Uncoloured += uncoloured;
 					if (elementId != ElementId.InvalidElementId)
 					{
 						Parameter parameter = ((Element)directShape).get_Parameter(BuiltInParameter.MATERIAL_ID_PARAM);
@@ -2775,6 +2867,10 @@ namespace PaintedMaterialTakeoff.Export
 			if (Skipped > 0)
 			{
 				Log.Add($"{Skipped} row(s) with area had no usable geometry for a carrier element and are " + "in the CSV only.");
+			}
+			if (Uncoloured > 0)
+			{
+				Log.Add($"{Uncoloured} carrier shape(s) are drawn in the default grey: rebuilding them with their paint material did not give back the same solid, so the measured shape was kept as it was.");
 			}
 		}
 
@@ -3095,17 +3191,73 @@ namespace PaintedMaterialTakeoff.Export
 }
 namespace PaintedMaterialTakeoff.Core
 {
+	/// <summary>What Show / Hide Paint Areas cycles a view through, in click order from Normal.</summary>
+	internal enum CarrierDisplay
+	{
+		Normal,
+		CarriersOnly,
+		CarriersHidden
+	}
+
+	/// <summary>The three filters the cycle works with. Each id is a ParameterFilterElement.</summary>
+	internal sealed record CarrierFilters(ElementId Carriers, ElementId OtherModel, ElementId OtherGeneric);
+
 	/// <summary>
-	/// Shows and hides the takeoff's carriers with one view filter, "Paint Takeoff Carriers".
+	/// Shows and hides the takeoff's carriers - and, for "carriers only", the rest of the model -
+	/// with three view filters:
+	///
+	///   "Paint Takeoff Carriers"               Generic Models whose Paint Surface Type is set
+	///   "Paint Takeoff - Other Model"          every other model category, no rules
+	///   "Paint Takeoff - Other Generic Models" Generic Models whose Paint Surface Type is empty,
+	///                                          so furniture and joinery modelled as Generic
+	///                                          Models go with the rest of the model
+	///
+	/// Annotation is in none of them, so grids, levels and tags stay in every state.
 	///
 	/// VIEW TEMPLATES ARE ASKED ABOUT, NEVER CHANGED SILENTLY. A view whose template controls
-	/// "V/G Overrides Filters" ignores its own filter settings, so setting the filter there does
+	/// "V/G Overrides Filters" ignores its own filter settings, so setting the filters there does
 	/// nothing. The templates are office standards shared by many views, so changing one is the
 	/// user's decision, made knowingly - see ToggleCarriersCommand.
 	/// </summary>
 	internal static class CarrierVisibility
 	{
 		public const string FilterName = "Paint Takeoff Carriers";
+
+		public const string OtherModelFilterName = "Paint Takeoff - Other Model";
+
+		public const string OtherGenericFilterName = "Paint Takeoff - Other Generic Models";
+
+		public static CarrierDisplay Next(CarrierDisplay state)
+		{
+			return state switch
+			{
+				CarrierDisplay.Normal => CarrierDisplay.CarriersOnly,
+				CarrierDisplay.CarriersOnly => CarrierDisplay.CarriersHidden,
+				_ => CarrierDisplay.Normal,
+			};
+		}
+
+		/// <summary>The action, for dialogs and the undo list.</summary>
+		public static string Describe(CarrierDisplay state)
+		{
+			return state switch
+			{
+				CarrierDisplay.CarriersOnly => "Show only the paint carriers",
+				CarrierDisplay.CarriersHidden => "Hide the paint carriers",
+				_ => "Show everything",
+			};
+		}
+
+		/// <summary>The result, for reports.</summary>
+		public static string Past(CarrierDisplay state)
+		{
+			return state switch
+			{
+				CarrierDisplay.CarriersOnly => "Only the paint carriers shown",
+				CarrierDisplay.CarriersHidden => "Paint carriers hidden",
+				_ => "Everything shown",
+			};
+		}
 
 		/// <summary>The template that controls this view's filters, or null when the view controls its own.</summary>
 		public static View? ControllingTemplate(Document doc, View view)
@@ -3136,6 +3288,18 @@ namespace PaintedMaterialTakeoff.Core
 			}
 		}
 
+		public static bool CanUseTemporary(View view)
+		{
+			try
+			{
+				return view.CanUseTemporaryVisibilityModes();
+			}
+			catch
+			{
+				return false;
+			}
+		}
+
 		public static bool IsVisibleIn(View view, ElementId filterId)
 		{
 			if (view.GetFilters().Contains(filterId))
@@ -3146,25 +3310,71 @@ namespace PaintedMaterialTakeoff.Core
 		}
 
 		/// <summary>
-		/// Whether the carriers can currently be seen in this view: the filter as the view really
-		/// applies it (its template's, when the template controls filters), and not every carrier
-		/// hidden element by element.
+		/// The state the filters alone put a view (or template) in. Carriers off with the rest also
+		/// off is not a state the cycle ever sets; it reads as CarriersHidden so the next click
+		/// puts everything back.
 		/// </summary>
-		public static bool IsEffectivelyVisible(Document doc, View view, ElementId filterId)
+		public static CarrierDisplay FilterState(View view, CarrierFilters filters)
 		{
-			View source = ControllingTemplate(doc, view) ?? view;
-
+			bool carriers;
+			bool others;
 			try
 			{
-				if (!IsVisibleIn(source, filterId)) return false;
+				carriers = IsVisibleIn(view, filters.Carriers);
+				others = IsVisibleIn(view, filters.OtherModel) && IsVisibleIn(view, filters.OtherGeneric);
 			}
 			catch
 			{
-				return false;
+				return CarrierDisplay.Normal;
 			}
 
-			List<ElementId> carriers = CarrierIds(doc, filterId);
-			return carriers.Count == 0 || carriers.Any(id => doc.GetElement(id) is Element e && !e.IsHidden(view));
+			if (carriers)
+			{
+				return others ? CarrierDisplay.Normal : CarrierDisplay.CarriersOnly;
+			}
+			return CarrierDisplay.CarriersHidden;
+		}
+
+		/// <summary>
+		/// What this view really shows: its filters as the view applies them (its template's, when
+		/// the template controls filters), then what "this view only" changed on top of that -
+		/// Temporary Hide/Isolate on a templated view, or every carrier hidden element by element.
+		/// </summary>
+		public static CarrierDisplay EffectiveState(Document doc, View view, CarrierFilters filters)
+		{
+			View? template = ControllingTemplate(doc, view);
+			CarrierDisplay state = FilterState(template ?? view, filters);
+			if (state != CarrierDisplay.Normal)
+			{
+				return state;
+			}
+
+			List<ElementId> carriers = CarrierIds(doc, filters.Carriers);
+			if (carriers.Count == 0)
+			{
+				return state;
+			}
+
+			if (template != null)
+			{
+				try
+				{
+					if (view.IsTemporaryHideIsolateActive())
+					{
+						return view.IsElementVisibleInTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate, carriers[0])
+							? CarrierDisplay.CarriersOnly
+							: CarrierDisplay.CarriersHidden;
+					}
+				}
+				catch
+				{
+					// A view that cannot report its temporary mode is read from its filters alone.
+				}
+			}
+
+			return carriers.All(id => doc.GetElement(id) is not Element e || e.IsHidden(view))
+				? CarrierDisplay.CarriersHidden
+				: state;
 		}
 
 		/// <summary>Every carrier, found with the filter's own rules so the two can never disagree.</summary>
@@ -3199,20 +3409,23 @@ namespace PaintedMaterialTakeoff.Core
 				.ToList();
 		}
 
-		/// <summary>Sets the filter on each view. Caller owns the transaction. Returns the names that refused.</summary>
-		public static List<string> SetOnViews(IEnumerable<View> views, ElementId filterId, bool visible)
+		/// <summary>
+		/// Sets the three filters on each view for <paramref name="state"/>. Caller owns the
+		/// transaction. Returns the names that refused.
+		/// </summary>
+		public static List<string> SetStateOnViews(IEnumerable<View> views, CarrierFilters filters, CarrierDisplay state)
 		{
+			bool carriers = state != CarrierDisplay.CarriersHidden;
+			bool others = state != CarrierDisplay.CarriersOnly;
 			List<string> refused = new List<string>();
 
 			foreach (View view in views)
 			{
 				try
 				{
-					if (!view.GetFilters().Contains(filterId))
-					{
-						view.AddFilter(filterId);
-					}
-					view.SetFilterVisibility(filterId, visible);
+					SetFilter(view, filters.Carriers, carriers);
+					SetFilter(view, filters.OtherModel, others);
+					SetFilter(view, filters.OtherGeneric, others);
 				}
 				catch
 				{
@@ -3224,8 +3437,77 @@ namespace PaintedMaterialTakeoff.Core
 		}
 
 		/// <summary>
-		/// Hides or un-hides the carriers in ONE view, element by element - the only way to change a
-		/// view whose template controls its filters without changing the template. Caller owns the
+		/// A filter that is not on the view already shows what it matches, so it is only added when
+		/// it has to hide something - "everything shown" leaves a view that never used the cycle
+		/// without two filters it has no need for.
+		/// </summary>
+		private static void SetFilter(View view, ElementId filterId, bool visible)
+		{
+			if (!view.GetFilters().Contains(filterId))
+			{
+				if (visible) return;
+				view.AddFilter(filterId);
+			}
+			view.SetFilterVisibility(filterId, visible);
+		}
+
+		/// <summary>
+		/// "This view only" for a view whose template controls its filters: the state made with
+		/// Temporary Hide/Isolate, which a template does not control. Assumes the template shows
+		/// everything - the caller checks. Caller owns the transaction. Returns how many carriers
+		/// were isolated or hidden.
+		/// </summary>
+		public static int SetTemporaryState(Document doc, View view, CarrierFilters filters, CarrierDisplay state)
+		{
+			ClearTemporary(view);
+
+			// Carriers hidden element by element are invisible to Temporary Isolate as well, so
+			// they are put back first for every state that shows them.
+			if (state != CarrierDisplay.CarriersHidden)
+			{
+				SetElementsInView(doc, view, filters.Carriers, visible: true);
+			}
+
+			if (state == CarrierDisplay.Normal)
+			{
+				return 0;
+			}
+
+			List<ElementId> carriers = CarrierIds(doc, filters.Carriers);
+			if (carriers.Count == 0)
+			{
+				return 0;
+			}
+
+			if (state == CarrierDisplay.CarriersOnly)
+			{
+				view.IsolateElementsTemporary(carriers);
+			}
+			else
+			{
+				view.HideElementsTemporary(carriers);
+			}
+			return carriers.Count;
+		}
+
+		/// <summary>Ends Temporary Hide/Isolate on the view, if it is on.</summary>
+		public static void ClearTemporary(View view)
+		{
+			try
+			{
+				if (view.IsTemporaryHideIsolateActive())
+				{
+					view.DisableTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate);
+				}
+			}
+			catch
+			{
+				// A view with no temporary mode to end has nothing to clear.
+			}
+		}
+
+		/// <summary>
+		/// Hides or un-hides the carriers in ONE view, element by element. Caller owns the
 		/// transaction. Returns how many carriers changed.
 		/// </summary>
 		public static int SetElementsInView(Document doc, View view, ElementId filterId, bool visible)
@@ -3254,38 +3536,87 @@ namespace PaintedMaterialTakeoff.Core
 
 		public static ElementId FindFilter(Document doc)
 		{
-			return new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault((Element f) => f.Name == FilterName)?.Id ?? ElementId.InvalidElementId;
+			return FindFilter(doc, FilterName);
 		}
 
-		/// <summary>The filter, created on first use. Caller runs this inside its transaction group.</summary>
-		public static ElementId EnsureFilter(Document doc)
+		private static ElementId FindFilter(Document doc, string name)
 		{
-			ElementId elementId = FindFilter(doc);
-			if (elementId != ElementId.InvalidElementId)
+			return new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault((Element f) => f.Name == name)?.Id ?? ElementId.InvalidElementId;
+		}
+
+		/// <summary>
+		/// The three filters, each created on first use. Null when the carriers cannot be
+		/// identified. Caller runs this inside its transaction group.
+		/// </summary>
+		public static CarrierFilters? EnsureFilters(Document doc)
+		{
+			ElementId surfaceType = SharedParameterId(doc, "Paint Surface Type");
+
+			ElementId carriers = Ensure(doc, FilterName, () =>
+				ParameterFilterElement.Create(doc, FilterName,
+					new List<ElementId> { new ElementId(BuiltInCategory.OST_GenericModel) },
+					new ElementParameterFilter(ParameterFilterRuleFactory.CreateNotEqualsRule(surfaceType, string.Empty))),
+				needsParameter: surfaceType);
+			if (carriers == ElementId.InvalidElementId) return null;
+
+			ElementId otherModel = Ensure(doc, OtherModelFilterName, () =>
+				ParameterFilterElement.Create(doc, OtherModelFilterName, OtherModelCategories(doc)),
+				needsParameter: null);
+			if (otherModel == ElementId.InvalidElementId) return null;
+
+			ElementId otherGeneric = Ensure(doc, OtherGenericFilterName, () =>
 			{
-				return elementId;
+				List<ElementId> genericModels = new List<ElementId> { new ElementId(BuiltInCategory.OST_GenericModel) };
+				ElementFilter empty = new ElementParameterFilter(ParameterFilterRuleFactory.CreateEqualsRule(surfaceType, string.Empty));
+				try
+				{
+					// "Empty" and "no value" are not the same thing to Revit, and a Generic Model
+					// placed before the parameter was bound can be either.
+					return ParameterFilterElement.Create(doc, OtherGenericFilterName, genericModels,
+						new LogicalOrFilter(empty, new ElementParameterFilter(ParameterFilterRuleFactory.CreateHasNoValueParameterRule(surfaceType))));
+				}
+				catch
+				{
+					return ParameterFilterElement.Create(doc, OtherGenericFilterName, genericModels, empty);
+				}
+			}, needsParameter: surfaceType);
+			if (otherGeneric == ElementId.InvalidElementId) return null;
+
+			return new CarrierFilters(carriers, otherModel, otherGeneric);
+		}
+
+		private static ElementId Ensure(Document doc, string name, Func<ParameterFilterElement> create, ElementId? needsParameter)
+		{
+			ElementId existing = FindFilter(doc, name);
+			if (existing != ElementId.InvalidElementId)
+			{
+				return existing;
 			}
-			ElementId elementId2 = SharedParameterId(doc, "Paint Surface Type");
-			if (elementId2 == ElementId.InvalidElementId)
+			if (needsParameter != null && needsParameter == ElementId.InvalidElementId)
 			{
 				return ElementId.InvalidElementId;
 			}
 			try
 			{
-				using Transaction transaction = new Transaction(doc, "Create the paint carrier filter");
+				using Transaction transaction = new Transaction(doc, "Create the '" + name + "' filter");
 				transaction.Start();
-				FilterRule filterRule = ParameterFilterRuleFactory.CreateNotEqualsRule(elementId2, string.Empty);
-				ParameterFilterElement parameterFilterElement = ParameterFilterElement.Create(doc, FilterName, new List<ElementId>
-				{
-					new ElementId(BuiltInCategory.OST_GenericModel)
-				}, new ElementParameterFilter(filterRule));
+				ElementId id = create().Id;
 				transaction.Commit();
-				return parameterFilterElement.Id;
+				return id;
 			}
 			catch
 			{
 				return ElementId.InvalidElementId;
 			}
+		}
+
+		/// <summary>Every model category a view filter can take, except Generic Models.</summary>
+		private static List<ElementId> OtherModelCategories(Document doc)
+		{
+			long genericModels = (long)BuiltInCategory.OST_GenericModel;
+			return ParameterFilterUtilities.GetAllFilterableCategories()
+				.Where(id => id.Value != genericModels && Category.GetCategory(doc, id) is { CategoryType: CategoryType.Model })
+				.ToList();
 		}
 
 		private static ElementId SharedParameterId(Document doc, string name)
@@ -3304,6 +3635,209 @@ namespace PaintedMaterialTakeoff.Core
 				}
 			}
 			return ElementId.InvalidElementId;
+		}
+	}
+
+	/// <summary>
+	/// Puts a carrier's paint material on its geometry, so the carrier shades in that material's
+	/// Graphics colour - VBJ's RGB 255 128 128, say - instead of the category's grey.
+	///
+	/// WHY THE GEOMETRY. The takeoff has always written the material to the carrier's
+	/// MATERIAL_ID_PARAM, and the carriers still drew grey. Measured 2026-09-24 on the live model:
+	/// a carrier has no Material parameter at all, so that write never happened. A DirectShape takes its material from
+	/// the faces of its shape, and the extrusions the takeoff builds carry none. The faces are
+	/// therefore rebuilt through TessellatedShapeBuilder, which takes a material per face.
+	///
+	/// NEVER AT THE COST OF THE SOLID. PaintOverlapAudit intersects carriers as solids. A rebuild
+	/// that does not close into a solid of the same volume is thrown away and the original shape
+	/// kept - uncoloured, but exactly as measured. Curved faces are the likely case: their
+	/// triangulation need not meet a flat neighbour's edge vertex for vertex.
+	/// </summary>
+	internal static class CarrierShading
+	{
+		/// <summary>Relative volume difference a rebuilt solid may have and still count as the same solid.</summary>
+		private const double VolumeTolerance = 0.01;
+
+		public static IList<GeometryObject> WithMaterial(IList<GeometryObject> shape, ElementId materialId, out int uncoloured)
+		{
+			uncoloured = 0;
+			if (materialId == ElementId.InvalidElementId)
+			{
+				return shape;
+			}
+
+			List<GeometryObject> result = new List<GeometryObject>(shape.Count);
+			foreach (GeometryObject item in shape)
+			{
+				IList<GeometryObject>? rebuilt = item switch
+				{
+					Solid solid => Rebuild(solid, materialId),
+					Mesh mesh => Rebuild(mesh, materialId),
+					_ => null,
+				};
+				if (rebuilt == null || rebuilt.Count == 0)
+				{
+					result.Add(item);
+					uncoloured++;
+				}
+				else
+				{
+					result.AddRange(rebuilt);
+				}
+			}
+			return result;
+		}
+
+		private static IList<GeometryObject>? Rebuild(Solid solid, ElementId materialId)
+		{
+			try
+			{
+				if (solid.Volume <= 0.0 || solid.Faces.Size == 0) return null;
+
+				TessellatedShapeBuilder builder = new TessellatedShapeBuilder();
+				builder.OpenConnectedFaceSet(isSolid: true);
+				foreach (Face face in solid.Faces)
+				{
+					// A flat face keeps its own outline - triangulating it would draw every
+					// triangle edge across the carrier in hidden-line views.
+					List<IList<XYZ>>? loops = face is PlanarFace planar ? PlanarLoops(planar) : null;
+					if (loops != null)
+					{
+						builder.AddFace(new TessellatedFace(loops, materialId));
+					}
+					else if (!AddTriangles(builder, face, materialId))
+					{
+						return null;
+					}
+				}
+				builder.CloseConnectedFaceSet();
+				builder.Target = TessellatedShapeBuilderTarget.Solid;
+				builder.Fallback = TessellatedShapeBuilderFallback.Abort;
+				builder.Build();
+
+				TessellatedShapeBuilderResult built = builder.GetBuildResult();
+				if (built.Outcome != TessellatedShapeBuilderOutcome.Solid) return null;
+
+				IList<GeometryObject> objects = built.GetGeometricalObjects();
+				double volume = objects.OfType<Solid>().Sum(s => s.Volume);
+				return Math.Abs(volume - solid.Volume) <= solid.Volume * VolumeTolerance ? objects : null;
+			}
+			catch
+			{
+				return null;
+			}
+		}
+
+		/// <summary>A mesh carrier (a face the takeoff could not thicken) - coloured as the mesh it already is.</summary>
+		private static IList<GeometryObject>? Rebuild(Mesh mesh, ElementId materialId)
+		{
+			try
+			{
+				TessellatedShapeBuilder builder = new TessellatedShapeBuilder();
+				builder.OpenConnectedFaceSet(isSolid: false);
+				for (int i = 0; i < mesh.NumTriangles; i++)
+				{
+					MeshTriangle triangle = mesh.get_Triangle(i);
+					builder.AddFace(new TessellatedFace(new List<XYZ> { triangle.get_Vertex(0), triangle.get_Vertex(1), triangle.get_Vertex(2) }, materialId));
+				}
+				builder.CloseConnectedFaceSet();
+				builder.Target = TessellatedShapeBuilderTarget.Mesh;
+				builder.Fallback = TessellatedShapeBuilderFallback.Salvage;
+				builder.Build();
+
+				TessellatedShapeBuilderResult built = builder.GetBuildResult();
+				return built.Outcome == TessellatedShapeBuilderOutcome.Nothing ? null : built.GetGeometricalObjects();
+			}
+			catch
+			{
+				return null;
+			}
+		}
+
+		/// <summary>
+		/// The face's edge loops as point lists, largest first, wound the way TessellatedFace reads
+		/// them: the outer loop anticlockwise seen from outside the solid, holes clockwise.
+		/// Winding is checked against the face's outward normal rather than trusted.
+		/// </summary>
+		private static List<IList<XYZ>>? PlanarLoops(PlanarFace face)
+		{
+			IList<CurveLoop> curveLoops = face.GetEdgesAsCurveLoops();
+			if (curveLoops == null || curveLoops.Count == 0) return null;
+
+			BoundingBoxUV box = face.GetBoundingBox();
+			XYZ outward = face.ComputeNormal((box.Min + box.Max) / 2.0);
+
+			List<(List<XYZ> Points, XYZ Normal)> loops = new List<(List<XYZ>, XYZ)>();
+			foreach (CurveLoop curveLoop in curveLoops)
+			{
+				List<XYZ> points = new List<XYZ>();
+				foreach (Curve curve in curveLoop)
+				{
+					IList<XYZ> tessellated = curve.Tessellate();
+					for (int i = 0; i < tessellated.Count - 1; i++)
+					{
+						points.Add(tessellated[i]);
+					}
+				}
+				if (points.Count < 3) return null;
+				loops.Add((points, Newell(points)));
+			}
+
+			loops.Sort((a, b) => b.Normal.GetLength().CompareTo(a.Normal.GetLength()));
+
+			List<IList<XYZ>> result = new List<IList<XYZ>>();
+			for (int i = 0; i < loops.Count; i++)
+			{
+				bool outer = i == 0;
+				List<XYZ> points = loops[i].Points;
+				if (loops[i].Normal.DotProduct(outward) > 0.0 != outer)
+				{
+					points.Reverse();
+				}
+				result.Add(points);
+			}
+			return result;
+		}
+
+		/// <summary>A curved face as triangles, each wound to face out of the solid.</summary>
+		private static bool AddTriangles(TessellatedShapeBuilder builder, Face face, ElementId materialId)
+		{
+			Mesh mesh = face.Triangulate();
+			if (mesh == null || mesh.NumTriangles == 0) return false;
+
+			for (int i = 0; i < mesh.NumTriangles; i++)
+			{
+				MeshTriangle triangle = mesh.get_Triangle(i);
+				XYZ a = triangle.get_Vertex(0);
+				XYZ b = triangle.get_Vertex(1);
+				XYZ c = triangle.get_Vertex(2);
+
+				XYZ normal = (b - a).CrossProduct(c - a);
+				if (normal.GetLength() < 1e-12) continue;
+
+				IntersectionResult projected = face.Project((a + b + c) / 3.0);
+				if (projected != null && normal.DotProduct(face.ComputeNormal(projected.UVPoint)) < 0.0)
+				{
+					(b, c) = (c, b);
+				}
+				builder.AddFace(new TessellatedFace(new List<XYZ> { a, b, c }, materialId));
+			}
+			return true;
+		}
+
+		/// <summary>Newell's normal: its direction is the loop's winding, its length twice the loop's area.</summary>
+		private static XYZ Newell(IList<XYZ> points)
+		{
+			double x = 0.0, y = 0.0, z = 0.0;
+			for (int i = 0; i < points.Count; i++)
+			{
+				XYZ p = points[i];
+				XYZ q = points[(i + 1) % points.Count];
+				x += (p.Y - q.Y) * (p.Z + q.Z);
+				y += (p.Z - q.Z) * (p.X + q.X);
+				z += (p.X - q.X) * (p.Y + q.Y);
+			}
+			return new XYZ(x, y, z);
 		}
 	}
 	internal enum CornerBasis
