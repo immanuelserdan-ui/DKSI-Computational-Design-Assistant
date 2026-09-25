@@ -8817,6 +8817,151 @@ namespace PaintedMaterialTakeoff.Core
 			return GeometryUtil.TryExtrude(new List<CurveLoop> { curveLoop }, num);
 		}
 
+		/// <summary>
+		/// Cuts the strip each hanging wall or mezzanine covers out of every material's carrier
+		/// shape on this face, and takes each material's deduction from what was actually cut
+		/// from ITS shape. Returns false - having changed nothing - whenever the cut cannot be
+		/// trusted, so the caller falls back to the old proportional deduction unchanged.
+		///
+		/// THE CUTTERS ARE OccludedArea's OWN MEASUREMENT. The same occluder-by-contact-layer
+		/// intersections that produce the covered figure, moved back onto the face plane so they
+		/// straddle it (the layer is OcclusionLayerFt thick, carriers SkinThicknessFt, so a layer
+		/// centred on the face reaches through a skin on either side of it). One definition of
+		/// "covered", used for both the number and the cut.
+		///
+		/// TRUSTED ONLY WHEN IT AGREES. Every carrier on the face must be a solid (a mesh cannot
+		/// be cut), every boolean must evaluate, and the total cut must match the covered area
+		/// the caller already measured, within 2%. Two occluders overlapping in front of the face,
+		/// a carrier that does not reach the covered strip, a boolean Revit cannot evaluate - each
+		/// makes the totals disagree or the cut fail, and each leaves this row exactly as it was.
+		/// </summary>
+		private bool TrimCoveredShapes(RoomEnvelope env, string label, Curve curve, XYZ inward, List<MaterialBucket> buckets, double expectedSqFt, Dictionary<MaterialBucket, double> occludedByBucket, out double trimmedSqFt)
+		{
+			trimmedSqFt = 0.0;
+			if (!_s.CreateSegmentElements || buckets.Count == 0)
+			{
+				return false;
+			}
+			if (buckets.Any((MaterialBucket b) => b.Shape.Count == 0 || b.Shape.Any((GeometryObject g) => !(g is Solid))))
+			{
+				env.Warnings.Add($"[WallCut room {env.RoomNumber} '{env.RoomName}' {label}] declined: a material on this face has no shape, or a mesh shape that cannot be cut (" + string.Join(", ", buckets.Select((MaterialBucket b) => $"{b.Material.Name}: {b.Shape.Count} shape(s), {b.Shape.Count((GeometryObject g) => !(g is Solid))} non-solid")) + ").");
+				return false;
+			}
+			Solid layer = BuildContactLayer(env, curve, inward);
+			if ((object)layer == null)
+			{
+				env.Warnings.Add($"[WallCut room {env.RoomNumber} '{env.RoomName}' {label}] declined: contact layer could not be built.");
+				return false;
+			}
+			Autodesk.Revit.DB.Transform ontoFace = Autodesk.Revit.DB.Transform.CreateTranslation(-inward * (_s.OcclusionGapFt + _s.OcclusionLayerFt * 0.5));
+			List<Solid> cutters = new List<Solid>();
+			foreach (Element occluder in _occluders)
+			{
+				foreach (Solid occluderSolid in GeometryUtil.GetSolids(occluder, _s.MinSolidVolumeCuFt))
+				{
+					Solid covered = GeometryUtil.TryBoolean(occluderSolid, layer, BooleanOperationsType.Intersect, _s.MinSolidVolumeCuFt);
+					if ((object)covered == null)
+					{
+						continue;
+					}
+					try
+					{
+						cutters.Add(SolidUtils.CreateTransformed(covered, ontoFace));
+					}
+					catch
+					{
+						return false;
+					}
+				}
+			}
+			if (cutters.Count == 0)
+			{
+				env.Warnings.Add($"[WallCut room {env.RoomNumber} '{env.RoomName}' {label}] declined: no occluder reaches the contact layer.");
+				return false;
+			}
+			// THE CUT IS READ AS A FRACTION OF EACH MATERIAL'S OWN SHAPE, NOT AS AN ABSOLUTE AREA.
+			//
+			// The first version converted removed volume straight to area (volume / skin) and
+			// subtracted it. Measured on FM_Template it added 0.105 m² to Køkken wall 29308067:
+			// a bucket's Shape is not guaranteed to hold exactly one skin per square foot of its
+			// Area. A Split Face region's solid is clipped against the whole segment probe, so a
+			// face broken by an opening adds the same region solid once per piece while Area adds
+			// only each piece's share. Shape volume and Area are then on different scales.
+			//
+			// The share of a shape that the cut removes does not depend on that scale - every
+			// copy of one region loses the same share - so each bucket loses that share of its
+			// OWN measured Area, and the Area stays the figure the rest of the method produced.
+			string diagnosticKey = $"[WallCut room {env.RoomNumber} '{env.RoomName}' {label}]";
+			Dictionary<MaterialBucket, (List<GeometryObject> Shape, double Removed)> cut = new Dictionary<MaterialBucket, (List<GeometryObject>, double)>();
+			double total = 0.0;
+			List<string> perBucket = new List<string>();
+			foreach (MaterialBucket bucket in buckets)
+			{
+				List<GeometryObject> kept = new List<GeometryObject>();
+				double shapeVolume = 0.0;
+				double removedVolume = 0.0;
+				foreach (Solid shape in bucket.Shape.Cast<Solid>())
+				{
+					Solid current = shape;
+					shapeVolume += shape.Volume;
+					foreach (Solid cutter in cutters)
+					{
+						Solid difference;
+						try
+						{
+							difference = BooleanOperationsUtils.ExecuteBooleanOperation(current, cutter, BooleanOperationsType.Difference);
+						}
+						catch (Exception ex)
+						{
+							env.Warnings.Add($"{diagnosticKey} declined: boolean threw ({ex.Message}).");
+							return false;
+						}
+						if ((object)difference == null)
+						{
+							env.Warnings.Add($"{diagnosticKey} declined: boolean returned nothing.");
+							return false;
+						}
+						if (difference.Faces.Size == 0 || difference.Volume <= _s.MinSolidVolumeCuFt)
+						{
+							// Wholly covered: nothing of this piece is paintable.
+							removedVolume += current.Volume;
+							current = null;
+							break;
+						}
+						removedVolume += current.Volume - difference.Volume;
+						current = difference;
+					}
+					if ((object)current != null)
+					{
+						kept.Add(current);
+					}
+				}
+				double share = (shapeVolume > 0.0) ? Math.Min(1.0, Math.Max(0.0, removedVolume / shapeVolume)) : 0.0;
+				double removed = bucket.Area * share;
+				cut[bucket] = (kept, removed);
+				total += removed;
+				perBucket.Add($"{bucket.Material.Name}{((bucket.RegionIndex >= 0) ? $" R{bucket.RegionIndex + 1}" : "")}: area {GeometryUtil.ToSqM(bucket.Area):0.####} m², " + $"{bucket.Shape.Count} shape(s) = {GeometryUtil.ToSqM(shapeVolume / _s.SkinThicknessFt):0.####} m² of skin, " + $"{share:P2} cut = {GeometryUtil.ToSqM(removed):0.####} m²");
+			}
+			double tolerance = Math.Max(_s.MinFaceAreaSqFt, expectedSqFt * 0.02);
+			bool agrees = Math.Abs(total - expectedSqFt) <= tolerance;
+			env.Warnings.Add($"{diagnosticKey} {(agrees ? "CUT" : "declined")}: {cutters.Count} cutter(s), covered {GeometryUtil.ToSqM(expectedSqFt):0.####} m², " + $"cut {GeometryUtil.ToSqM(total):0.####} m². " + string.Join("; ", perBucket));
+			if (!agrees)
+			{
+				return false;
+			}
+			foreach (KeyValuePair<MaterialBucket, (List<GeometryObject> Shape, double Removed)> item in cut)
+			{
+				MaterialBucket bucket = item.Key;
+				double removed = Math.Min(item.Value.Removed, bucket.Area);
+				bucket.Area -= removed;
+				bucket.Shape.Clear();
+				bucket.Shape.AddRange(item.Value.Shape);
+				occludedByBucket[bucket] = removed;
+			}
+			trimmedSqFt = total;
+			return true;
+		}
+
 		public IEnumerable<PaintRecord> Process(RoomEnvelope env, int loopIndex, int segmentIndex, IList<BoundarySegment> loop)
 		{
 			BoundarySegment boundarySegment = loop[segmentIndex];
@@ -9226,19 +9371,62 @@ namespace PaintedMaterialTakeoff.Core
 			}
 			double num8 = OccludedArea(env, curve, inward);
 			double num9 = 0.0;
+			// Per ROW, not per segment. The whole segment's deduction used to be written onto
+			// every row of the segment, so a face carrying two materials reported it twice and
+			// any sum of the 'Occluded' column over-stated what was actually deducted.
+			Dictionary<MaterialBucket, double> occludedByBucket = new Dictionary<MaterialBucket, double>();
 			if (num8 > _s.MinFaceAreaSqFt)
 			{
 				List<MaterialBucket> list4 = buckets.Values.Where((MaterialBucket b) => !b.IsJamb).ToList();
 				double num10 = list4.Sum((MaterialBucket b) => b.Area);
 				if (num10 > _s.MinFaceAreaSqFt)
 				{
-					num9 = Math.Min(num8, num10);
-					double num11 = (num10 - num9) / num10;
-					foreach (MaterialBucket item6 in list4)
+					// THE SAME RULE THE CEILING ALREADY FOLLOWS (see HorizontalSurfaceCalculator's
+					// trim): where a hanging wall or mezzanine bears against this face, that part
+					// is not paintable and belongs in neither the area nor the drawn surface.
+					//
+					// This path used to be arithmetic only - every material's area scaled by
+					// (area - covered) / area - so the carrier kept its full, uncut shape and was
+					// drawn straight through the covered strip while the number beside it said
+					// otherwise. Measured on FM_Template, Køkken, walls 29307636 and 29308067:
+					// both carriers ran full height to the ceiling across the end of hanging wall
+					// 29310596 (0.025 m²) and the edge of mezzanine 29317163 (0.139 m²), while
+					// their rows correctly deducted 0.164 m². On 29308067 the deduction was also
+					// smeared across VXX and GFI in proportion, not taken from the material the
+					// strip actually covers.
+					//
+					// Cut from each material's own shape, the area, the shape and the per-
+					// material split all come from one geometry and cannot disagree. If the cut
+					// cannot be made, or does not agree with the independent contact-layer
+					// measure above, nothing is cut and the arithmetic below runs exactly as
+					// before - the fix can decline, never make a row worse.
+					if (TrimCoveredShapes(env, $"wall {wall.Id.Value} seg {loopIndex}.{segmentIndex}", curve, inward, list4, Math.Min(num8, num10), occludedByBucket, out double trimmedSqFt))
 					{
-						item6.Area *= num11;
+						num9 = trimmedSqFt;
+						list.Add($"{GeometryUtil.ToSqM(num9):0.##} m² deducted as covered by a mezzanine " + "slab or hanging wall bearing against this face — present in the model but not paintable. Cut from the surface where it is covered.");
+
+						// A REGION THE COVER TAKES ENTIRELY IS NOT A PAINTED SURFACE, and gets no
+						// row. The mezzanine edges in FM_Template are their own Split Face regions,
+						// exactly the strip the slab covers; cut to nothing they would otherwise
+						// write 0 m² rows and empty carriers. Before this cut existed RoomTrim
+						// dropped those same regions as outside the room, so dropping them here
+						// keeps the row set exactly what it was.
+						foreach (string emptyKey in buckets.Where((KeyValuePair<string, MaterialBucket> kv) => !kv.Value.IsJamb && kv.Value.Shape.Count == 0 && kv.Value.Area <= _s.MinFaceAreaSqFt).Select((KeyValuePair<string, MaterialBucket> kv) => kv.Key).ToList())
+						{
+							buckets.Remove(emptyKey);
+						}
 					}
-					list.Add($"{GeometryUtil.ToSqM(num9):0.##} m² deducted as covered by a mezzanine " + "slab or hanging wall bearing against this face — present in the model but not paintable.");
+					else
+					{
+						num9 = Math.Min(num8, num10);
+						double num11 = (num10 - num9) / num10;
+						foreach (MaterialBucket item6 in list4)
+						{
+							occludedByBucket[item6] = item6.Area * (1.0 - num11);
+							item6.Area *= num11;
+						}
+						list.Add($"{GeometryUtil.ToSqM(num9):0.##} m² deducted as covered by a mezzanine " + "slab or hanging wall bearing against this face — present in the model but not paintable.");
+					}
 					if (num8 - num9 > _s.MinFaceAreaSqFt)
 					{
 						list.Add($"A further {GeometryUtil.ToSqM(num8 - num9):0.##} m² of " + "cover was found but not deducted: it exceeds the painted area measured on this segment, so check for elements overlapping the wall.");
@@ -9281,7 +9469,7 @@ namespace PaintedMaterialTakeoff.Core
 					ShellSide = (value5.Layer?.ShellLabel ?? ""),
 					ShellFaceAreaSqFt = (roomSideShell?.ShellTotalAreaSqFt ?? 0.0),
 					NetAreaSqFt = area,
-					OccludedAreaSqFt = (value5.IsJamb ? 0.0 : num9),
+					OccludedAreaSqFt = ((value5.IsJamb || !occludedByBucket.TryGetValue(value5, out double rowOccluded)) ? 0.0 : rowOccluded),
 					NominalAreaSqFt = nominalAreaSqFt,
 					ZBottomFt = env.ZBottom,
 					ZTopFt = env.ZTop,
