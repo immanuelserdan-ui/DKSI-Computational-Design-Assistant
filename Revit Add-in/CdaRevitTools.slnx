@@ -9,5 +9,6 @@
     <Project Path="tests/Cda.Schedules.Tests/Cda.Schedules.Tests.csproj" />
     <Project Path="tests/Cda.Linings.Tests/Cda.Linings.Tests.csproj" />
     <Project Path="tests/Cda.Skirting.Tests/Cda.Skirting.Tests.csproj" />
+    <Project Path="tests/Cda.PaintOverrides.Tests/Cda.PaintOverrides.Tests.csproj" />
   </Folder>
 </Solution>

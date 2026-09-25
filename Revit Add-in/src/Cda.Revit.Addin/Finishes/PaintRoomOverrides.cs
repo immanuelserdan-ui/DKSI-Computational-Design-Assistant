@@ -83,7 +83,7 @@ internal static class PaintRoomOverrides
     /// (a PDF export, a different machine's font substitution). "(Reassigned)" degrades to
     /// nothing worse than itself.
     /// </summary>
-    internal const string ReassignedMarker = " (Reassigned)";
+    internal const string ReassignedMarker = PaintOverrideOwnership.ReassignedMarker;
 
     private static Schema? _schema;
 
@@ -229,8 +229,9 @@ internal static class PaintRoomOverrides
     }
 
     /// <summary>
-    /// Writes Room Name / Room Number on every carrier an override names, and reports what it
-    /// touched. Caller owns the transaction.
+    /// Writes Room Name / Room Number on every carrier an override OWNS - same key, and in the
+    /// override's from-room (see <see cref="PaintOverrideOwnership"/>) - and reports what it
+    /// touched. Carriers that only share the key are left alone. Caller owns the transaction.
     ///
     /// Run this after every takeoff, or the overrides are silently absent from the schedule
     /// while remaining recorded in the model - the most confusing of the possible states.
@@ -259,19 +260,44 @@ internal static class PaintRoomOverrides
             return 0;
         }
 
-        var byKey = overrides
-            .GroupBy(o => o.Key, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+        // A LIST PER KEY, NOT ONE OVERRIDE PER KEY. The key is not unique across rooms - see
+        // PaintOverrideOwnership - so two overrides may share one, and which of them (if either)
+        // owns a carrier is decided by the carrier's room, per carrier.
+        var byKey = GroupByKey(overrides);
 
         var applied = 0;
-        var matched = new HashSet<string>(StringComparer.Ordinal);
+        var matched = new HashSet<PaintRoomOverride>();
+
+        // Carriers sharing an override's key that it does NOT own, by override - so an override
+        // that matched nothing can say where its surface went instead of just "gone".
+        var seenElsewhere = new Dictionary<PaintRoomOverride, SortedSet<string>>();
 
         foreach (var carrier in Carriers(doc))
         {
             var key = KeyFor(carrier);
-            if (key is null || !byKey.TryGetValue(key, out var wanted)) continue;
+            if (key is null || !byKey.TryGetValue(key, out var sameKey)) continue;
 
-            matched.Add(key);
+            var roomNumber = RoomNumberOf(carrier);
+            var roomName = RoomNameOf(carrier);
+
+            var wanted = PaintOverrideOwnership.OwnerOf(
+                sameKey, roomNumber, roomName, o => o.FromRoomNumber, o => o.ToRoomNumber, out _);
+
+            if (wanted is null)
+            {
+                // SHARES THE KEY, NOT THE ROOM: another room's piece of the same surface. Left
+                // exactly as the takeoff wrote it. Relabelling it was the defect this replaces.
+                foreach (var o in sameKey)
+                {
+                    if (!seenElsewhere.TryGetValue(o, out var rooms))
+                        seenElsewhere[o] = rooms = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                    rooms.Add($"{roomNumber} {roomName}".Trim());
+                }
+
+                continue;
+            }
+
+            matched.Add(wanted);
 
             // NUMBER STAYS PURE. It is what the schedule groups and sorts on, and what this
             // class matches overrides back onto a room by - marker text there would break both.
@@ -291,19 +317,40 @@ internal static class PaintRoomOverrides
                 $"{wanted.ToRoomName}: {Measure.ToSquareMetres(wanted.AreaSqFtAtWrite):0.###} m² " +
                 $"on {wanted.Key.Replace(Separator, '/')}" +
                 (string.IsNullOrWhiteSpace(wanted.Reason) ? string.Empty : $" - {wanted.Reason}"));
+
+            // REPORTED, NOT ENFORCED. A different area is how a renumbered boundary shows up - the
+            // key now naming a different face of the same wall in the same room - but a genuine
+            // edit to the face changes the area too, and dropping the override then would be the
+            // worse error. So it applies, and says so.
+            var area = AreaOf(carrier);
+            if (PaintOverrideOwnership.AreaDrifted(area, wanted.AreaSqFtAtWrite))
+            {
+                lines.Add(
+                    $"CHECK AREA: carrier {carrier.Id.Value} on '{wanted.Key.Replace(Separator, '/')}' " +
+                    $"now measures {Measure.ToSquareMetres(area):0.###} m², but the override was recorded " +
+                    $"at {Measure.ToSquareMetres(wanted.AreaSqFtAtWrite):0.###} m². Confirm it is still the " +
+                    "same surface.");
+            }
         }
 
         // A RECORDED OVERRIDE WITH NO ROW IS NOT A NON-EVENT. It means the surface it named has
-        // stopped being produced - the paint was removed, the split face was deleted, the wall
-        // was rebuilt - and the override is now describing something that does not exist. Left
-        // unreported it would sit in the model forever, waiting to reattach itself to whatever
-        // eventually takes that key.
-        foreach (var orphan in byKey.Values.Where(o => !matched.Contains(o.Key)))
+        // stopped being produced in its from-room - the paint was removed, the split face was
+        // deleted, the wall was rebuilt, the room was renumbered - and the override is now
+        // describing something that does not exist. Left unreported it would sit in the model
+        // forever, waiting to reattach itself to whatever eventually takes that key.
+        foreach (var orphan in overrides.Distinct().Where(o => !matched.Contains(o)))
         {
+            var elsewhere = seenElsewhere.TryGetValue(orphan, out var rooms) && rooms.Count > 0
+                ? $" That surface is still produced, but in {string.Join(", ", rooms)} - not in " +
+                  $"{orphan.FromRoomNumber} {orphan.FromRoomName} - so it was NOT moved. If the " +
+                  "room was renumbered, reassign the row again."
+                : string.Empty;
+
             lines.Add(
-                $"NO ROW MATCHES: '{orphan.Key.Replace(Separator, '/')}' was to be reported under " +
-                $"{orphan.ToRoomNumber} {orphan.ToRoomName}, but the takeoff no longer produces " +
-                "that surface. The override is still recorded and will apply again if it returns.");
+                $"NO ROW MATCHES: '{orphan.Key.Replace(Separator, '/')}' from {orphan.FromRoomNumber} " +
+                $"{orphan.FromRoomName} was to be reported under {orphan.ToRoomNumber} " +
+                $"{orphan.ToRoomName}, but the takeoff no longer produces that surface in that room. " +
+                "The override is still recorded and will apply again if it returns." + elsewhere);
         }
 
         report = lines;
@@ -326,6 +373,62 @@ internal static class PaintRoomOverrides
         var wroteName = SetText(carrier, name, "Room Name", "Rum");
         return wroteNumber || wroteName;
     }
+
+    /// <summary>
+    /// The override that owns <paramref name="carrier"/>, or null - decided by the carrier's key
+    /// AND its room, never the key alone. See <see cref="PaintOverrideOwnership.OwnerOf{T}"/>.
+    /// </summary>
+    public static PaintRoomOverride? OwnerOf(
+        IReadOnlyList<PaintRoomOverride> overrides, Element carrier, out bool ambiguous)
+    {
+        ambiguous = false;
+
+        var key = KeyFor(carrier);
+        if (key is null) return null;
+
+        var sameKey = overrides.Where(o => string.Equals(o.Key, key, StringComparison.Ordinal)).ToList();
+        if (sameKey.Count == 0) return null;
+
+        return PaintOverrideOwnership.OwnerOf(
+            sameKey, RoomNumberOf(carrier), RoomNameOf(carrier),
+            o => o.FromRoomNumber, o => o.ToRoomNumber, out ambiguous);
+    }
+
+    /// <summary>The Room Number the carrier currently shows - the same names, in the same order, <see cref="SetText"/> writes.</summary>
+    public static string RoomNumberOf(Element carrier) => Text(carrier, "Room Number", "Rum nr");
+
+    /// <summary>The Room Name the carrier currently shows, "(Reassigned)" marker included if present.</summary>
+    public static string RoomNameOf(Element carrier) => Text(carrier, "Room Name", "Rum");
+
+    /// <summary>The carrier's measured area in square feet, or 0 when it carries none.</summary>
+    public static double AreaOf(Element carrier)
+    {
+        foreach (var name in new[] { "Painted Surface Area", "Paint Area" })
+        {
+            try
+            {
+                var parameter = ParameterHelper.Find(carrier, name);
+
+                if (parameter is not null && parameter.StorageType == StorageType.Double)
+                {
+                    var value = parameter.AsDouble();
+                    if (value > 0) return value;
+                }
+            }
+            catch
+            {
+                // Try the next name.
+            }
+        }
+
+        return 0;
+    }
+
+    private static Dictionary<string, IReadOnlyList<PaintRoomOverride>> GroupByKey(
+        IEnumerable<PaintRoomOverride> overrides) =>
+        overrides
+            .GroupBy(o => o.Key, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<PaintRoomOverride>)g.ToList(), StringComparer.Ordinal);
 
     /// <summary>Every takeoff carrier, from either product.</summary>
     public static IEnumerable<Element> Carriers(Document doc)

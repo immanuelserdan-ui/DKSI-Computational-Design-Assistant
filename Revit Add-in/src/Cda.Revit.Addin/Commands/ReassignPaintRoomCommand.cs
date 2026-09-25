@@ -106,8 +106,24 @@ public sealed class ReassignPaintRoomCommand : CommandBase
             return Result.Cancelled;
         }
 
-        var existing = PaintRoomOverrides.Read(doc)
-            .FirstOrDefault(o => string.Equals(o.Key, key, StringComparison.Ordinal));
+        // THIS CARRIER'S OVERRIDE, NOT THIS KEY'S. The key is shared by every room's piece of a
+        // slab or ceiling, so the first override with the key could belong to another room -
+        // and taking its from-room here would file this row's origin under that room.
+        var existing = PaintRoomOverrides.OwnerOf(PaintRoomOverrides.Read(doc), carrier, out var ambiguous);
+
+        // A RELABEL NOTHING ACCOUNTS FOR. The row shows "(Reassigned)" but no override owns it
+        // (or two could), so its natural room cannot be known from here - and reading the
+        // screen would record the previous target as the origin. The takeoff rewrites every
+        // carrier with its natural room, after which this is answerable again.
+        if (ambiguous || (existing is null && PaintOverrideOwnership.IsRelabelled(PaintRoomOverrides.RoomNameOf(carrier))))
+        {
+            TaskDialog.Show(CommandName,
+                "This row is marked \"(Reassigned)\", but its original room cannot be determined " +
+                "from the recorded overrides.\n\nRe-run the Painted Surface Area takeoff so the row " +
+                "shows its natural room again, then reassign it.");
+
+            return Result.Cancelled;
+        }
 
         // THE NATURAL ROOM, NOT WHATEVER IS ON SCREEN. A carrier already carrying an override
         // shows the OVERRIDE's room in "Room Name"/"Room Number", marker text included -
@@ -116,9 +132,9 @@ public sealed class ReassignPaintRoomCommand : CommandBase
         // re-reassignment. The first-ever override already knows the real answer and stays the
         // one source of truth from then on; only a carrier with NO override yet has its natural
         // room sitting in those parameters right now.
-        var fromNumber = existing?.FromRoomNumber ?? Text(carrier, "Room Number", "Rum nr");
-        var fromName = existing?.FromRoomName ?? Text(carrier, "Room Name", "Rum");
-        var area = Area(carrier);
+        var fromNumber = existing?.FromRoomNumber ?? PaintRoomOverrides.RoomNumberOf(carrier);
+        var fromName = existing?.FromRoomName ?? PaintRoomOverrides.RoomNameOf(carrier);
+        var area = PaintRoomOverrides.AreaOf(carrier);
 
         var rooms = Rooms(doc);
 
@@ -153,11 +169,12 @@ public sealed class ReassignPaintRoomCommand : CommandBase
 
         Transactions.Run(doc, CommandName, () =>
         {
-            // LAST WRITE WINS, by key, either way: reassigning the same row twice corrects the
-            // first decision rather than leaving two contradictory records for a reader to
-            // choose between.
+            // LAST WRITE WINS, by key AND from-room, either way: reassigning the same row twice
+            // corrects the first decision rather than leaving two contradictory records for a
+            // reader to choose between. By key alone, reassigning room B's piece of a slab
+            // would silently delete room A's override for its own piece.
             var withoutThisKey = PaintRoomOverrides.Read(doc)
-                .Where(o => !string.Equals(o.Key, key, StringComparison.Ordinal))
+                .Where(o => !PaintOverrideOwnership.SameOverride(o.Key, o.FromRoomNumber, key, fromNumber))
                 .ToList();
 
             if (revertingToNatural)
@@ -288,31 +305,54 @@ public sealed class ReassignPaintRoomCommand : CommandBase
 
         if (dialog.Show() != TaskDialogResult.CommandLink1) return Result.Succeeded;
 
+        var restored = 0;
+        var undetermined = 0;
+
         Transactions.Run(doc, CommandName + " - clear", () =>
         {
             // SAME REASON AS THE SINGLE-ROW REVERT: removing the entries alone leaves every
             // affected carrier showing its last override's room until a takeoff or re-apply
             // happens to touch it. Restoring each one directly here is what makes "remove all"
             // actually mean "back to natural, now" rather than "back to natural, eventually".
-            var byKey = PaintRoomOverrides.Carriers(doc)
-                .Select(c => (Carrier: c, Key: PaintRoomOverrides.KeyFor(c)))
-                .Where(t => t.Key is not null)
-                .ToDictionary(t => t.Key!, t => t.Carrier, StringComparer.Ordinal);
-
-            foreach (var o in all)
+            //
+            // PER CARRIER, ONLY THOSE AN OVERRIDE ACTUALLY RELABELLED. This used to build a
+            // one-carrier-per-key dictionary, which threw on the first key shared by two rooms'
+            // carriers - an ordinary slab under two rooms - and rolled back without removing
+            // anything. Worse, had it run, it wrote one override's from-room onto whichever
+            // carrier the key happened to find. A carrier still showing its natural room is
+            // left untouched.
+            foreach (var carrier in PaintRoomOverrides.Carriers(doc))
             {
-                if (byKey.TryGetValue(o.Key, out var carrier))
-                    PaintRoomOverrides.RestoreNatural(carrier, o.FromRoomNumber, o.FromRoomName);
+                if (!PaintOverrideOwnership.IsRelabelled(PaintRoomOverrides.RoomNameOf(carrier))) continue;
+
+                var owner = PaintRoomOverrides.OwnerOf(all, carrier, out var ambiguous);
+                if (owner is null) continue;
+
+                // Two overrides moved different rooms' pieces of one surface into this room, and
+                // this row could have come from either. Guessing would file it under the wrong
+                // room; the next takeoff writes its true room back.
+                if (ambiguous)
+                {
+                    undetermined++;
+                    continue;
+                }
+
+                if (PaintRoomOverrides.RestoreNatural(carrier, owner.FromRoomNumber, owner.FromRoomName))
+                    restored++;
             }
 
             PaintRoomOverrides.Write(doc, []);
         });
 
-        Log.Info($"{CommandName}: {all.Count} override(s) removed.");
+        Log.Info($"{CommandName}: {all.Count} override(s) removed, {restored} row(s) restored" +
+                 (undetermined > 0 ? $", {undetermined} left for the next takeoff." : "."));
 
         TaskDialog.Show(CommandName,
-            $"{all.Count} override(s) removed. Re-run the takeoff, or the rows keep the room " +
-            "they were last given until something rewrites them.");
+            $"{all.Count} override(s) removed; {restored} row(s) are back in their natural room." +
+            (undetermined > 0
+                ? $"\n\n{undetermined} row(s) could have come from more than one room and were not " +
+                  "guessed. Re-run the takeoff to restore them."
+                : string.Empty));
 
         return Result.Succeeded;
     }
@@ -374,28 +414,5 @@ public sealed class ReassignPaintRoomCommand : CommandBase
         }
 
         return string.Empty;
-    }
-
-    private static double Area(Element element)
-    {
-        foreach (var name in new[] { "Painted Surface Area", "Paint Area" })
-        {
-            try
-            {
-                var parameter = ParameterHelper.Find(element, name);
-
-                if (parameter is not null && parameter.StorageType == StorageType.Double)
-                {
-                    var value = parameter.AsDouble();
-                    if (value > 0) return value;
-                }
-            }
-            catch
-            {
-                // Try the next name.
-            }
-        }
-
-        return 0;
     }
 }
