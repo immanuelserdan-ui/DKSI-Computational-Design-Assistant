@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NO REVIT REFERENCE, DELIBERATELY - same reason as Cda.Udvendig.Tests.
+
+    RevitAPI.dll will not load outside the Revit host, so this project compiles ONE source file
+    from the add-in: PaintOverrideOwnership.cs, which holds the rule deciding which takeoff
+    carrier a paint room override may relabel, and mentions no Revit type.
+
+    Testing the real file rather than a copy is what makes these worth anything. A copied rule
+    drifts from the shipping one and then passes forever.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cda.PaintOverrides.Tests</RootNamespace>
+    <AssemblyName>Cda.PaintOverrides.Tests</AssemblyName>
+
+    <UseWPF>false</UseWPF>
+    <DeployToRevit>false</DeployToRevit>
+    <RequiresRevitApi>false</RequiresRevitApi>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Cda.Revit.Addin\Finishes\PaintOverrideOwnership.cs"
+             Link="PaintOverrideOwnership.cs" />
+  </ItemGroup>
+
+</Project>
